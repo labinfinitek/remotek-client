@@ -2960,11 +2960,6 @@ impl Connection {
             #[cfg(feature = "flutter")]
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Some(lr) = _s.lr.clone().take() {
-                self.handle_login_request_without_validation(&lr).await;
-                // Remotek (ADR-0028): lo scambio dei lati non eredita il lasciapassare
-                // di un login precedente sulla stessa connessione.
-                self.lasciapassare = None;
-                self.amministratore_scelto = false;
                 SWITCH_SIDES_UUID
                     .lock()
                     .unwrap()
@@ -2973,6 +2968,19 @@ impl Connection {
                 if let Ok(uuid) = uuid::Uuid::from_slice(_s.uuid.to_vec().as_ref()) {
                     if let Some((_instant, uuid_old)) = uuid_old {
                         if uuid == uuid_old {
+                            if lr.union.is_some() {
+                                log::warn!(
+                                    "Rejected switch sides response for non-remote-desktop session; closing connection"
+                                );
+                                self.send_login_error("Connection not allowed").await;
+                                return false;
+                            }
+                            self.reset_session_scope_for_login();
+                            self.handle_login_request_without_validation(&lr).await;
+                            // Remotek (ADR-0028): lo scambio dei lati non eredita il lasciapassare
+                            // di un login precedente sulla stessa connessione.
+                            self.lasciapassare = None;
+                            self.amministratore_scelto = false;
                             self.from_switch = true;
                             self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::SwitchSides);
                             if !self.send_logon_response_and_keep_alive().await {
@@ -5846,6 +5854,7 @@ impl Connection {
             Some(misc::Union::ChangeDisplayResolution(_)) => "misc.change_display_resolution",
             Some(misc::Union::MessageQuery(_)) => "misc.message_query",
             Some(misc::Union::FollowCurrentDisplay(_)) => "misc.follow_current_display",
+            Some(misc::Union::SwitchSidesRequest(_)) => "misc.switch_sides_request",
             Some(_) => "misc.other",
             None => "misc.empty",
         }
@@ -7017,6 +7026,10 @@ mod test {
                         misc_msg(|m| m.set_capture_displays(CaptureDisplays::new())),
                         Some("misc.capture_displays"),
                     ),
+                    (
+                        misc_msg(|m| m.set_switch_sides_request(SwitchSidesRequest::new())),
+                        Some("misc.switch_sides_request"),
+                    ),
                     (msg(|m| m.set_clipboard(Clipboard::new())), None),
                     (
                         msg(|m| m.set_multi_clipboards(MultiClipboards::new())),
@@ -7060,6 +7073,10 @@ mod test {
                     (
                         misc_msg(|m| m.set_toggle_privacy_mode(TogglePrivacyMode::new())),
                         Some("misc.toggle_privacy_mode"),
+                    ),
+                    (
+                        misc_msg(|m| m.set_switch_sides_request(SwitchSidesRequest::new())),
+                        Some("misc.switch_sides_request"),
                     ),
                     (misc_msg(|m| m.set_chat_message(ChatMessage::new())), None),
                     (msg(|m| m.set_clipboard(Clipboard::new())), None),
@@ -7146,6 +7163,10 @@ mod test {
                         msg(|m| m.set_terminal_action(TerminalAction::new())),
                         Some("terminal_action"),
                     ),
+                    (
+                        misc_msg(|m| m.set_switch_sides_request(SwitchSidesRequest::new())),
+                        Some("misc.switch_sides_request"),
+                    ),
                 ],
             ),
             (
@@ -7156,6 +7177,10 @@ mod test {
                         None,
                     ),
                     (msg(|m| m.set_terminal_action(TerminalAction::new())), None),
+                    (
+                        misc_msg(|m| m.set_switch_sides_request(SwitchSidesRequest::new())),
+                        None,
+                    ),
                 ],
             ),
             (
@@ -7174,6 +7199,10 @@ mod test {
                     (
                         msg(|m| m.set_screenshot_request(ScreenshotRequest::new())),
                         Some("screenshot_request"),
+                    ),
+                    (
+                        misc_msg(|m| m.set_switch_sides_request(SwitchSidesRequest::new())),
+                        Some("misc.switch_sides_request"),
                     ),
                     (misc_msg(|m| m.set_refresh_video(true)), None),
                     (misc_msg(|m| m.set_refresh_video_display(0)), None),

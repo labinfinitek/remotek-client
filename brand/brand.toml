@@ -1,0 +1,51 @@
+# Brand del client Remotek: UNICA fonte dei colori del tema Flutter (ADR-0004).
+#
+# Da questo file si genera flutter/lib/brand.g.dart, che e' committato:
+#   python3 brand/genera_tema.py          rigenera il file Dart
+#   python3 brand/genera_tema.py --check  exit 1 se il Dart non e' aggiornato
+# flutter/lib/brand.g.dart non si modifica mai a mano.
+#
+# Formato dei colori (stringhe):
+#   "#RRGGBB"     colore opaco (alfa FF), come lo da' un grafico
+#   "0xAARRGGBB"  alfa esplicito, stessa notazione di Color(0x...) in Dart
+# "#RRGGBBAA" (stile CSS) e' rifiutato: si confonderebbe con AARRGGBB.
+#
+# I valori qui sotto sono quelli di RustDesk 1.4.9 (flutter/lib/common.dart,
+# class MyTheme): finche' non cambiano, l'aspetto e' identico a upstream.
+
+# Nome del prodotto: solo documentazione, NON finisce nel Dart. Il nome vero
+# e' APP_NAME in libs/hbb_common/src/config.rs; la coincidenza la controlla
+# .github/scripts/verifica-patch.sh.
+nome = "Remotek"
+
+[colori]
+# Le chiavi sono i nomi delle costanti di MyTheme: tutte e 12 obbligatorie,
+# nessuna in piu'.
+
+# Sfondo grigio chiaro: campi di testo, card, barre (tema chiaro).
+grayBg = "#EFEFF2"
+
+# Colore d'accento: pulsanti pieni, link, selezioni. E' IL colore del brand.
+accent = "#0071FF"
+# Lo stesso accento con trasparenza: devono avere lo stesso RRGGBB di
+# "accent" (il generatore lo verifica), cambia solo l'alfa (77 e AA).
+accent50 = "0x770071FF"
+accent80 = "0xAA0071FF"
+
+# Sfondo della sessione remota (dietro l'immagine dello schermo).
+canvasColor = "#212121"
+# Bordi e divisori.
+border = "#CCCCCC"
+# Evidenza nelle schermate mobile (pagina di connessione, file manager).
+idColor = "#00B6F0"
+# Testo secondario grigio. Upstream: Color.fromARGB(255, 148, 148, 148).
+darkGray = "#949494"
+# ID nel connection manager (in 1.4.9 non ha riferimenti: resta per parita').
+cmIdColor = "#21790B"
+# Testo scuro. Upstream: Colors.black87, cioe' nero con alfa DD (in 1.4.9 non
+# ha riferimenti: resta per parita').
+dark = "0xDD000000"
+# Pulsanti desktop, barra della sessione remota, menu (azzurro piu' chiaro).
+button = "#2C8CFF"
+# Bordo al passaggio del mouse.
+hoverBorder = "#999999"

@@ -29,6 +29,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
 import '../consts.dart';
+import 'brand.g.dart';
 import 'common/widgets/overlay.dart';
 import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
@@ -250,18 +251,18 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
 class MyTheme {
   MyTheme._();
 
-  static const Color grayBg = Color(0xFFEFEFF2);
-  static const Color accent = Color(0xFF0071FF);
-  static const Color accent50 = Color(0x770071FF);
-  static const Color accent80 = Color(0xAA0071FF);
-  static const Color canvasColor = Color(0xFF212121);
-  static const Color border = Color(0xFFCCCCCC);
-  static const Color idColor = Color(0xFF00B6F0);
-  static const Color darkGray = Color.fromARGB(255, 148, 148, 148);
-  static const Color cmIdColor = Color(0xFF21790B);
-  static const Color dark = Colors.black87;
-  static const Color button = Color(0xFF2C8CFF);
-  static const Color hoverBorder = Color(0xFF999999);
+  static const Color grayBg = Brand.grayBg;
+  static const Color accent = Brand.accent;
+  static const Color accent50 = Brand.accent50;
+  static const Color accent80 = Brand.accent80;
+  static const Color canvasColor = Brand.canvasColor;
+  static const Color border = Brand.border;
+  static const Color idColor = Brand.idColor;
+  static const Color darkGray = Brand.darkGray;
+  static const Color cmIdColor = Brand.cmIdColor;
+  static const Color dark = Brand.dark;
+  static const Color button = Brand.button;
+  static const Color hoverBorder = Brand.hoverBorder;
 
   // ListTile
   static const ListTileThemeData listTileTheme = ListTileThemeData(

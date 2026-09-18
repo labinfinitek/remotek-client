@@ -1,0 +1,11 @@
+Remotek e' una versione modificata di RustDesk (https://github.com/rustdesk/rustdesk),
+Copyright (c) Purslane Ltd., distribuita sotto licenza GNU AGPL-3.0-or-later.
+"RustDesk" e' un marchio dei rispettivi titolari; Remotek e' un prodotto
+indipendente di Infinitek e non e' affiliato a Purslane Ltd.
+
+Modifiche: Copyright (c) 2026 Infinitek. Data e contenuto delle modifiche:
+vedi REMOTEK.md, CHANGELOG-REMOTEK.md e il tag `remotek-*` corrispondente.
+
+Sorgenti corrispondenti a ogni binario (AGPL-3.0 sez. 6 e 13): il tag
+`remotek-<versione upstream>-<n>` di questo repository e lo stesso tag di
+https://github.com/labinfinitek/remotek-hbb-common (submodule libs/hbb_common).

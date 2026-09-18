@@ -2081,6 +2081,12 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
+    // Remotek: italiano di default (ADR-0011); custom.txt e la scelta dell'utente vincono.
+    config::DEFAULT_LOCAL_SETTINGS
+        .write()
+        .unwrap()
+        .entry(keys::OPTION_LANGUAGE.to_owned())
+        .or_insert_with(|| "it".to_owned());
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

@@ -12,7 +12,7 @@ Infinitek). `git log 1.4.9..remotek` mostra la stessa lista come commit.
 | `flutter/lib/desktop/pages/install_page.dart` | link "End-user license agreement" su `remotek.infinitek.it/privacy.html` | marchio | 0002 |
 | `.github/workflows/flutter-nightly.yml` | cron rimosso, solo `workflow_dispatch` | nessun build automatico | 0006, 0009 |
 | `brand/brand.toml`, `brand/genera_tema.py`, `flutter/lib/brand.g.dart`, `flutter/lib/common.dart` (`MyTheme` e un import) | le 12 costanti colore di `MyTheme` vengono da `brand.g.dart`, generato da `brand.toml` e committato | colori del brand in un solo file; i valori attuali sono quelli upstream | 0004 |
-| `.github/workflows/{ci,flutter-ci,flutter-tag,fdroid}.yml` | blocco `on:` con solo `workflow_dispatch` | niente build su pull request, push o tag nel fork | 0006 |
+| `.github/workflows/{ci,flutter-ci,flutter-tag,fdroid,wf-cliprdr-ci}.yml` | blocco `on:` con solo `workflow_dispatch` | niente build su pull request, push o tag nel fork | 0006 |
 | `src/common.rs` (`load_custom_client`) | `lang = it` in `DEFAULT_LOCAL_SETTINGS` se non gia' impostato | italiano di default anche senza `custom.txt`; l'utente puo' scegliere l'inglese | 0011 |
 | `src/ui_interface.rs` (`get_langs`) | filtro dell'elenco lingue a `it` e `en` | solo italiano e inglese selezionabili (A4); traduzioni e `src/lang.rs` intatti | 0011 |
 | `SECURITY.md`, `NOTICE`, `REMOTEK.md`, `CHANGELOG-REMOTEK.md`, `.github/pull_request_template.md` | documenti del fork | licenza, sicurezza, tracciabilita' | REGOLE 13 |

@@ -7,6 +7,8 @@ Infinitek). `git log 1.4.9..remotek` mostra la stessa lista come commit.
 | File | Modifica | Motivo | ADR |
 |---|---|---|---|
 | `.gitmodules` | `libs/hbb_common` punta al fork `labinfinitek/remotek-hbb-common` | `APP_NAME`, server e chiave del server stanno li' | 0002 |
+| `flutter/lib/desktop/pages/desktop_setting_page.dart` (dialogo Informazioni) | privacy e sito su `remotek.infinitek.it`; riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo | marchio e attribuzione AGPL | 0002, REGOLE 13.2 |
+| `flutter/lib/desktop/pages/install_page.dart` | link "End-user license agreement" su `remotek.infinitek.it/privacy.html` | marchio | 0002 |
 | `.github/workflows/flutter-nightly.yml` | cron rimosso, solo `workflow_dispatch` | nessun build automatico | 0006, 0009 |
 | `.github/workflows/{ci,flutter-ci,flutter-tag,fdroid}.yml` | blocco `on:` con solo `workflow_dispatch` | niente build su pull request, push o tag nel fork | 0006 |
 | `SECURITY.md`, `NOTICE`, `REMOTEK.md`, `CHANGELOG-REMOTEK.md`, `.github/pull_request_template.md` | documenti del fork | licenza, sicurezza, tracciabilita' | REGOLE 13 |

@@ -13,4 +13,5 @@ Base upstream: RustDesk 1.4.9.
 - Submodule `libs/hbb_common` dal fork `labinfinitek/remotek-hbb-common`.
 
 ### Aggiunto
+- Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.

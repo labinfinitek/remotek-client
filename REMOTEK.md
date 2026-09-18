@@ -6,6 +6,7 @@ Infinitek). `git log 1.4.9..remotek` mostra la stessa lista come commit.
 
 | File | Modifica | Motivo | ADR |
 |---|---|---|---|
+| `.github/workflows/remotek-build.yml` | file nuovo: build manuale Windows x86_64 (job upstream copiato alla lettera, bridge e TopMostWindow riusati), exe come artefatto, nessuna release, firma predisposta e spenta, attestazione di provenienza | il workflow upstream pubblica l'exe solo in una pre-release pubblica di tutte le piattaforme | 0009 |
 | `.gitmodules` | `libs/hbb_common` punta al fork `labinfinitek/remotek-hbb-common` | `APP_NAME`, server e chiave del server stanno li' | 0002 |
 | `.github/workflows/flutter-nightly.yml` | cron rimosso, solo `workflow_dispatch` | nessun build automatico | 0006, 0009 |
 | `.github/workflows/{ci,flutter-ci,flutter-tag,fdroid}.yml` | blocco `on:` con solo `workflow_dispatch` | niente build su pull request, push o tag nel fork | 0006 |

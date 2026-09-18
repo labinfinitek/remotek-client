@@ -2448,7 +2448,8 @@ class _AboutState extends State<_About> {
                         .marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://rustdesk.com/privacy.html');
+                    launchUrlString(
+                        'https://remotek.infinitek.it/privacy.html');
                   },
                   child: Text(
                     translate('Privacy Statement'),
@@ -2456,10 +2457,21 @@ class _AboutState extends State<_About> {
                   ).marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://rustdesk.com');
+                    launchUrlString('https://remotek.infinitek.it');
                   },
                   child: Text(
                     translate('Website'),
+                    style: linkStyle,
+                  ).marginSymmetric(vertical: 4.0)),
+              // Remotek: attribuzione AGPL-3.0. Testo letterale: translate()
+              // sostituirebbe "RustDesk" con il nome dell'app (src/lang.rs).
+              InkWell(
+                  onTap: () {
+                    launchUrlString(
+                        'https://github.com/labinfinitek/remotek-client');
+                  },
+                  child: Text(
+                    'Basato su RustDesk, AGPL-3.0 - sorgenti',
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
               Container(

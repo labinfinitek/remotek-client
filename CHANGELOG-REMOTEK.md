@@ -16,5 +16,6 @@ Base upstream: RustDesk 1.4.9.
 - Italiano di default; nel selettore restano italiano e inglese.
 
 ### Aggiunto
+- Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.

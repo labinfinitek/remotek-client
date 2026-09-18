@@ -1,0 +1,22 @@
+# Eccezioni di zizmor per i workflow nostri (job workflow-audit di
+# remotek-controlli.yml). Ogni eccezione ha il motivo; sono per riga: se
+# remotek-build.yml cambia e le righe si spostano l'audit fallisce, ed e' giusto
+# cosi' (si aggiornano qui, con la stessa MR).
+rules:
+  ref-version-mismatch:
+    ignore:
+      # Pin di dtolnay/rust-toolchain e Swatinem/rust-cache copiati alla lettera
+      # dal job Windows di flutter-build.yml di upstream 1.4.9, commento
+      # compreso: i tag mobili v1 e v2 nel frattempo puntano ad altri commit.
+      # Si tengono i commit con cui upstream (e il nostro build 35326276849)
+      # compilano; si riallineano al prossimo merge upstream.
+      - remotek-build.yml:159
+      - remotek-build.yml:166
+  self-repository:
+    ignore:
+      # `uses: ./.github/workflows/...` per bridge.yml e TopMostWindow: la
+      # sintassi `$/...` (GitHub, 2026-07-30) non e' ancora provata con i
+      # workflow riusabili di questo repo. Si adotta e si toglie l'eccezione al
+      # prossimo build utile: non si lancia un build da 50 minuti per questo.
+      - remotek-build.yml:50
+      - remotek-build.yml:55

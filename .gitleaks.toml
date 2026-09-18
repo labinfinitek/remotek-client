@@ -1,0 +1,9 @@
+# Configurazione gitleaks di remotek-client (REGOLE 6.3, 8 del repo interno).
+# Regole di default di gitleaks. Un'eccezione si aggiunge solo con il motivo
+# scritto qui e nella MR; mai zittire il job. I commit upstream entrano nella
+# scansione a ogni merge: un falso positivo su codice di RustDesk si mette in
+# allowlist per percorso e regola, con il commit upstream di riferimento.
+title = "remotek-client"
+
+[extend]
+useDefault = true

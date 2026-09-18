@@ -1,0 +1,87 @@
+# Controlli del fork Remotek sul client (REGOLE 7 del repo interno).
+# Minuti, non ore: qui non si compila nulla. Il build e' remotek-build.yml,
+# solo a mano. Prima versione: segreti, verifica della patch (con tema e
+# trigger dei workflow), audit dei workflow nostri. rustfmt e dart format sui
+# file della patch e cargo-deny entrano con una MR successiva.
+#
+# Regole di questo file: azioni pinnate a SHA con la versione in commento,
+# permessi minimi per job, nessun cron, nessun tag. E' l'unico workflow del
+# fork che parte da solo (lo controlla verifica-patch.sh).
+name: remotek-controlli
+
+on:
+  push:
+    branches: [remotek]
+  pull_request:
+    branches: [remotek]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  segreti:
+    name: segreti
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # l'azione elenca i commit della PR via API
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scansiona i commit, non solo l'albero
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_ENABLE_COMMENTS: "false" # niente permesso di scrittura sulle PR
+
+  patch:
+    name: patch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # solo libs/hbb_common: i valori del brand stanno li'
+          persist-credentials: false
+      - name: Tag upstream di base (sola lettura, fuori da refs/tags)
+        run: |
+          set -euo pipefail
+          tag=$(sed -nE 's/^Base upstream: \*\*RustDesk [^*]+\*\* \(tag `([^`]+)`\).*/\1/p' REMOTEK.md | head -n 1)
+          test -n "$tag"
+          git fetch --no-tags --depth=1 https://github.com/rustdesk/rustdesk "refs/tags/${tag}:refs/remotek-upstream/${tag}"
+      - name: Verifica della patch
+        env:
+          VERIFICA_RIGIDA: "1"
+        run: bash .github/scripts/verifica-patch.sh
+
+  workflow-audit:
+    name: workflow-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Solo i file nostri: i workflow upstream non sono nostri da ripulire.
+      # Le eccezioni, motivate una per una, stanno in .github/zizmor.yml.
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          inputs: |
+            .github/workflows/remotek-controlli.yml
+            .github/workflows/remotek-build.yml
+          config: .github/zizmor.yml
+          version: 1.30.1
+          advanced-security: false # esito nel log, il job fallisce sui finding: niente security-events: write
+          annotations: true

@@ -1,0 +1,319 @@
+# Remotek: build manuale del client Windows x86_64 (ADR-0009, REGOLE sez. 7).
+#
+# File NOSTRO: upstream non lo ha, quindi non genera conflitti di merge.
+# - generate-bridge e topmost RIUSANO i workflow upstream (uses:), non li copiano.
+# - I passi marcati "[upstream]" sono copiati alla lettera dal job
+#   build-for-windows-flutter di flutter-build.yml (tag upstream 1.4.9, righe
+#   109-342, sola voce x86_64 della matrice; tolti i passi solo-aarch64, il
+#   passo "find Runner.res" che nessun sorgente legge, MSI e Publish Release).
+#   I valori in env: sono copiati da flutter-build.yml righe 20-47.
+#   A OGNI MERGE DA UPSTREAM:
+#     git diff <tag vecchio>..<tag nuovo> -- .github/workflows/flutter-build.yml \
+#       .github/workflows/bridge.yml \
+#       .github/workflows/third-party-RustDeskTempTopMostWindow.yml
+#   e riportare qui le differenze che cadono in env: o nel job Windows x86_64;
+#   poi aggiornare il tag scritto in questo commento.
+# - Nessuna release pubblica: l'exe esce solo come artefatto della run.
+# - Firma del codice: passi presenti e SPENTI (variabile di repo FIRMA_ATTIVA).
+# - Attestazione di provenienza (SLSA L2) sull'exe finale; verifica:
+#     gh attestation verify <exe> --repo labinfinitek/remotek-client
+name: Remotek build Windows
+
+run-name: "Remotek build Windows: ${{ inputs.motivo }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      motivo:
+        description: "Scopo del build (REGOLE 7: ogni build ha uno scopo scritto)"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: remotek-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # [upstream] flutter-build.yml:21,27,28,38,45 - solo cio' che serve al job Windows x86_64
+  SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+
+jobs:
+  generate-bridge:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/bridge.yml
+
+  topmost:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  windows-x86_64:
+    name: Remotek ${{ matrix.job.target }}
+    needs: [topmost, generate-bridge]
+    runs-on: ${{ matrix.job.os }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      id-token: write # attestazione di provenienza (OIDC)
+      attestations: write # attestazione di provenienza
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          # [upstream] flutter-build.yml:90-97. La matrice a una voce serve solo a
+          # tenere identico a upstream il testo dei passi copiati (matrix.job.*).
+          - {
+              target: x86_64-pc-windows-msvc,
+              os: windows-2022,
+              arch: x86_64,
+              flutter-arch: x64,
+              vcpkg-triplet: x64-windows-static,
+              build-args: "--vram",
+            }
+    steps:
+      # [upstream] flutter-build.yml:109-114
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      # [upstream] flutter-build.yml:116-119, con il nostro pin e senza credenziali persistenti
+      - name: Checkout source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # Nostro. Il nome dell'exe viene da APP_NAME (unica fonte del brand): subito,
+      # cosi' se upstream cambia quella riga il build fallisce al minuto 1 e non al 45.
+      - name: Nome del prodotto da APP_NAME
+        shell: bash
+        run: |
+          nome=$(sed -n 's/.*static ref APP_NAME: RwLock<String> = RwLock::new("\([A-Za-z0-9_-]*\)".*/\1/p' libs/hbb_common/src/config.rs)
+          if [ -z "$nome" ]; then
+            echo "::error::APP_NAME non trovato in libs/hbb_common/src/config.rs"
+            exit 1
+          fi
+          echo "NOME_EXE=${nome}.exe" >> "$GITHUB_ENV"
+          echo "Exe finale: ${nome}.exe"
+
+      # [upstream] flutter-build.yml:121-128
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.job.arch == 'aarch64' && 'bridge-artifact-flutter-3.44' || 'bridge-artifact' }}
+          path: ./
+
+      # [upstream] flutter-build.yml:130-133
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      # [upstream] flutter-build.yml:135-145
+      - name: Install flutter
+        id: flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225  # v2.12.0; https://github.com/subosito/flutter-action/issues/277
+        with:
+          channel: "stable"
+          flutter-version: ${{ matrix.job.arch == 'aarch64' && env.FLUTTER_WINDOWS_ARM_VERSION || env.FLUTTER_VERSION }}
+          architecture: x64
+
+      # [upstream] flutter-build.yml:179-189
+      # https://github.com/flutter/flutter/issues/155685
+      - name: Replace engine with rustdesk custom flutter engine
+        if: ${{ matrix.job.arch == 'x86_64' }}
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
+
+      # [upstream] flutter-build.yml:191-199
+      - name: Patch flutter
+        if: ${{ matrix.job.arch == 'x86_64' }}
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(dirname $(which flutter)))
+          [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]] && git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      # [upstream] flutter-build.yml:209-214
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: ${{ matrix.job.target }}
+          components: "rustfmt"
+
+      # [upstream] flutter-build.yml:216-218
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: ${{ matrix.job.os }}
+
+      # [upstream] flutter-build.yml:220-225
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      # [upstream] flutter-build.yml:227-245
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet ${{ matrix.job.vcpkg-triplet }} \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
+        shell: bash
+
+      # [upstream] flutter-build.yml:254-293
+      - name: Build rustdesk
+        run: |
+          # Windows: build RustDesk
+          # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
+          mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
+
+          # Download usbmmidd_v2.zip and extract it to ./rustdesk
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
+          mv -Force .\usbmmidd_v2 ./rustdesk
+
+          # Download printer driver files and extract them to ./rustdesk
+          try {
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
+
+            # Check and move the files
+            $checksum_driver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
+            $downloadsum_driver = Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256
+            $checksum_adapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
+            $downloadsum_adapter = Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256
+            if ($checksum_driver -eq $downloadsum_driver.Hash -and $checksum_adapter -eq $downloadsum_adapter.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4, checksums match, extract the file."
+                Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
+                mkdir ./rustdesk/drivers
+                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+                Expand-Archive printer_driver_adapter.zip -DestinationPath .
+                mv -Force .\printer_driver_adapter.dll ./rustdesk
+            } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4, checksums do not match, ignore the file."
+            } else {
+                Write-Output "printer_driver_adapter.dll, checksums do not match, ignore the file."
+            }
+          } catch {
+              Write-Host "Ingore the printer driver error."
+          }
+
+      # [upstream] flutter-build.yml:311-316, senza la condizione su inputs.upload-artifact
+      - name: Download RustDeskTempTopMostWindow artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.job.arch == 'aarch64' && 'topmostwindow-artifacts-ARM64' || 'topmostwindow-artifacts-x64' }}
+          path: "./rustdesk"
+
+      # [upstream] flutter-build.yml:318-323, senza condizione; nome invariato (ADR-0009).
+      # E' la CARTELLA dell'applicazione (rustdesk.exe + dll), non l'exe da consegnare.
+      - name: Upload unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-unsigned-windows-${{ matrix.job.arch }}
+          path: rustdesk
+          retention-days: 7
+
+      # Nostro. Firma Authenticode dei file interni: SPENTA (decisione del titolare,
+      # go/no-go gennaio 2027). Si accende con la variabile di repo FIRMA_ATTIVA=true
+      # solo dopo aver sostituito il corpo del passo: finche' e' un segnaposto fallisce
+      # apposta, cosi' nessun exe esce "firmato" per finta.
+      - name: Firma dei file interni (spenta)
+        if: ${{ vars.FIRMA_ATTIVA == 'true' }}
+        shell: bash
+        run: |
+          echo "::error::FIRMA_ATTIVA=true ma il passo di firma non e' implementato (ADR-0009)"
+          exit 1
+
+      # [upstream] flutter-build.yml:332-342; cambia solo il nome di destinazione dell'ultima riga
+      - name: Build self-extracted executable
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          popd
+          mkdir -p ./SignOutput
+          mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/${NOME_EXE}"
+
+      # Nostro. Come sopra, per l'exe autoestraente che riceve il cliente.
+      - name: Firma dell'exe finale (spenta)
+        if: ${{ vars.FIRMA_ATTIVA == 'true' }}
+        shell: bash
+        run: |
+          echo "::error::FIRMA_ATTIVA=true ma il passo di firma non e' implementato (ADR-0009)"
+          exit 1
+
+      # Nostro. Dopo l'eventuale firma: l'hash e' quello del file consegnato.
+      - name: SHA256 e riepilogo
+        shell: bash
+        env:
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          cd SignOutput
+          sha256sum "${NOME_EXE}" | tee SHA256SUMS.txt
+          {
+            echo "### ${NOME_EXE} (non firmato)"
+            echo ""
+            echo "- motivo: ${MOTIVO}"
+            echo "- ref: ${GITHUB_REF}"
+            echo "- commit: ${GITHUB_SHA}"
+            echo "- run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- sha256: $(cut -d' ' -f1 SHA256SUMS.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attestazione di provenienza
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: SignOutput/*.exe
+
+      - name: Upload exe finale
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: remotek-windows-${{ matrix.job.arch }}
+          path: |
+            SignOutput/*.exe
+            SignOutput/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

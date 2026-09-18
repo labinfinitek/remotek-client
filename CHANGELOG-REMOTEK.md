@@ -14,3 +14,4 @@ Base upstream: RustDesk 1.4.9.
 
 ### Aggiunto
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
+- Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.

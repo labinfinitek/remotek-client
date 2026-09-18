@@ -10,6 +10,7 @@ Base upstream: RustDesk 1.4.9.
 ### Modificato
 - Workflow upstream solo ad avvio manuale (nightly senza cron; ci, flutter-ci,
   flutter-tag, fdroid senza trigger automatici).
+- I colori del tema vengono da `brand/brand.toml` (valori attuali identici a RustDesk 1.4.9).
 - Submodule `libs/hbb_common` dal fork `labinfinitek/remotek-hbb-common`.
 
 ### Aggiunto

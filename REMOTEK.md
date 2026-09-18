@@ -8,6 +8,7 @@ Infinitek). `git log 1.4.9..remotek` mostra la stessa lista come commit.
 |---|---|---|---|
 | `.gitmodules` | `libs/hbb_common` punta al fork `labinfinitek/remotek-hbb-common` | `APP_NAME`, server e chiave del server stanno li' | 0002 |
 | `.github/workflows/flutter-nightly.yml` | cron rimosso, solo `workflow_dispatch` | nessun build automatico | 0006, 0009 |
+| `brand/brand.toml`, `brand/genera_tema.py`, `flutter/lib/brand.g.dart`, `flutter/lib/common.dart` (`MyTheme` e un import) | le 12 costanti colore di `MyTheme` vengono da `brand.g.dart`, generato da `brand.toml` e committato | colori del brand in un solo file; i valori attuali sono quelli upstream | 0004 |
 | `.github/workflows/{ci,flutter-ci,flutter-tag,fdroid}.yml` | blocco `on:` con solo `workflow_dispatch` | niente build su pull request, push o tag nel fork | 0006 |
 | `SECURITY.md`, `NOTICE`, `REMOTEK.md`, `CHANGELOG-REMOTEK.md`, `.github/pull_request_template.md` | documenti del fork | licenza, sicurezza, tracciabilita' | REGOLE 13 |
 

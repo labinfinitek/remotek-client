@@ -10,6 +10,9 @@ Infinitek). `git log 1.4.9..remotek` mostra la stessa lista come commit.
 | `.github/workflows/flutter-nightly.yml` | cron rimosso, solo `workflow_dispatch` | nessun build automatico | 0006, 0009 |
 | `.github/workflows/{ci,flutter-ci,flutter-tag,fdroid}.yml` | blocco `on:` con solo `workflow_dispatch` | niente build su pull request, push o tag nel fork | 0006 |
 | `SECURITY.md`, `NOTICE`, `REMOTEK.md`, `CHANGELOG-REMOTEK.md`, `.github/pull_request_template.md` | documenti del fork | licenza, sicurezza, tracciabilita' | REGOLE 13 |
+| `flutter/windows/runner/Runner.rc` | `CompanyName`, `FileDescription`, `LegalCopyright`, `OriginalFilename`, `ProductName` (righe 92-98) | proprieta' del file e nome in Gestione attivita' dell'exe installato; sono risorse statiche e non possono leggere `APP_NAME` | 0002 |
+| `libs/portable/Cargo.toml` | blocco `[package.metadata.winres]` (mai la riga `version`, che e' del bump) | metadati dell'exe autoestraente distribuito | 0002 |
+| `libs/portable/src/main.rs` | `APP_PREFIX` = `remotek` | cartella di estrazione separata da quella di RustDesk portable: sullo stesso PC si cancellerebbero a vicenda | 0002 |
 
 Cosa **non** cambia: protocollo, codec, cattura schermo, traduzioni, campi di
 versione, i link alla documentazione upstream (`doc_*` in `src/lang/en.rs`,

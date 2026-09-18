@@ -13,6 +13,7 @@ Base upstream: RustDesk 1.4.9.
   flutter-tag, fdroid senza trigger automatici).
 - I colori del tema vengono da `brand/brand.toml` (valori attuali identici a RustDesk 1.4.9).
 - Submodule `libs/hbb_common` dal fork `labinfinitek/remotek-hbb-common`.
+- Italiano di default; nel selettore restano italiano e inglese.
 
 ### Aggiunto
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.

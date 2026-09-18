@@ -902,9 +902,11 @@ pub fn get_async_job_status() -> String {
 pub fn get_langs() -> String {
     use serde_json::json;
     let hide_cjk = crate::lang::cjk_ui_unavailable();
+    // Remotek: solo italiano e inglese selezionabili (decisione A4, ADR-0011).
     let mut x: Vec<(&str, String)> = crate::lang::LANGS
         .iter()
         .filter(|a| !hide_cjk || !crate::lang::is_cjk_lang(a.0))
+        .filter(|a| matches!(a.0, "it" | "en"))
         .map(|a| (a.0, format!("{} ({})", a.1, a.0)))
         .collect();
     x.sort_by(|a, b| a.0.cmp(b.0));

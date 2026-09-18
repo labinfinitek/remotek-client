@@ -7,7 +7,8 @@ Infinitek). `git log 1.4.9..remotek` mostra la stessa lista come commit.
 | File | Modifica | Motivo | ADR |
 |---|---|---|---|
 | `.github/workflows/remotek-build.yml` | file nuovo: build manuale Windows x86_64 (job upstream copiato alla lettera, bridge e TopMostWindow riusati), exe come artefatto, nessuna release, firma predisposta e spenta, attestazione di provenienza | il workflow upstream pubblica l'exe solo in una pre-release pubblica di tutte le piattaforme | 0009 |
-| `.gitmodules` | `libs/hbb_common` punta al fork `labinfinitek/remotek-hbb-common` | `APP_NAME`, server e chiave del server stanno li' | 0002 |
+| `.github/workflows/remotek-controlli.yml`, `.github/scripts/verifica-patch.sh`, `.gitleaks.toml` | file nuovi: controlli del fork a ogni push e PR verso `remotek` (segreti, verifica della patch, tema, audit dei workflow); minuti, nessun build | la patch si verifica, non si ricorda; e' il check richiesto dal ruleset | 0012, REGOLE 6.2 e 7 |
+| `.gitmodules`, `libs/hbb_common` (puntatore) | `libs/hbb_common` punta al fork `labinfinitek/remotek-hbb-common` | `APP_NAME`, server e chiave del server stanno li' | 0002 |
 | `flutter/lib/desktop/pages/desktop_setting_page.dart` (dialogo Informazioni) | privacy e sito su `remotek.infinitek.it`; riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo | marchio e attribuzione AGPL | 0002, REGOLE 13.2 |
 | `flutter/lib/desktop/pages/install_page.dart` | link "End-user license agreement" su `remotek.infinitek.it/privacy.html` | marchio | 0002 |
 | `.github/workflows/flutter-nightly.yml` | cron rimosso, solo `workflow_dispatch` | nessun build automatico | 0006, 0009 |

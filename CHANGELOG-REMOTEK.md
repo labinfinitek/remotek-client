@@ -24,3 +24,6 @@ Base upstream: RustDesk 1.4.9.
 
 ### Corretto
 - Installazione su Windows: il pacchetto contiene `Remotek.exe` e non piu' `rustdesk.exe`, cosi' servizio, collegamenti, disinstallazione e "e' installato?" trovano il programma in `C:\Program Files\Remotek`.
+
+### Sicurezza
+- Accesso presidiato di default: ogni sessione in entrata va accettata con un clic sul PC controllato; ID e password (monouso o permanente) da soli non bastano piu'. L'impostazione e' bloccata: non si cambia da impostazioni, riga di comando o API. La verifica in due passaggi (2FA) e' spenta, perche' con l'accettazione a clic non aggiunge protezione e il suo codice aprirebbe la sessione senza clic: l'interruttore nelle impostazioni non ha effetto. L'accesso non presidiato si abilitera' solo per singolo cliente con un `custom.txt` firmato; anche con un `custom.txt` la 2FA resta spenta, in ogni modalita'. Finche' il client verifica `custom.txt` con la chiave di RustDesk, anche un file firmato da RustDesk puo' togliere l'accettazione a clic (hbb_common `6d59c29`).

@@ -2485,16 +2485,19 @@ class _AboutState extends State<_About> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Remotek: editore e attribuzione come in Runner.rc
+                          // (LegalCopyright), senza lo slogan di RustDesk.
+                          // Testo letterale: translate() cambia "RustDesk".
                           Text(
-                            'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license',
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          Text(
-                            translate('Slogan_tip'),
-                            style: TextStyle(
+                            'Copyright © 2026 Infinitek S.r.l.',
+                            style: const TextStyle(
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white),
-                          )
+                          ),
+                          Text(
+                            'Basato su RustDesk, Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license',
+                            style: const TextStyle(color: Colors.white),
+                          ),
                         ],
                       ),
                     ),

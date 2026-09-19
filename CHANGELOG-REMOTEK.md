@@ -17,6 +17,7 @@ Base upstream: RustDesk 1.4.9.
 - Italiano di default; nel selettore restano italiano e inglese.
 - Icone Infinitek al posto di quelle di RustDesk su Windows: exe da scaricare e installato, finestra, barra delle applicazioni, area di notifica, connection manager.
 - Voce Disinstalla di Windows (App installate): l'editore e' "Infinitek S.r.l." e non piu' "Remotek", anche dopo l'aggiornamento di un'installazione precedente.
+- Dialogo Informazioni: il riquadro del copyright dice "Copyright © 2026 Infinitek S.r.l." seguito dall'attribuzione a RustDesk e a Purslane Tech Pte. Ltd., come le proprieta' dell'exe; tolto lo slogan di RustDesk.
 
 ### Aggiunto
 - Logo Infinitek nella home: simbolo e scritta nel tema scuro, solo il simbolo nel tema chiaro.

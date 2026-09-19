@@ -2,9 +2,10 @@
 # Verifica della patch Remotek sul client (REGOLE 6.2 del repo interno).
 #
 # Controlla che, dopo una MR o un merge upstream, il client sia ancora Remotek:
-# nome, server, chiave e API in hbb_common; metadati Windows; link e
-# attribuzione; lingua; tema generato; nessun trigger automatico nei workflow
-# upstream; ogni file diverso dal tag upstream elencato in REMOTEK.md.
+# nome, server, chiave, API e accesso presidiato in hbb_common; metadati
+# Windows; link e attribuzione; lingua; tema generato; nessun trigger
+# automatico nei workflow upstream; ogni file diverso dal tag upstream
+# elencato in REMOTEK.md.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -32,7 +33,7 @@ non_contiene() { # non_contiene <file> <regex estesa> <descrizione>
   if grep -Eq -- "$2" "$1"; then errore "$3  [$1]"; else ok "$3"; fi
 }
 
-# --- 1. hbb_common: nome, server, chiave, API, auto-update -------------------
+# --- 1. hbb_common: nome, server, chiave, API, auto-update, accesso presidiato -
 CFG=libs/hbb_common/src/config.rs
 CHIAVE_UPSTREAM='OeVuKk5nlHiXp\+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw='
 if [ ! -f "$CFG" ]; then
@@ -48,8 +49,25 @@ else
     'RS_PUB_KEY non e'"'"' la chiave del server pubblico di RustDesk'
   contiene "$CFG" 'static ref DEFAULT_SETTINGS.*OPTION_API_SERVER\.to_owned\(\), "https://[^"]+"' \
     'API server di default impostato e in https (senza, il client ripiega su admin.rustdesk.com)'
-  contiene "$CFG" 'static ref OVERWRITE_SETTINGS.*OPTION_ALLOW_AUTO_UPDATE\.to_owned\(\), "N"' \
+  # OVERWRITE_SETTINGS si cerca dall'inizio della definizione e senza commenti:
+  # a un merge, una nostra riga commentata accanto a quella upstream non basta.
+  # Una sola definizione: la nostra dentro /* */ su righe proprie, o sotto un
+  # #[cfg] che la esclude, lascerebbe compilare solo quella upstream.
+  OVR='^[[:space:]]*pub static ref OVERWRITE_SETTINGS:'
+  non_contiene "$CFG" "$OVR"'.*(//|/\*)' \
+    'OVERWRITE_SETTINGS senza commenti nella riga della definizione'
+  n_ovr=$(grep -Ec -- "$OVR" "$CFG")
+  if [ "$n_ovr" = 1 ]; then
+    ok 'OVERWRITE_SETTINGS definito una sola volta'
+  else
+    errore "OVERWRITE_SETTINGS definito $n_ovr volte, atteso 1 (una riga dentro /* */ o sotto #[cfg]?)  [$CFG]"
+  fi
+  contiene "$CFG" "$OVR"'.*OPTION_ALLOW_AUTO_UPDATE\.to_owned\(\), "N"' \
     'auto-update upstream spento in OVERWRITE_SETTINGS'
+  contiene "$CFG" "$OVR"'.*OPTION_APPROVE_MODE\.to_owned\(\), "click"' \
+    'accesso presidiato: approve-mode forzato a click in OVERWRITE_SETTINGS (senza, bastano ID e password)'
+  contiene "$CFG" "$OVR"'.*\("2fa"\.to_owned\(\), ""\.to_owned\(\)\)' \
+    '2FA spenta in OVERWRITE_SETTINGS (con click il codice aprirebbe la sessione senza clic)'
 
   server=$(sed -nE 's/.*static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new\("([^"]*)".*/\1/p' "$CFG")
   elenco=$(sed -nE 's/^pub const RENDEZVOUS_SERVERS: &\[&str\] = &\["([^"]*)"\];.*/\1/p' "$CFG")
@@ -96,9 +114,11 @@ contiene src/ui_interface.rs 'matches!\(a\.0, "it" \| "en"\)' 'selettore lingue:
 
 # --- 5. Chiave dei client personalizzati (custom.txt) --------------------------
 # Finche' non esiste la MR `custom:` la chiave e' quella di RustDesk: nessuno
-# di noi puo' firmare un custom.txt, quindi non e' un rischio ma va ricordato.
+# di noi puo' firmare un custom.txt, ma un custom.txt firmato da RustDesk con
+# override-settings sostituirebbe i default forzati di hbb_common, accesso
+# presidiato compreso: senza cambiare il binario e' l'unico modo, va ricordato.
 if grep -q '5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM=' src/common.rs 2>/dev/null; then
-  avviso "read_custom_client usa ancora la chiave pubblica di RustDesk (MR custom: non ancora fatta)"
+  avviso "read_custom_client usa ancora la chiave pubblica di RustDesk (MR custom: non ancora fatta): un custom.txt firmato da RustDesk scavalca i default forzati"
 else
   ok "read_custom_client non usa la chiave pubblica di RustDesk"
 fi

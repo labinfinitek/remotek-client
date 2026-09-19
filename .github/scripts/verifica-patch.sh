@@ -5,7 +5,8 @@
 # nome, server, chiave, API e accesso presidiato in hbb_common; metadati
 # Windows; link e attribuzione; lingua; tema generato; nessun trigger
 # automatico nei workflow upstream; ogni file diverso dal tag upstream
-# elencato in REMOTEK.md; server e chiave mai dal nome del file.
+# elencato in REMOTEK.md; server e chiave mai dal nome del file; nessuna
+# chiamata automatica ai server RustDesk.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -309,6 +310,250 @@ else
     errore "RUSTDESK_APPNAME letto in $(cut -d: -f1-2 <<<"$r"): se ne ricava server o chiave va spento"
   done <<<"$lettori"
 fi
+
+# --- 10. Silenzio verso i server RustDesk ---------------------------------------
+# Il client non chiama RustDesk da solo, ma non perche' abbiamo tolto codice
+# (patch minima): il silenzio poggia su codice upstream che non tocchiamo, e un
+# merge che lo cambi non da' conflitti. I punti:
+#  - il controllo versione (version_check_request, api.rustdesk.com) passa solo
+#    da do_check_software_update; la chiamano check_software_update, che esce
+#    per is_custom_client() (vero perche' APP_NAME non e' RustDesk), e
+#    check_update dell'updater, che esce se allow-auto-update non e' Y (N in
+#    OVERWRITE_SETTINGS, che Config::get_option legge per primo) e il controllo
+#    non e' manuale (manually_check_update non ha chiamanti). Dopo, l'updater
+#    scaricherebbe ed eseguirebbe l'installer di RustDesk;
+#  - il ripiego admin.rustdesk.com di get_api_server_ vale solo senza server:
+#    get_custom_rendezvous_server restituisce PROD_RENDEZVOUS_SERVER (sezione 1);
+#  - nessun altro host *.rustdesk.com nel codice Rust, fuori da commenti e test
+#    (i link a rustdesk.com/docs e al sito non sono server e non si contano).
+# Si legge il sorgente senza commenti e con le stringhe separate dal codice, non
+# per righe. Un ERRORE chiede di rileggere il punto indicato e poi aggiornare
+# il controllo; se python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_sil=$(python3 - <<'PY'
+import os, re, sys
+
+def vuoto(s):
+    return re.sub(r"[^\n]", " ", s)
+
+TOKEN = re.compile(r"""//|/\*|(?<!\w)b?r#*"|"|'""")
+CARATTERE = re.compile(r"""'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'""")
+
+def spoglia(t):
+    # (codice, maschera), lunghi come t e con gli stessi a capo: in codice i
+    # commenti sono spazi, in maschera anche l'interno di stringhe e caratteri.
+    cod, mas, i, n = [], [], 0, len(t)
+    while i < n:
+        m = TOKEN.search(t, i)
+        a = m.start() if m else n
+        cod.append(t[i:a]); mas.append(t[i:a])
+        if not m:
+            break
+        g = m.group()
+        if g in ("//", "/*"):
+            if g == "//":
+                j = t.find("\n", a)
+                j = n if j < 0 else j
+            else:                                   # i /* */ si annidano
+                p, j = 1, a + 2
+                while j < n and p:
+                    if t.startswith("/*", j): p, j = p + 1, j + 2
+                    elif t.startswith("*/", j): p, j = p - 1, j + 2
+                    else: j += 1
+            cod.append(vuoto(t[a:j])); mas.append(vuoto(t[a:j]))
+        elif g == "'":                              # carattere o lifetime
+            c = CARATTERE.match(t, a)
+            j = c.end() if c else a + 1
+            cod.append(t[a:j]); mas.append("'" + vuoto(t[a + 1:j - 1]) + "'" if c else "'")
+        else:                                       # stringa, anche r#"..."#
+            chiusa = '"' + "#" * g.count("#")
+            if "r" in g:
+                k = t.find(chiusa, m.end())
+                k = n if k < 0 else k
+            else:
+                k = m.end()
+                while k < n and t[k] != '"':
+                    k += 2 if t[k] == "\\" else 1
+                k = min(k, n)
+            j = min(k + len(chiusa), n)
+            cod.append(t[a:j]); mas.append(g + vuoto(t[m.end():k]) + t[k:j])
+        i = j
+    return "".join(cod), "".join(mas)
+
+GRAFFE = re.compile(r"[{}]")
+def chiudi(mas, a):
+    p = 0
+    for g in GRAFFE.finditer(mas, a):
+        p += 1 if g.group() == "{" else -1
+        if p == 0:
+            return g.start()
+    return len(mas)
+
+def funzioni(mas):
+    # [(nome, inizio, fine)] del corpo di ogni fn che ne ha uno
+    out = []
+    for m in re.finditer(r"\bfn\s+(\w+)", mas):
+        j, p = m.end(), 0
+        while j < len(mas) and not (p == 0 and mas[j] in "{;"):
+            p += {"(": 1, "[": 1, ")": -1, "]": -1}.get(mas[j], 0)
+            j += 1
+        if j < len(mas) and mas[j] == "{":
+            out.append((m.group(1), j + 1, chiudi(mas, j)))
+    return out
+
+def sorgenti():
+    for radice in ("src", "libs"):
+        for d, sotto, nomi in os.walk(radice):
+            sotto[:] = sorted(x for x in sotto if x not in ("target", ".git"))
+            for f in sorted(nomi):
+                if f.endswith(".rs"):
+                    yield os.path.join(d, f)
+TESTI = {}
+for f in sorgenti():
+    with open(f, encoding="utf-8", errors="replace") as fh:
+        TESTI[f] = fh.read()
+C, U = "src/common.rs", "src/updater.rs"
+H, L = "libs/hbb_common/src/config.rs", "libs/hbb_common/src/lib.rs"
+mancanti = [f for f in (C, U, H, L) if f not in TESTI]
+if mancanti:                    # senza questi file ogni "nessun uso" sarebbe falso
+    print("ERRORE\tmancano " + ", ".join(mancanti) + ": silenzio verso RustDesk non controllato")
+    sys.exit(0)
+ANALISI = {}
+def analisi(f):
+    if f not in ANALISI:
+        cod, mas = spoglia(TESTI[f])
+        ANALISI[f] = (cod, mas, funzioni(mas))
+    return ANALISI[f]
+def riga(s, pos):
+    return s.count("\n", 0, pos) + 1
+def dentro(fns, pos):                               # la fn piu' interna
+    c = [(a, n) for n, a, b in fns if a <= pos < b]
+    return max(c)[1] if c else None
+def compatto(s):
+    return re.sub(r"\s+", "", s)
+def esito(buono, bene, male):
+    print(("ok\t" + bene) if buono else ("ERRORE\t" + male))
+
+def unica(f, nome, dove=None):
+    # (riga, corpo) della sola fn `nome` in f (o nei tratti `dove`), o None
+    cod, mas, fns = analisi(f)
+    c = [(a, b) for n, a, b in fns if n == nome and (dove is None or any(x <= a < y for x, y in dove))]
+    if len(c) != 1:
+        print("ERRORE\t%s definita %d volte in %s, attesa 1: rileggere" % (nome, len(c), f))
+        return None
+    return riga(mas, c[0][0]), cod[c[0][0]:c[0][1]]
+
+def usi(nome):
+    # "file:riga (funzione)" di ogni uso di `nome` nel codice: niente
+    # commenti, stringhe, la definizione stessa e le righe `use`
+    pat = re.compile(r"(?<!\w)" + re.escape(nome) + r"(?!\w)")
+    out = []
+    for f in sorted(TESTI):
+        if nome not in TESTI[f]:
+            continue
+        cod, mas, fns = analisi(f)
+        imp = [(u.start(), u.end()) for u in re.finditer(r"\buse\b[^;]*;", mas)]
+        for m in pat.finditer(mas):
+            p = m.start()
+            if re.search(r"\bfn\s+$", mas[max(0, p - 12):p]) or any(a <= p < b for a, b in imp):
+                continue
+            out.append((f, riga(mas, p), dentro(fns, p)))
+    return out
+def fuori(elenco, ammessi):
+    return ["%s:%d (%s)" % (f, r, fn or "fuori da funzioni") for f, r, fn in elenco if (f, fn) not in ammessi]
+
+P = r"(?:(?:crate|hbb_common|config|common|keys)::)*"   # prefissi di percorso
+
+x, y = unica(C, "is_custom_client"), unica(C, "get_app_name")
+if x and y:
+    esito(re.fullmatch(P + r'get_app_name\(\)!="RustDesk"', compatto(x[1]))
+          and re.fullmatch(P + r"APP_NAME\.read\(\)\.unwrap\(\)\.clone\(\)", compatto(y[1])),
+          "is_custom_client() e' vero perche' APP_NAME non e' RustDesk",
+          "is_custom_client() o get_app_name() non dipendono piu' solo da APP_NAME: rileggere, "
+          "da li' dipende il controllo versione verso api.rustdesk.com  [%s:%d]" % (C, x[0]))
+
+x = unica(C, "check_software_update")
+if x:
+    esito(re.match(r"if" + P + r"is_custom_client\(\)\{return;?\}", compatto(x[1])),
+          "check_software_update() esce per prima cosa se is_custom_client()",
+          "check_software_update() non esce piu' per prima cosa con is_custom_client(): "
+          "la GUI interrogherebbe api.rustdesk.com  [%s:%d]" % (C, x[0]))
+
+male = fuori(usi("do_check_software_update"), {(C, "check_software_update"), (U, "check_update")})
+esito(not male, "do_check_software_update() (api.rustdesk.com) e' chiamata solo da check_software_update e check_update",
+      "do_check_software_update() chiamata fuori dalle due guardie, in " + ", ".join(male) +
+      ": interrogherebbe api.rustdesk.com")
+
+male = fuori(usi("version_check_request"), {(C, "do_check_software_update")})
+esito(not male, "version_check_request() (l'indirizzo api.rustdesk.com) si usa solo in do_check_software_update",
+      "version_check_request() usata anche in " + ", ".join(male) + ": un'altra strada verso api.rustdesk.com")
+
+x = unica(U, "check_update")
+if x:
+    k = compatto(x[1])
+    g = re.search(r"if!\(manually\|\|" + P + r"Config::get_bool_option\(" + P +
+                  r"OPTION_ALLOW_AUTO_UPDATE\)\)\{returnOk\(\(\)\);?\}", k)
+    c = re.search(r"do_check_software_update\(", k)    # senza spazi: niente \b
+    esito(g and (c is None or g.end() <= c.start()),
+          "check_update() dell'updater esce se allow-auto-update non e' Y e il controllo non e' manuale",
+          "check_update() non esce piu' con allow-auto-update spento prima di do_check_software_update: "
+          "l'updater scaricherebbe l'installer di RustDesk  [%s:%d]" % (U, x[0]))
+
+male = fuori(usi("manually_check_update"), set()) + fuori(usi("check_update"), {(U, "start_auto_update_check_")})
+for f in sorted(TESTI):
+    if "CheckUpdate" in TESTI[f]:
+        cod, mas, fns = analisi(f)
+        male += ["%s:%d (%s, invio di CheckUpdate)" % (f, riga(mas, m.start()), dentro(fns, m.start()))
+                 for m in re.finditer(r"\bsend\s*\(\s*(?:\w+::)*CheckUpdate\b", mas)
+                 if (f, dentro(fns, m.start())) != (U, "manually_check_update")]
+esito(not male, "il controllo manuale (scavalca allow-auto-update) parte solo da manually_check_update, che non ha chiamanti",
+      "l'updater puo' partire in modo manuale, scavalcando allow-auto-update: " + ", ".join(male))
+
+cod, mas, fns = analisi(H)
+blocchi = [(m.end(), chiudi(mas, m.end() - 1)) for m in re.finditer(r"^impl\s+Config\s*\{", mas, re.M)]
+x, y, z = unica(H, "get_option", blocchi), unica(H, "get_bool_option", blocchi), unica(H, "get_or")
+if x and y and z:
+    esito(compatto(x[1]).startswith("get_or(&OVERWRITE_SETTINGS,")
+          and re.fullmatch(r"option2bool\(k,&(?:Self|Config)::get_option\(k\)\)", compatto(y[1]))
+          and compatto(z[1]) == "a.read().unwrap().get(k).or(b.get(k)).or(c.read().unwrap().get(k)).cloned()",
+          "Config::get_option legge per primo OVERWRITE_SETTINGS (allow-auto-update N e approve-mode click vincono)",
+          "Config::get_option/get_bool_option/get_or non danno piu' la precedenza a OVERWRITE_SETTINGS: "
+          "rileggere, ne dipendono auto-update spento e accesso presidiato  [%s:%d]" % (H, x[0]))
+
+x, y = unica(C, "get_api_server_"), unica(C, "get_custom_rendezvous_server")
+if x and y:
+    k = compatto(x[1])
+    m = re.search(r"let(\w+)=" + P + r"get_custom_rendezvous_server\(custom\);if!\1\.is_empty\(\)\{", k)
+    esito(("admin.rustdesk.com" not in k or (m and k.count("admin.rustdesk.com") == 1
+                                           and k.endswith('"https://admin.rustdesk.com".to_owned()')))
+          and re.search(r"if!" + P + r"PROD_RENDEZVOUS_SERVER\.read\(\)\.unwrap\(\)\.is_empty\(\)\{return" + P +
+                        r"PROD_RENDEZVOUS_SERVER\.read\(\)\.unwrap\(\)\.clone\(\);?\}", compatto(y[1])),
+          "il ripiego admin.rustdesk.com di get_api_server_ vale solo senza server: prima c'e' PROD_RENDEZVOUS_SERVER",
+          "get_api_server_ o get_custom_rendezvous_server cambiate: il ripiego admin.rustdesk.com potrebbe "
+          "valere anche col nostro server, rileggere  [%s:%d]" % (C, x[0]))
+
+HOST = re.compile(r"(?i)(?<![\w.-])((?!www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)*\.rustdesk\.com)(?![\w-])")
+TEST = re.compile(r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+NOTI = {(L, "version_check_request", "api.rustdesk.com"), (C, "get_api_server_", "admin.rustdesk.com")}
+male = []
+for f in sorted(TESTI):
+    if not re.search(r"(?i)[a-z0-9-]\.rustdesk\.com", TESTI[f]):
+        continue
+    cod, mas, fns = analisi(f)
+    test = [(m.start(), chiudi(mas, m.end() - 1)) for m in TEST.finditer(mas)]
+    for m in HOST.finditer(cod):
+        p = m.start()
+        if not any(a <= p < b for a, b in test) and (f, dentro(fns, p), m.group(1).lower()) not in NOTI:
+            male.append("%s:%d (%s)" % (f, riga(cod, p), m.group(1)))
+esito(not male, "nessun altro host *.rustdesk.com nel codice Rust: solo api (version_check_request) e admin (ripiego)",
+      "host RustDesk nuovo o spostato nel codice Rust, in " + ", ".join(male) +
+      ": se il client lo contatta da solo va spento, altrimenti rileggere e aggiornare questo controllo")
+PY
+) || esito_sil="${esito_sil:-}"$'\nERRORE\t'"controllo del silenzio verso RustDesk non eseguito: python3 terminato con errore"
+[ -n "$esito_sil" ] || esito_sil=$'ERRORE\t'"controllo del silenzio verso RustDesk senza esito"
+while IFS=$'\t' read -r tipo msg; do
+  [ -n "$tipo$msg" ] || continue
+  if [ "$tipo" = ok ]; then ok "$msg"; else errore "$msg"; fi
+done <<<"$esito_sil"
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

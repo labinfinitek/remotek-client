@@ -840,8 +840,8 @@ class _GeneralState extends State<_General> {
       Map<String, String> langsMap = {for (var v in langsList) v[0]: v[1]};
       List<String> keys = langsMap.keys.toList();
       List<String> values = langsMap.values.toList();
-      keys.insert(0, defaultOptionLang);
-      values.insert(0, translate('Default'));
+      // Remotek: niente voce "Predefinita", che seguiva la lingua di Windows
+      // (ADR-0011, A4): senza scelta vale il default di load_custom_client.
       String currentKey = bind.mainGetLocalOption(key: kCommConfKeyLang);
       if (!keys.contains(currentKey)) {
         currentKey = defaultOptionLang;

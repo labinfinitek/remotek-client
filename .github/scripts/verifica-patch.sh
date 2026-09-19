@@ -5,7 +5,7 @@
 # nome, server, chiave, API e accesso presidiato in hbb_common; metadati
 # Windows; link e attribuzione; lingua; tema generato; nessun trigger
 # automatico nei workflow upstream; ogni file diverso dal tag upstream
-# elencato in REMOTEK.md.
+# elencato in REMOTEK.md; server e chiave mai dal nome del file.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -192,6 +192,88 @@ for f in sys.stdin.read().split():
     n=$(git diff --name-only "$base" HEAD | wc -l)
     ok "i $n file diversi da $tag sono tutti elencati in REMOTEK.md"
   fi
+fi
+
+# --- 9. Server e chiave mai dal nome del file -----------------------------------
+# Un exe rinominato "...host=<server>,key=<chiave>.exe" (anche il portable, che
+# passa il nome esterno in RUSTDESK_APPNAME) andrebbe su un server altrui col
+# nostro marchio. Tutti gli usi passano da get_license_from_exe_name, che deve
+# restituire solo un errore; a un merge upstream una nuova chiamata al parser
+# o una nuova lettura di RUSTDESK_APPNAME riaprirebbe la strada senza conflitti.
+WIN=src/platform/windows.rs
+esito_nome=$(python3 - "$WIN" <<'PY'
+import re, sys
+try:
+    testo = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    print("file mancante"); sys.exit(0)
+n = len(re.findall(r"\bfn get_license_from_exe_name\b", testo))
+if n != 1:
+    print(f"get_license_from_exe_name definita {n} volte, attesa 1"); sys.exit(0)
+m = re.search(r"\bfn get_license_from_exe_name\(\)[^{]*\{\n(.*?)^\}", testo, re.M | re.S)
+corpo = [r.strip() for r in (m.group(1) if m else "").splitlines()]
+corpo = [r for r in corpo if r and not r.startswith("//")]
+if len(corpo) != 1 or not re.fullmatch(r'bail!\("[^"]*"\);?', corpo[0]):
+    print("get_license_from_exe_name non restituisce solo un errore: il nome del file torna a decidere server e chiave")
+PY
+)
+if [ -n "$esito_nome" ]; then
+  errore "$esito_nome  [$WIN]"
+else
+  ok "get_license_from_exe_name restituisce solo un errore: server e chiave mai dal nome del file"
+fi
+# Fuori dal parser (custom_server.rs) e dallo strumento naming.rs e' ammessa
+# una sola chiamata: "--config <stringa>" di core_main.rs, che non legge il nome.
+chiamate=$(grep -rnE --include='*.rs' 'get_custom_server_from_string[[:space:]]*\(' src |
+  grep -vE '^src/(custom_server|naming)\.rs:' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//')
+n_cfg=$(printf '%s\n' "$chiamate" | grep -c '^src/core_main\.rs:')
+altre=$(printf '%s\n' "$chiamate" | grep -v '^src/core_main\.rs:' | grep .)
+if [ -z "$altre" ] && [ "$n_cfg" -le 1 ]; then
+  ok "il parser del nome del file e' chiamato al piu' da --config (core_main.rs)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "chiamata non prevista al parser del nome del file in $(cut -d: -f1-2 <<<"$r"): rileggere"
+  done <<<"$altre"
+  [ "$n_cfg" -le 1 ] || errore "core_main.rs chiama il parser del nome del file $n_cfg volte, attesa 1 (--config)"
+fi
+# Il controllo qui sopra scarta custom_server.rs: il parser deve quindi restare
+# una funzione pura. Fuori dal file si vede solo get_custom_server_from_string
+# e nessuna riga legge il nome dell'exe o l'ambiente; altrimenti un helper nuovo
+# li' (current_exe() + parser) chiamato da common.rs sfuggirebbe.
+CS=src/custom_server.rs
+esito_parser=$(python3 - "$CS" <<'PY'
+import re, sys
+try:
+    testo = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    print("file mancante"); sys.exit(0)
+testo = re.sub(r"/\*.*?\*/", "", testo, flags=re.S)
+righe = [r for r in testo.splitlines() if not r.strip().startswith("//")]
+pub = re.findall(r'^[ \t]*pub(?:\([^)]*\))?[ \t]+(?:(?:const|async|unsafe|extern(?:[ \t]+"[^"]*")?)[ \t]+)*fn[ \t]+(\w+)',
+                 "\n".join(righe), re.M)
+if pub != ["get_custom_server_from_string"]:
+    print("funzioni pubbliche: " + (", ".join(pub) or "nessuna") + "; attesa solo get_custom_server_from_string")
+env = [r.strip() for r in righe if re.search(r"current_exe|\benv::", r)]
+if env:
+    print("il parser legge il nome dell'exe o l'ambiente: " + env[0])
+PY
+)
+if [ -z "$esito_parser" ]; then
+  ok "il parser del nome del file resta puro (solo get_custom_server_from_string, niente exe ne' ambiente)"
+else
+  while IFS= read -r r; do
+    errore "$r  [$CS]"
+  done <<<"$esito_parser"
+fi
+lettori=$(grep -rnE --include='*.rs' 'PORTABLE_APPNAME_RUNTIME_ENV_KEY|RUSTDESK_APPNAME' src |
+  grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' |
+  grep -vE '^src/common\.rs:[0-9]+:pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPNAME";$')
+if [ -z "$lettori" ]; then
+  ok "nessuno legge RUSTDESK_APPNAME (il nome del file del portable)"
+else
+  while IFS= read -r r; do
+    errore "RUSTDESK_APPNAME letto in $(cut -d: -f1-2 <<<"$r"): se ne ricava server o chiave va spento"
+  done <<<"$lettori"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

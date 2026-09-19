@@ -245,8 +245,23 @@ jobs:
           name: ${{ matrix.job.arch == 'aarch64' && 'topmostwindow-artifacts-ARM64' || 'topmostwindow-artifacts-x64' }}
           path: "./rustdesk"
 
+      # Nostro. L'exe dell'applicazione prende il nome del prodotto prima che la
+      # cartella venga caricata e impacchettata: install_me copia la cartella senza
+      # rinominare, mentre servizio, collegamenti, disinstallazione e is_installed
+      # cercano <APP_NAME>.exe (src/platform/windows.rs, get_install_info_with_subkey,
+      # install_me, is_installed). librustdesk.dll e drivers/RustDeskPrinterDriver
+      # restano col loro nome: il codice li cerca cosi'.
+      - name: Exe dell'applicazione col nome del prodotto
+        shell: bash
+        run: |
+          test -f ./rustdesk/rustdesk.exe
+          mv ./rustdesk/rustdesk.exe "./rustdesk/${NOME_EXE}"
+          test -f "./rustdesk/${NOME_EXE}"
+          test ! -e ./rustdesk/rustdesk.exe
+          echo "Exe dell'applicazione: ./rustdesk/${NOME_EXE}"
+
       # [upstream] flutter-build.yml:318-323, senza condizione; nome invariato (ADR-0009).
-      # E' la CARTELLA dell'applicazione (rustdesk.exe + dll), non l'exe da consegnare.
+      # E' la CARTELLA dell'applicazione (Remotek.exe + dll), non l'exe da consegnare.
       - name: Upload unsigned
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -265,17 +280,23 @@ jobs:
           echo "::error::FIRMA_ATTIVA=true ma il passo di firma non e' implementato (ADR-0009)"
           exit 1
 
-      # [upstream] flutter-build.yml:332-342; cambia solo il nome di destinazione dell'ultima riga
+      # [upstream] flutter-build.yml:332-342; cambiano l'exe passato a generate.py
+      # (quello rinominato sopra) e il nome di destinazione del mv. Le due guardie
+      # fermano il build se il pacchetto lancerebbe un exe con un altro nome.
       - name: Build self-extracted executable
         shell: bash
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e "../../rustdesk/${NOME_EXE}"
+          python3 -c "import os, sys; d = open('data.bin', 'rb').read(); sys.exit(0 if d.endswith(b'rustdesk.' + bytes([92]) + os.environ['NOME_EXE'].encode()) else 1)" \
+            || { echo "::error::data.bin non lancia ${NOME_EXE}"; exit 1; }
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/${NOME_EXE}"
+          python3 -c "import os, sys; d = open(os.path.join('SignOutput', os.environ['NOME_EXE']), 'rb').read(); b = bytes([92]); sys.exit(0 if d.count(b'rustdesk.' + b + os.environ['NOME_EXE'].encode()) == 1 and d.count(b'.' + b + b'rustdesk.exe') == 0 else 1)" \
+            || { echo "::error::il pacchetto non contiene ${NOME_EXE} o contiene ancora rustdesk.exe"; exit 1; }
 
       # Nostro. Come sopra, per l'exe autoestraente che riceve il cliente.
       - name: Firma dell'exe finale (spenta)

@@ -10,8 +10,14 @@
 #   "0xAARRGGBB"  alfa esplicito, stessa notazione di Color(0x...) in Dart
 # "#RRGGBBAA" (stile CSS) e' rifiutato: si confonderebbe con AARRGGBB.
 #
-# I valori qui sotto sono quelli di RustDesk 1.4.9 (flutter/lib/common.dart,
-# class MyTheme): finche' non cambiano, l'aspetto e' identico a upstream.
+# I valori vengono dalla palette del sito Infinitek (theme.json: primary,
+# contrast, base e il gradiente "brand"). Criterio: la palette entra dove si
+# vede su Windows senza peggiorare la leggibilita' del tema chiaro rispetto a
+# RustDesk 1.4.9; dove la palette (pensata per un sito scuro) la peggiorerebbe,
+# o la costante non si vede su Windows, resta il valore upstream, indicato nel
+# commento. Contrasti WCAG misurati sui valori, sui fondi del tema chiaro. Nel
+# tema scuro l'accento usato come testo o icona scende un po' (su #18191E da
+# 4,0 a 3,85:1, su #24252B da 3,5 a 3,35:1): accettato, e' il Blu Infinitek.
 
 # Nome del prodotto: solo documentazione, NON finisce nel Dart. Il nome vero
 # e' APP_NAME in libs/hbb_common/src/config.rs; la coincidenza la controlla
@@ -22,30 +28,42 @@ nome = "Remotek"
 # Le chiavi sono i nomi delle costanti di MyTheme: tutte e 12 obbligatorie,
 # nessuna in piu'.
 
-# Sfondo grigio chiaro: campi di testo, card, barre (tema chiaro).
-grayBg = "#EFEFF2"
+# Sfondo grigio chiaro del tema chiaro: fondo della home, campi di testo,
+# card, bordo dei dialoghi. Palette "contrast" (upstream #EFEFF2): stessa
+# chiarezza, tinta della palette; l'accento sopra passa da 3,8 a 4,1:1.
+grayBg = "#EEF3FB"
 
 # Colore d'accento: pulsanti pieni, link, selezioni. E' IL colore del brand.
-accent = "#0071FF"
+# Palette "primary", Blu Infinitek (upstream #0071FF); testo bianco sopra
+# 4,6:1 (upstream 4,4:1).
+accent = "#1F6BFF"
 # Lo stesso accento con trasparenza: devono avere lo stesso RRGGBB di
 # "accent" (il generatore lo verifica), cambia solo l'alfa (77 e AA).
-accent50 = "0x770071FF"
-accent80 = "0xAA0071FF"
+accent50 = "0x771F6BFF"
+accent80 = "0xAA1F6BFF"
 
-# Sfondo della sessione remota (dietro l'immagine dello schermo).
-canvasColor = "#212121"
-# Bordi e divisori.
+# Sfondo della sessione remota (mobile) e del riquadro della qualita' di
+# connessione (desktop, con trasparenza, testo bianco). Palette "base", navy
+# profondo (upstream #212121).
+canvasColor = "#060A14"
+# Bordi e divisori. Upstream: la palette ha solo bordi per fondo scuro; il
+# suo "silver" #D7E0EE su bianco scende a 1,3:1 da 1,6:1.
 border = "#CCCCCC"
 # Evidenza nelle schermate mobile (pagina di connessione, file manager).
+# Upstream: su Windows non si vede.
 idColor = "#00B6F0"
-# Testo secondario grigio. Upstream: Color.fromARGB(255, 148, 148, 148).
+# Testo secondario grigio, in entrambi i temi. Upstream:
+# Color.fromARGB(255, 148, 148, 148). Il "muted" della palette (#94A6C4) su
+# bianco scende a 2,5:1 da 3,0:1.
 darkGray = "#949494"
-# ID nel connection manager (in 1.4.9 non ha riferimenti: resta per parita').
+# ID nel connection manager. Upstream: in 1.4.9 non ha riferimenti.
 cmIdColor = "#21790B"
-# Testo scuro. Upstream: Colors.black87, cioe' nero con alfa DD (in 1.4.9 non
-# ha riferimenti: resta per parita').
+# Testo scuro. Upstream: Colors.black87, cioe' nero con alfa DD; in 1.4.9
+# non ha riferimenti.
 dark = "0xDD000000"
-# Pulsanti desktop, barra della sessione remota, menu (azzurro piu' chiaro).
-button = "#2C8CFF"
-# Bordo al passaggio del mouse.
+# Pulsanti desktop, barra della sessione remota, menu (azzurro piu' chiaro
+# dell'accento, come upstream #2C8CFF). Palette: inizio del gradiente
+# "brand"; testo bianco sopra 3,8:1 (upstream 3,3:1).
+button = "#2B7FFF"
+# Bordo al passaggio del mouse. Upstream, come "border".
 hoverBorder = "#999999"

@@ -19,7 +19,7 @@ Base upstream: RustDesk 1.4.9.
 ### Aggiunto
 - Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
-- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati, link, lingua, tema), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
+- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati, link, lingua, tema, nessuna configurazione dal nome del file), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.
 
 ### Corretto
@@ -27,3 +27,4 @@ Base upstream: RustDesk 1.4.9.
 
 ### Sicurezza
 - Accesso presidiato di default: ogni sessione in entrata va accettata con un clic sul PC controllato; ID e password (monouso o permanente) da soli non bastano piu'. L'impostazione e' bloccata: non si cambia da impostazioni, riga di comando o API. La verifica in due passaggi (2FA) e' spenta, perche' con l'accettazione a clic non aggiunge protezione e il suo codice aprirebbe la sessione senza clic: l'interruttore nelle impostazioni non ha effetto. L'accesso non presidiato si abilitera' solo per singolo cliente con un `custom.txt` firmato; anche con un `custom.txt` la 2FA resta spenta, in ogni modalita'. Finche' il client verifica `custom.txt` con la chiave di RustDesk, anche un file firmato da RustDesk puo' togliere l'accettazione a clic (hbb_common `6d59c29`).
+- Il nome del file non cambia piu' server, chiave, API o relay: un exe rinominato con `host=`, `key=`, `api=` o `relay=` (o con la configurazione codificata in base64 nel nome, anche non firmata) usa comunque il server e la chiave di Remotek, anche come portable. Restano gli usi del nome che non toccano il server: supporto rapido (`-qs`) e `install.exe`.

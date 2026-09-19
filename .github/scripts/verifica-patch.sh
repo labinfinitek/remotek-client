@@ -111,6 +111,40 @@ contiene "$INFO" 'github\.com/labinfinitek/remotek-client' \
 # --- 4. Lingua ----------------------------------------------------------------
 contiene src/common.rs 'OPTION_LANGUAGE\.to_owned\(\)' 'italiano di default (load_custom_client)'
 contiene src/ui_interface.rs 'matches!\(a\.0, "it" \| "en"\)' 'selettore lingue: solo it ed en'
+# La voce "Predefinita" salva lang vuoto, che src/lang.rs risolve con la lingua
+# di Windows: con tutte le traduzioni nel binario si aggirerebbe A4. Non viene
+# da get_langs ma da language() della pagina desktop: li' defaultOptionLang
+# resta solo nel ripiego upstream per una chiave fuori elenco, e le liste
+# keys/values restano quelle di get_langs: una voce aggiunta in altro modo
+# (costante, letterale) sarebbe la stessa Predefinita. Se python3 fallisce il
+# controllo non e' eseguito, e questo e' un errore, non un ok.
+esito_pred=$(python3 - "$INFO" <<'PY'
+import re, sys
+try:
+    testo = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    print("file mancante"); sys.exit(0)
+corpi = re.findall(r"^  Widget language\(\) \{\n(.*?)^  \}$", testo, re.M | re.S)
+if len(corpi) != 1:
+    print(f"language() trovata {len(corpi)} volte, attesa 1: rileggere il selettore"); sys.exit(0)
+righe = [r.strip() for r in corpi[0].splitlines() if not r.strip().startswith("//")]
+dichiarazioni = ("List<String> keys = langsMap.keys.toList();",
+                 "List<String> values = langsMap.values.toList();")
+modifiche = [r for r in righe if not r.startswith(dichiarazioni) and re.search(
+    r"\b(keys|values)\s*(\.(insert|insertAll|add|addAll)\s*\(|\+?=(?!=))", r)]
+if any("'Default'" in r or '"Default"' in r for r in righe):
+    print("il selettore lingue mostra di nuovo la voce Default (Predefinita)")
+elif [r for r in righe if "defaultOptionLang" in r] != ["currentKey = defaultOptionLang;"]:
+    print("defaultOptionLang usato nel selettore lingue oltre al ripiego: la voce Predefinita e' tornata?")
+elif modifiche:
+    print(f"elenco lingue cambiato in language() ({modifiche[0]}): la voce Predefinita e' tornata?")
+PY
+) || esito_pred="controllo della voce Predefinita non eseguito: python3 terminato con errore"
+if [ -z "$esito_pred" ]; then
+  ok 'selettore lingue: nessuna voce "Predefinita" (seguirebbe la lingua di Windows)'
+else
+  errore "$esito_pred  [$INFO]"
+fi
 
 # --- 5. Chiave dei client personalizzati (custom.txt) --------------------------
 # Finche' non esiste la MR `custom:` la chiave e' quella di RustDesk: nessuno

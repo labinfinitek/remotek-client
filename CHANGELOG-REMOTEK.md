@@ -23,6 +23,7 @@ Base upstream: RustDesk 1.4.9.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.
 
 ### Corretto
+- Lingua: tolta dal selettore la voce "Predefinita", che seguiva la lingua di Windows: sceglierla, su un Windows francese, tedesco o spagnolo, faceva parlare al client quella lingua. Restano italiano, che vale se non si sceglie nulla, e inglese.
 - Installazione su Windows: il pacchetto contiene `Remotek.exe` e non piu' `rustdesk.exe`, cosi' servizio, collegamenti, disinstallazione e "e' installato?" trovano il programma in `C:\Program Files\Remotek`.
 
 ### Sicurezza

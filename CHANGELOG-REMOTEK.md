@@ -19,7 +19,7 @@ Base upstream: RustDesk 1.4.9.
 ### Aggiunto
 - Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
-- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati, link, lingua, tema, nessuna configurazione dal nome del file), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
+- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati, link, lingua, tema, nessuna configurazione dal nome del file, nessuna chiamata automatica ai server RustDesk), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.
 
 ### Corretto

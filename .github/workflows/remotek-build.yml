@@ -246,11 +246,11 @@ jobs:
           path: "./rustdesk"
 
       # Nostro. L'exe dell'applicazione prende il nome del prodotto prima che la
-      # cartella venga caricata e impacchettata: l'installazione copia la cartella
-      # senza rinominare, mentre servizio, collegamenti, disinstallazione e
-      # is_installed cercano <APP_NAME>.exe (src/platform/windows.rs:1433, 1686-1720,
-      # 1949). librustdesk.dll, RuntimeBroker_rustdesk.exe e
-      # drivers/RustDeskPrinterDriver restano: il codice li cerca con quel nome.
+      # cartella venga caricata e impacchettata: install_me copia la cartella senza
+      # rinominare, mentre servizio, collegamenti, disinstallazione e is_installed
+      # cercano <APP_NAME>.exe (src/platform/windows.rs, get_install_info_with_subkey,
+      # install_me, is_installed). librustdesk.dll e drivers/RustDeskPrinterDriver
+      # restano col loro nome: il codice li cerca cosi'.
       - name: Exe dell'applicazione col nome del prodotto
         shell: bash
         run: |
@@ -281,8 +281,8 @@ jobs:
           exit 1
 
       # [upstream] flutter-build.yml:332-342; cambiano l'exe passato a generate.py
-      # (quello rinominato sopra) e il nome di destinazione dell'ultima riga. Le due
-      # guardie fermano il build se il pacchetto lancerebbe un exe con un altro nome.
+      # (quello rinominato sopra) e il nome di destinazione del mv. Le due guardie
+      # fermano il build se il pacchetto lancerebbe un exe con un altro nome.
       - name: Build self-extracted executable
         shell: bash
         run: |

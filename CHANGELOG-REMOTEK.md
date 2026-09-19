@@ -19,8 +19,11 @@ Base upstream: RustDesk 1.4.9.
 ### Aggiunto
 - Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
-- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, metadati, link, lingua, tema), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
+- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati, link, lingua, tema), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.
 
 ### Corretto
 - Installazione su Windows: il pacchetto contiene `Remotek.exe` e non piu' `rustdesk.exe`, cosi' servizio, collegamenti, disinstallazione e "e' installato?" trovano il programma in `C:\Program Files\Remotek`.
+
+### Sicurezza
+- Accesso presidiato di default: ogni sessione in entrata va accettata con un clic sul PC controllato; ID e password (monouso o permanente) da soli non bastano piu'. L'impostazione e' bloccata: non si cambia da impostazioni, riga di comando o API. La verifica in due passaggi (2FA) e' spenta, perche' con l'accettazione a clic non aggiunge protezione e il suo codice aprirebbe la sessione senza clic: l'interruttore nelle impostazioni non ha effetto. L'accesso non presidiato si abilitera' solo per singolo cliente con un `custom.txt` firmato; anche con un `custom.txt` la 2FA resta spenta, in ogni modalita'. Finche' il client verifica `custom.txt` con la chiave di RustDesk, anche un file firmato da RustDesk puo' togliere l'accettazione a clic (hbb_common `6d59c29`).

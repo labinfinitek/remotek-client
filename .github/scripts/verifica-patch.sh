@@ -99,15 +99,43 @@ contiene libs/portable/Cargo.toml '^CompanyName = "Infinitek S\.r\.l\."' 'autoes
 contiene libs/portable/src/main.rs 'const APP_PREFIX: &str = "remotek";' \
   'autoestraente: cartella di estrazione separata da RustDesk'
 contiene Cargo.toml '^name = "rustdesk"' 'Cargo.toml radice: il nome del pacchetto resta upstream'
+# Editore della voce Disinstalla: lo scrivono install_me (installazione, "Click
+# to upgrade", installazione sopra una versione precedente) e update_me (solo
+# con --update). Un'altra riga Publisher, come quella upstream con {app_name},
+# mostrerebbe il nome dell'app come editore.
+WIN=src/platform/windows.rs
+if [ ! -f "$WIN" ]; then
+  errore "voce Disinstalla: manca $WIN"
+else
+  n_pub=$(grep -cF '/v Publisher /t REG_SZ /d \"Infinitek S.r.l.\"' "$WIN")
+  n_tot=$(grep -cF '/v Publisher ' "$WIN")
+  if [ "$n_pub" = 2 ] && [ "$n_tot" = 2 ]; then
+    ok 'voce Disinstalla: editore Infinitek S.r.l. in install_me e update_me'
+  else
+    errore "voce Disinstalla: $n_pub righe Publisher con Infinitek S.r.l. su $n_tot, attese 2 su 2 (install_me e update_me)  [$WIN]"
+  fi
+fi
 
 # --- 3. Link e attribuzione ---------------------------------------------------
 INFO=flutter/lib/desktop/pages/desktop_setting_page.dart
 INST=flutter/lib/desktop/pages/install_page.dart
 non_contiene "$INFO" 'rustdesk\.com' 'dialogo Informazioni: nessun link a rustdesk.com'
 non_contiene "$INST" 'rustdesk\.com' 'dialogo di installazione: nessun link a rustdesk.com'
-contiene "$INFO" 'Basato su RustDesk' 'dialogo Informazioni: attribuzione a RustDesk (AGPL 5)'
+# I testi del dialogo si cercano a inizio riga (prima del letterale solo
+# spazi): a un merge, una nostra riga commentata accanto a quella upstream non
+# basta. Due righe cominciano con "Basato su RustDesk": ognuna ha il suo
+# controllo, altrimenti una coprirebbe l'assenza dell'altra.
+contiene "$INFO" "^[[:space:]]*'Basato su RustDesk, AGPL-3\.0 - sorgenti'" \
+  'dialogo Informazioni: attribuzione a RustDesk (AGPL 5)'
 contiene "$INFO" 'github\.com/labinfinitek/remotek-client' \
   'dialogo Informazioni: link ai sorgenti (AGPL 6)'
+contiene "$INFO" "^[[:space:]]*'Copyright © [0-9-]+ Infinitek S\.r\.l\.'" \
+  'dialogo Informazioni: copyright Infinitek S.r.l. nel riquadro'
+contiene "$INFO" "^[[:space:]]*'Basato su RustDesk, Copyright © .* Purslane Tech Pte\. Ltd\." \
+  'dialogo Informazioni: attribuzione a RustDesk e Purslane nel riquadro'
+non_contiene "$INFO" "^[[:space:]]*'Copyright © .*Purslane" \
+  'dialogo Informazioni: niente riga upstream con la sola Purslane'
+non_contiene "$INFO" 'Slogan_tip' 'dialogo Informazioni: niente slogan di RustDesk'
 
 # --- 4. Lingua ----------------------------------------------------------------
 contiene src/common.rs 'OPTION_LANGUAGE\.to_owned\(\)' 'italiano di default (load_custom_client)'

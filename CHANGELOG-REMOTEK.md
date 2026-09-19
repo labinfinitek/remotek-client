@@ -16,12 +16,14 @@ Base upstream: RustDesk 1.4.9.
 - Il client si chiama Remotek e nasce gia' configurato: server `remote.infinitek.it` con la sua chiave pubblica, API `https://remote.infinitek.it`; l'aggiornamento automatico verso RustDesk ufficiale e' spento e non riattivabile dalle impostazioni (hbb_common `2b42505`).
 - Italiano di default; nel selettore restano italiano e inglese.
 - Icone Infinitek al posto di quelle di RustDesk su Windows: exe da scaricare e installato, finestra, barra delle applicazioni, area di notifica, connection manager.
+- Voce Disinstalla di Windows (App installate): l'editore e' "Infinitek S.r.l." e non piu' "Remotek", anche dopo l'aggiornamento di un'installazione precedente.
+- Dialogo Informazioni: il riquadro del copyright dice "Copyright © 2026 Infinitek S.r.l." seguito dall'attribuzione a RustDesk e a Purslane Tech Pte. Ltd., come le proprieta' dell'exe; tolto lo slogan di RustDesk.
 
 ### Aggiunto
 - Logo Infinitek nella home: simbolo e scritta nel tema scuro, solo il simbolo nel tema chiaro.
 - Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
-- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati, link, lingua, tema, nessuna configurazione dal nome del file, nessuna chiamata automatica ai server RustDesk), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
+- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, metadati ed editore, link e copyright, lingua, tema, nessuna configurazione dal nome del file, nessuna chiamata automatica ai server RustDesk), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.
 
 ### Corretto

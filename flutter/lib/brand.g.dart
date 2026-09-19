@@ -8,16 +8,16 @@ import 'dart:ui' show Color;
 class Brand {
   Brand._();
 
-  static const Color grayBg = Color(0xFFEFEFF2);
-  static const Color accent = Color(0xFF0071FF);
-  static const Color accent50 = Color(0x770071FF);
-  static const Color accent80 = Color(0xAA0071FF);
-  static const Color canvasColor = Color(0xFF212121);
+  static const Color grayBg = Color(0xFFEEF3FB);
+  static const Color accent = Color(0xFF1F6BFF);
+  static const Color accent50 = Color(0x771F6BFF);
+  static const Color accent80 = Color(0xAA1F6BFF);
+  static const Color canvasColor = Color(0xFF060A14);
   static const Color border = Color(0xFFCCCCCC);
   static const Color idColor = Color(0xFF00B6F0);
   static const Color darkGray = Color(0xFF949494);
   static const Color cmIdColor = Color(0xFF21790B);
   static const Color dark = Color(0xDD000000);
-  static const Color button = Color(0xFF2C8CFF);
+  static const Color button = Color(0xFF2B7FFF);
   static const Color hoverBorder = Color(0xFF999999);
 }

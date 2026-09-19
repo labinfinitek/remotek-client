@@ -11,7 +11,7 @@ Base upstream: RustDesk 1.4.9.
 - Proprieta' dei file Windows (exe interno e autoestraente): prodotto "Remotek", societa' "Infinitek S.r.l.", copyright con attribuzione a RustDesk; cartella di estrazione del portable separata da quella di RustDesk.
 - Workflow upstream solo ad avvio manuale (nightly senza cron; ci, flutter-ci,
   flutter-tag, fdroid, wf-cliprdr-ci senza trigger automatici).
-- I colori del tema vengono da `brand/brand.toml` (valori attuali identici a RustDesk 1.4.9).
+- I colori del tema vengono da `brand/brand.toml`: accento Blu Infinitek `#1F6BFF`, pulsanti `#2B7FFF`, sfondo del tema chiaro `#EEF3FB` e riquadro della qualita' di connessione `#060A14` dalla palette del sito; bordi e testo secondario restano quelli di RustDesk 1.4.9, piu' leggibili su fondo chiaro.
 - Submodule `libs/hbb_common` dal fork `labinfinitek/remotek-hbb-common`.
 - Il client si chiama Remotek e nasce gia' configurato: server `remote.infinitek.it` con la sua chiave pubblica, API `https://remote.infinitek.it`; l'aggiornamento automatico verso RustDesk ufficiale e' spento e non riattivabile dalle impostazioni (hbb_common `2b42505`).
 - Italiano di default; nel selettore restano italiano e inglese.

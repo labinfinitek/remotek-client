@@ -3,10 +3,10 @@
 #
 # Controlla che, dopo una MR o un merge upstream, il client sia ancora Remotek:
 # nome, server, chiave, API e accesso presidiato in hbb_common; metadati
-# Windows; link e attribuzione; lingua; tema generato; nessun trigger
-# automatico nei workflow upstream; ogni file diverso dal tag upstream
-# elencato in REMOTEK.md; server e chiave mai dal nome del file; nessuna
-# chiamata automatica ai server RustDesk.
+# Windows; link e attribuzione; lingua; chiave che verifica custom.txt; tema
+# generato; nessun trigger automatico nei workflow upstream; ogni file diverso
+# dal tag upstream elencato in REMOTEK.md; server e chiave mai dal nome del
+# file; nessuna chiamata automatica ai server RustDesk.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -176,14 +176,183 @@ else
 fi
 
 # --- 5. Chiave dei client personalizzati (custom.txt) --------------------------
-# Finche' non esiste la MR `custom:` la chiave e' quella di RustDesk: nessuno
-# di noi puo' firmare un custom.txt, ma un custom.txt firmato da RustDesk con
-# override-settings sostituirebbe i default forzati di hbb_common, accesso
-# presidiato compreso: senza cambiare il binario e' l'unico modo, va ricordato.
-if grep -q '5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM=' src/common.rs 2>/dev/null; then
-  avviso "read_custom_client usa ancora la chiave pubblica di RustDesk (MR custom: non ancora fatta): un custom.txt firmato da RustDesk scavalca i default forzati"
+# read_custom_client applica il custom.txt accanto all'eseguibile, cioe' le
+# impostazioni per cliente, anche di sicurezza: `override-settings` scrive nello
+# stesso OVERWRITE_SETTINGS della sezione 1 e vince sui default forzati, accesso
+# presidiato compreso. La chiave cablata che ne verifica la firma deve essere la
+# nostra (ADR-0003): con quella di RustDesk noi non possiamo firmare nulla e un
+# file firmato da loro passerebbe. Si legge il corpo della funzione, non il file:
+# una seconda costante altrove, o un merge che riporta quella upstream, non deve
+# passare per un grep contento. Il valore della costante da solo non basta:
+# servono anche le due righe che la usano, perche' senza `get_rs_pk(KEY)` la
+# chiave giusta non arriva alla verifica e senza `sign::verify` vale qualunque
+# custom.txt, firmato o no. Se python3 fallisce il controllo non e' eseguito ed
+# e' un errore.
+CHIAVE_CUSTOM='P0M92FARVRfUC+84V77gcMlFV8Xmk4Q1exLp58xJir0='
+CHIAVE_CUSTOM_RUSTDESK='5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM='
+esito_custom=$(python3 - src/common.rs "$CHIAVE_CUSTOM" "$CHIAVE_CUSTOM_RUSTDESK" <<'PY'
+import re, sys
+percorso, nostra, rustdesk = sys.argv[1:4]
+try:
+    testo = open(percorso, encoding="utf-8").read()
+except OSError:
+    print("file mancante"); sys.exit(0)
+corpi = re.findall(r"^pub fn read_custom_client\(config: &str\) \{\n(.*?)^\}$", testo, re.M | re.S)
+if len(corpi) != 1:
+    print(f"read_custom_client trovata {len(corpi)} volte, attesa 1: rileggere"); sys.exit(0)
+righe = [re.sub(r"\s+", " ", r).strip() for r in corpi[0].splitlines()]
+righe = [r for r in righe if r and not r.startswith("//")]
+chiavi = [m.group(1) for m in (re.fullmatch(r'const KEY: &str = "([^"]*)";', r) for r in righe) if m]
+attese = ["let Some(pk) = get_rs_pk(KEY) else {", "let Ok(data) = sign::verify(&data, &pk) else {"]
+mancanti = [a for a in attese if a not in righe]
+if chiavi != [nostra]:
+    print("la chiave che verifica custom.txt non e' quella Remotek: "
+          + (", ".join(chiavi) or "nessuna costante KEY nella funzione"))
+elif mancanti:
+    print("read_custom_client non verifica piu' la firma con quella chiave, righe mancanti: "
+          + " | ".join(mancanti))
+elif any(rustdesk in r for r in righe):
+    print("la chiave pubblica di RustDesk e' tornata dentro read_custom_client")
+PY
+) || esito_custom="controllo della chiave di custom.txt non eseguito: python3 terminato con errore"
+if [ -z "$esito_custom" ]; then
+  ok "custom.txt verificato con la chiave pubblica Remotek (la privata non sta in nessun repo)"
 else
-  ok "read_custom_client non usa la chiave pubblica di RustDesk"
+  errore "$esito_custom  [src/common.rs]"
+fi
+# Fuori di li', la STRINGA base64 della chiave del server pubblico di RustDesk
+# non deve comparire in nessun file versionato del fork, submodule compreso.
+# Ammessa solo in src/lang/ (li' e' dentro un esempio di ID), nel modulo di test
+# di src/custom_server.rs (valore atteso di un nome di file firmato, strada gia'
+# chiusa dalla sezione 9) e in questo script.
+#
+# Cosa questo controllo NON prova: e' un confronto di stringhe, non un censimento
+# delle chiavi. Nel fork resta viva una SECONDA chiave pubblica di RustDesk, in
+# forma di array di byte e quindi invisibile a un grep sul base64: `const PK` di
+# get_custom_server_from_config_string (src/custom_server.rs), che con
+# sign::verify convalida i payload di `--config`. Sostituirla e' una decisione a
+# parte (ADR-0015, che intanto ha chiuso la strada del nome del file); i due
+# controlli in fondo alla sezione la tengono ferma.
+#
+# git grep legge i file tracciati e, nel solo superprogetto, anche quelli non
+# ancora in indice (--untracked non si combina con --recurse-submodules): un
+# file nuovo dentro libs/hbb_common lo vede solo dopo un `git add` li' dentro.
+CS=src/custom_server.rs
+# Estremi del modulo di test: dalla riga #[cfg(test)] alla prima graffa di
+# chiusura in colonna zero. Esonerare "tutto cio' che segue #[cfg(test)]"
+# lascerebbe passare una funzione aggiunta in fondo; contare le graffe le
+# conterebbe anche dentro stringhe e commenti, e una sola graffa spaiata in un
+# nome di file di prova farebbe sparire l'esenzione e accendere un rosso finto.
+estremi=$(python3 - "$CS" <<'PY'
+import sys
+try:
+    righe = open(sys.argv[1], encoding="utf-8").read().splitlines()
+except OSError:
+    righe = []
+inizio = next((i for i, r in enumerate(righe, 1) if r.startswith("#[cfg(test)]")), 0)
+fine = 0
+if inizio:
+    fine = next((i for i, r in enumerate(righe, 1) if i > inizio and r.rstrip() == "}"), 0)
+print(inizio, fine)
+PY
+) || estremi=''
+trovate=$( { git grep --recurse-submodules -nF -e "$CHIAVE_CUSTOM_RUSTDESK" -- . ;
+             git grep --untracked -nF -e "$CHIAVE_CUSTOM_RUSTDESK" -- . ; } 2>/dev/null | sort -u)
+if [ -z "$estremi" ]; then
+  errore "controllo della chiave di RustDesk fuori da read_custom_client non eseguito: python3 terminato con errore  [$CS]"
+elif [ "${estremi%% *}" != 0 ] && [ "${estremi##* }" = 0 ]; then
+  errore "modulo di test di $CS senza graffa di chiusura in colonna zero: esenzione non calcolabile  [$CS]"
+elif ! printf '%s\n' "$trovate" | grep -q .; then
+  # la stringa sta in decine di src/lang/*.rs: zero righe vuol dire scansione non avvenuta
+  errore "scansione della chiave di RustDesk non eseguita: git grep non ha trovato nemmeno le occorrenze di src/lang/"
+else
+  fuori=$(printf '%s\n' "$trovate" |
+    awk -F: -v cs="$CS" -v i="${estremi%% *}" -v f="${estremi##* }" -v me=".github/scripts/verifica-patch.sh" '
+      $1 ~ /^src\/lang\// { next }
+      $1 == me { next }
+      ($1 == cs && f > 0 && $2 >= i && $2 <= f) { next }
+      { print $1 ":" $2 }')
+  if [ -z "$fuori" ]; then
+    ok "la stringa della chiave pubblica di RustDesk non compare fuori da src/lang/ e dal modulo di test di $CS"
+  else
+    while IFS= read -r r; do
+      [ -n "$r" ] && errore "chiave pubblica di RustDesk in $r: se verifica qualcosa va sostituita con la nostra"
+    done <<<"$fuori"
+  fi
+fi
+# E una seconda chiave in forma di array di byte non deve entrare di nascosto.
+# Due controlli, tutti e due limitati:
+#  - dentro $CS: `const PK` e' l'unico array di 32 byte a valori diversi, ha il
+#    valore noto di RustDesk, e le sole righe che verificano una firma restano
+#    le due di get_custom_server_from_config_string; cosi' una seconda chiave
+#    scritta li' dentro, anche inline (`sign::PublicKey([...])`), non passa;
+#  - fuori: nessun altro .rs assegna 32 valori diversi tra loro a un array di
+#    byte, scritto `[u8; 32]` o `&[u8]`. Si cerca l'assegnazione, non il tipo:
+#    `[u8; 32]` in una firma (hbb_common constant_time_eq_32) non e' una chiave
+#    cablata, e 32 valori uguali sono un buffer azzerato, non una chiave.
+# Cosa NON vedono: una chiave che non sia l'assegnazione di un array di byte
+# scritto valore per valore, cioe' passata inline a una chiamata fuori da $CS
+# (`sign::PublicKey([...])`), letta con `include_bytes!`, scritta come stringa
+# esadecimale o in un base64 diverso da quello cercato qui sopra. Il perno resta
+# chi chiama sign::verify: fuori da $CS lo controlla solo il primo controllo
+# della sezione, e solo dentro read_custom_client.
+PK_NOTA='88, 168, 68, 104, 60, 5, 163, 198, 165, 38, 12, 85, 114, 203, 96, 163, 70, 48, 0, 131, 57, 12, 46, 129, 83, 17, 84, 193, 119, 197, 130, 103'
+PATT_ARRAY=( -e '\[u8; *32\] *= *&?\[' -e '&\[u8\] *= *&?\[' )
+array=$( { git grep --recurse-submodules -lE "${PATT_ARRAY[@]}" -- '*.rs' ;
+           git grep --untracked -lE "${PATT_ARRAY[@]}" -- '*.rs' ; } 2>/dev/null | sort -u)
+if ! printf '%s\n' "$array" | grep -qxF "$CS"; then
+  errore "scansione degli array di 32 byte non eseguita: git grep non ha trovato nemmeno const PK di $CS  [$CS]"
+else
+  esito_pk=$(python3 - "$CS" "$PK_NOTA" $array <<'PY'
+import re, sys
+cs, attesi = sys.argv[1], sys.argv[2]
+altri = [f for f in sys.argv[3:] if f != cs]
+ASSEGN = re.compile(r"(?:\[u8; *32\]|&\[u8\]) *= *&?\[(.*?)\]", re.S)
+
+def chiavi(testo):
+    # solo gli array scritti valore per valore, di 32 valori e non tutti uguali:
+    # [0u8; 32] e 32 zeri sono un buffer, non una chiave.
+    fuori = []
+    for m in ASSEGN.finditer(testo):
+        v = [x.strip() for x in m.group(1).split(",") if x.strip()]
+        if len(v) == 32 and len(set(v)) > 1:
+            fuori.append(", ".join(v))
+    return fuori
+
+guai = []
+try:
+    testo = open(cs, encoding="utf-8").read()
+except OSError:
+    print(f"{cs} mancante: rileggere chi verifica i payload di --config"); sys.exit(0)
+if chiavi(testo) != [attesi]:
+    guai.append(f"in {cs} const PK non e' piu' l'unico array di 32 byte non banale, o non e' piu' la chiave nota di RustDesk: rileggere chi la usa prima di accettarla")
+corpi = re.findall(
+    r"^fn get_custom_server_from_config_string\(s: &str\) -> ResultType<CustomServer> \{\n(.*?)^\}$",
+    testo, re.M | re.S)
+if len(corpi) != 1:
+    guai.append(f"get_custom_server_from_config_string trovata {len(corpi)} volte in {cs}, attesa 1: rileggere")
+elif "sign::PublicKey(*PK)" not in corpi[0] or "sign::verify(" not in corpi[0]:
+    guai.append(f"in {cs} i payload di --config non sono piu' verificati con const PK: rileggere")
+elif testo.count("sign::verify(") != 1 or testo.count("sign::PublicKey(") != 1:
+    guai.append(f"in {cs} c'e' piu' di una verifica di firma: la seconda puo' portarsi dietro un'altra chiave")
+for f in altri:
+    try:
+        altro = open(f, encoding="utf-8").read()
+    except OSError:
+        guai.append(f"{f} illeggibile: controllare a mano l'array di 32 byte")
+        continue
+    if chiavi(altro):
+        guai.append(f"array di 32 byte non previsto in {f}: controllare se e' una chiave")
+print("\n".join(guai))
+PY
+) || esito_pk="controllo delle chiavi in forma di array non eseguito: python3 terminato con errore"
+  if [ -z "$esito_pk" ]; then
+    ok "in $CS l'unica chiave in forma di array resta const PK, quella nota di RustDesk (payload di --config, ADR-0015); nessun altro .rs assegna 32 valori diversi a un array di byte"
+  else
+    while IFS= read -r r; do
+      [ -n "$r" ] && errore "$r"
+    done <<<"$esito_pk"
+  fi
 fi
 
 # --- 6. Tema generato -----------------------------------------------------------

@@ -1096,5 +1096,58 @@ else
   done <<<"$esito_locale"
 fi
 
+# --- 13. Il changelog cita l'hbb_common che l'exe porta con se' ----------------
+# Le righe dei default nel changelog chiudono con lo sha di hbb_common: e' il
+# puntatore con cui si lega l'eseguibile consegnato ai sorgenti dei suoi valori
+# di fabbrica. A ogni bump del submodule quel puntatore scade in silenzio, ed e'
+# gia' successo. Il changelog lo cita in piu' punti, quindi non basta che lo sha
+# del submodule compaia da qualche parte: bastava una riga aggiornata e le altre
+# restavano scadute con il controllo verde, che e' il difetto che questa sezione
+# deve impedire. Si pretende quindi che OGNI sha citato come ``hbb_common `...` ``
+# sia un prefisso del gitlink, e che ce ne sia almeno uno. La convenzione ("e'
+# sempre il commit del submodule, non quello che introdusse il cambiamento") e'
+# scritta in testa al changelog: se un giorno si vuole citare anche il commit di
+# origine, prima si cambia quella e poi questa sezione.
+SUB=libs/hbb_common
+sha_sub=$(git ls-tree HEAD "$SUB" | awk '$2 == "commit" { print $3 }')
+if [ -z "$sha_sub" ]; then
+  errore "git ls-tree non da' lo sha del submodule $SUB: il puntatore del changelog a hbb_common non e' controllato  [$SUB]"
+else
+  esito_sha=$(SHA="$sha_sub" python3 - <<'PY'
+import os, re
+
+sha = os.environ["SHA"].strip().lower()
+percorso = "CHANGELOG-REMOTEK.md"
+try:
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+except OSError as e:
+    print("%s non leggibile (%s): il puntatore a hbb_common non e' controllato" % (percorso, e))
+    raise SystemExit
+
+# "hbb_common `2b42505`" e non "`libs/hbb_common` dal fork": dopo il nome ci
+# vuole almeno uno spazio, poi lo sha fra apici inversi.
+citazioni = re.findall(r"hbb_common\s+`([0-9a-fA-F]{7,40})`", testo)
+if not citazioni:
+    print("%s non cita nessuno sha di hbb_common (atteso %s): manca il puntatore "
+          "con cui si lega l'eseguibile consegnato ai sorgenti dei suoi valori "
+          "di fabbrica" % (percorso, sha[:7]))
+    raise SystemExit
+
+scadute = sorted({c for c in citazioni if not sha.startswith(c.lower())})
+if scadute:
+    print("%s cita %d sha di hbb_common che non sono quello del submodule (%s): %s"
+          % (percorso, len(scadute), sha[:7], ", ".join(scadute)))
+PY
+) || esito_sha="${esito_sha:-}"$'\n'"controllo del puntatore a hbb_common non eseguito: python3 terminato con errore"
+  if [ -z "$esito_sha" ]; then
+    ok "CHANGELOG-REMOTEK.md cita l'hbb_common del submodule (${sha_sub:0:7}) e nessun altro"
+  else
+    while IFS= read -r r; do
+      [ -n "$r" ] && errore "$r: chi lega l'exe consegnato ai sorgenti dei default leggerebbe uno sha scaduto  [CHANGELOG-REMOTEK.md]"
+    done <<<"$esito_sha"
+  fi
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

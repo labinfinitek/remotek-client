@@ -3,6 +3,10 @@
 Formato: Keep a Changelog 1.1.0, in italiano. Versioni: `remotek-<upstream>-<n>`.
 Una riga per cambiamento visibile a chi usa o installa il client; la sezione
 "Sicurezza" e' obbligatoria per ogni correzione di sicurezza.
+Gli sha `hbb_common` fra parentesi sono sempre lo stesso: il commit del
+submodule che l'eseguibile di questa versione porta con se', non quello che
+introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 li tiene
+allineati tutti al gitlink di `libs/hbb_common`.
 
 ## [Non rilasciato]
 Base upstream: RustDesk 1.4.9.
@@ -13,7 +17,7 @@ Base upstream: RustDesk 1.4.9.
   flutter-tag, fdroid, wf-cliprdr-ci senza trigger automatici).
 - I colori del tema vengono da `brand/brand.toml`: accento Blu Infinitek `#1F6BFF`, pulsanti `#2B7FFF`, sfondo del tema chiaro `#EEF3FB` e riquadro della qualita' di connessione `#060A14` dalla palette del sito; bordi e testo secondario restano quelli di RustDesk 1.4.9, piu' leggibili su fondo chiaro.
 - Submodule `libs/hbb_common` dal fork `labinfinitek/remotek-hbb-common`.
-- Il client si chiama Remotek e nasce gia' configurato: server `remote.infinitek.it` con la sua chiave pubblica, API `https://remote.infinitek.it`; l'aggiornamento automatico verso RustDesk ufficiale e' spento e non riattivabile dalle impostazioni (hbb_common `2b42505`).
+- Il client si chiama Remotek e nasce gia' configurato: server `remote.infinitek.it` con la sua chiave pubblica, API `https://remote.infinitek.it`; l'aggiornamento automatico verso RustDesk ufficiale e' spento e non riattivabile dalle impostazioni (hbb_common `d7da153`).
 - Italiano di default; nel selettore restano italiano e inglese.
 - Icone Infinitek al posto di quelle di RustDesk su Windows: exe da scaricare e installato, finestra, barra delle applicazioni, area di notifica, connection manager.
 - Voce Disinstalla di Windows (App installate): l'editore e' "Infinitek S.r.l." e non piu' "Remotek", anche dopo l'aggiornamento di un'installazione precedente.
@@ -23,7 +27,7 @@ Base upstream: RustDesk 1.4.9.
 - Logo Infinitek nella home: simbolo e scritta nel tema scuro, solo il simbolo nel tema chiaro.
 - Dialogo Informazioni: riga "Basato su RustDesk, AGPL-3.0 - sorgenti" con link al repo; privacy e sito puntano a `remotek.infinitek.it` (anche nel dialogo di installazione).
 - `SECURITY.md`, `NOTICE`, `REMOTEK.md`, template di pull request.
-- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, i default di privacy spenti (comprese le due chiavi della registrazione) con il preset dei permessi bloccato, metadati ed editore, link e copyright, lingua, chiave che verifica `custom.txt`, tema, nessuna configurazione dal nome del file, nessuna chiamata automatica ai server RustDesk, il token dell'account fuori dai messaggi con cui si apre una sessione, i permessi spenti di fabbrica che un messaggio di rete non puo' riaccendere), che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
+- Workflow `remotek-controlli.yml` e script `verifica-patch.sh`: a ogni push e PR controllano che il client sia ancora Remotek (nome, server, chiave, API, accesso presidiato, i default di privacy spenti (comprese le due chiavi della registrazione) con il preset dei permessi bloccato, metadati ed editore, link e copyright, lingua, chiave che verifica `custom.txt`, tema, nessuna configurazione dal nome del file, nessuna chiamata automatica ai server RustDesk, il token dell'account fuori dai messaggi con cui si apre una sessione, i permessi spenti di fabbrica che un messaggio di rete non puo' riaccendere), che il changelog citi l'hbb_common a cui punta il submodule, che nessun workflow upstream parta da solo e che ogni file diverso da upstream sia elencato in `REMOTEK.md`.
 - Workflow `remotek-build.yml`: build manuale dell'exe Windows x86_64 come artefatto, con attestazione di provenienza; nessuna release pubblica.
 
 ### Corretto

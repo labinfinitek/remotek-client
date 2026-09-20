@@ -6,7 +6,8 @@
 # Windows; link e attribuzione; lingua; chiave che verifica custom.txt; tema
 # generato; nessun trigger automatico nei workflow upstream; ogni file diverso
 # dal tag upstream elencato in REMOTEK.md; server e chiave mai dal nome del
-# file; nessuna chiamata automatica ai server RustDesk.
+# file; nessuna chiamata automatica ai server RustDesk; il token dell'account
+# del tecnico fuori dai messaggi di rendezvous.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -808,6 +809,97 @@ while IFS=$'\t' read -r tipo msg; do
   [ -n "$tipo$msg" ] || continue
   if [ "$tipo" = ok ]; then ok "$msg"; else errore "$msg"; fi
 done <<<"$esito_sil"
+
+# --- 11. Il token dell'account fuori dai messaggi di rendezvous -----------------
+# REM-2026-001. Il campo token di PunchHoleRequest e RequestRelay portava il
+# token dell'account del tecnico, cioe' la credenziale che apre anche
+# /api/admin/* dell'API; RequestRelay hbbs lo inoltra al PC controllato. Upstream
+# quei campi li riempie (token: token.to_owned()): a un merge la riga torna
+# indietro senza conflitti se il contesto intorno cambia, e nessun test la vede.
+# Si cercano tutte le costruzioni dei due messaggi in src/, non solo le due di
+# client.rs, cosi' un mittente nuovo non sfugge. Un campo token assente va bene
+# (esce vuoto lo stesso): e' il caso delle due RequestRelay dirette a hbbr,
+# client.rs create_relay e server.rs create_relay_connection_, che il token non
+# lo hanno mai scritto. Un campo token scritto deve valere Default::default(),
+# e i campi scritti devono restare i nostri due: se la riga esplicita sparisce
+# il comportamento resta giusto, ma sparisce anche il segnale che al merge dopo
+# impedisce di rimetterci dentro il token senza accorgersene.
+CLI=src/client.rs
+esito_token=$(python3 - <<'PY'
+import os, re
+
+MESSAGGI = ("PunchHoleRequest", "RequestRelay")
+ATTESO = "Default::default()"
+male = []
+visti = {m: 0 for m in MESSAGGI}
+espliciti = []
+
+sorgenti = []
+for d, sotto, nomi in os.walk("src"):
+    sotto.sort()
+    sorgenti += [os.path.join(d, f) for f in sorted(nomi) if f.endswith(".rs")]
+if not sorgenti:
+    print("src senza file .rs: costruzione dei messaggi di rendezvous non controllata")
+    raise SystemExit
+
+for percorso in sorgenti:
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+    for nome in MESSAGGI:
+        for m in re.finditer(r"\b%s\s*\{" % nome, testo):
+            i, liv = m.end(), 1
+            while i < len(testo) and liv:
+                liv += {"{": 1, "}": -1}.get(testo[i], 0)
+                i += 1
+            corpo = testo[m.end():i - 1]
+            visti[nome] += 1
+            dove = "%s:%d (%s)" % (percorso, testo.count("\n", 0, m.start()) + 1, nome)
+            # Le righe di solo commento non contano: il campo dev'esserci davvero.
+            campo = [r for r in corpo.splitlines()
+                     if not r.lstrip().startswith("//") and re.match(r"\s*token\s*:", r)]
+            if not campo:
+                continue
+            if len(campo) > 1:
+                male.append("%s: campo token scritto %d volte" % (dove, len(campo)))
+                continue
+            valore = campo[0].split(":", 1)[1].strip().rstrip(",").strip()
+            if valore != ATTESO:
+                male.append("%s: il campo token vale '%s' e non %s"
+                            % (dove, valore, ATTESO))
+            else:
+                espliciti.append((percorso, nome))
+
+mancanti = [n for n in MESSAGGI if not visti[n]]
+if mancanti:
+    male.append("nessuna costruzione di " + " ne' di ".join(mancanti) +
+                " trovata in src/: il controllo non sta guardando niente")
+elif not male and sorted(espliciti) != sorted([("src/client.rs", n) for n in MESSAGGI]):
+    trovati = ", ".join("%s (%s)" % c for c in sorted(espliciti)) or "nessuno"
+    male.append("i campi token scritti a " + ATTESO + " sono " + trovati +
+                ", attesi uno per messaggio in src/client.rs (le due righe di "
+                "REM-2026-001): rileggere e aggiornare questo controllo")
+for r in male:
+    print(r)
+PY
+) || esito_token="${esito_token:-}"$'\n'"controllo del token nei messaggi di rendezvous non eseguito: python3 terminato con errore"
+if [ -z "$esito_token" ]; then
+  ok "il token dell'account non entra in PunchHoleRequest ne' in RequestRelay (REM-2026-001)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r: uscirebbe il token dell'account del tecnico, che apre anche /api/admin/* dell'API, e RequestRelay hbbs lo inoltra al PC controllato (REM-2026-001)"
+  done <<<"$esito_token"
+fi
+# Il rovescio dello stesso controllo: si svuotano i campi dei messaggi, mai la
+# variabile token. Le due guardie !key.is_empty() && !token.is_empty() decidono
+# secure_tcp, cioe' la cifratura dello scambio col server: con la variabile
+# vuota il canale verso il server resterebbe in chiaro, molto peggio del difetto
+# che la sezione chiude.
+n_guardie=$(grep -Ec '^[[:space:]]*if !key\.is_empty\(\) && !token\.is_empty\(\) \{$' "$CLI" || true)
+if [ "$n_guardie" = 2 ]; then
+  ok 'le due guardie di secure_tcp leggono ancora la variabile token (lo scambio col server resta cifrato)'
+else
+  errore "guardie !key.is_empty() && !token.is_empty() trovate $n_guardie, attese 2: se e' stata svuotata la variabile token invece dei campi dei messaggi, lo scambio col server non e' piu' cifrato  [$CLI]"
+fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

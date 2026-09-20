@@ -7,7 +7,9 @@
 # generato; nessun trigger automatico nei workflow upstream; ogni file diverso
 # dal tag upstream elencato in REMOTEK.md; server e chiave mai dal nome del
 # file; nessuna chiamata automatica ai server RustDesk; il token dell'account
-# del tecnico fuori dai messaggi di rendezvous.
+# del tecnico fuori dai messaggi di rendezvous; un permesso bloccato che un
+# messaggio di rendezvous non puo' riaccendere; il changelog che cita
+# l'hbb_common del submodule.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -899,6 +901,199 @@ if [ "$n_guardie" = 2 ]; then
   ok 'le due guardie di secure_tcp leggono ancora la variabile token (lo scambio col server resta cifrato)'
 else
   errore "guardie !key.is_empty() && !token.is_empty() trovate $n_guardie, attese 2: se e' stata svuotata la variabile token invece dei campi dei messaggi, lo scambio col server non e' piu' cifrato  [$CLI]"
+fi
+
+# --- 12. Un permesso bloccato non lo riaccende un messaggio di rendezvous -------
+# PunchHole, RequestRelay e FetchLocalAddr portano un bitmap ControlPermissions
+# che upstream fa vincere sulla chiave locale: Connection::permission() guarda
+# prima il bitmap e chiama is_permission_enabled_locally() (cioe' access-mode
+# piu' la chiave enable-*) solo se il bitmap non risponde. Il bitmap puo' dire
+# "enable" e arriva da messaggi ricevuti, senza firma e senza verifica del
+# mittente (src/rendezvous_mediator.rs, socket UDP in bind e non connect):
+# senza guardia videocamera, registrazione e modalita' privacy si riaccendono
+# senza che nessuna delle sei chiavi di OVERWRITE_SETTINGS venga letta, e la
+# finestra di accettazione mostra il permesso gia' concesso. La guardia lascia
+# restringere e non allargare: per una chiave bloccata nel binario vale l'AND
+# fra il bitmap e il valore locale. Sono poche righe dentro una funzione
+# upstream, quindi a un merge tornano indietro senza conflitti e nessun test
+# le vede; il controllo pretende il testo esatto, spazi e a capo a parte.
+CONN=src/server/connection.rs
+esito_perm=$(CONN="$CONN" python3 - <<'PY'
+import os, re
+
+percorso = os.environ["CONN"]
+try:
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+except OSError as e:
+    print("%s non leggibile (%s): la guardia dei permessi non e' controllata" % (percorso, e))
+    raise SystemExit
+
+firme = list(re.finditer(r"\bfn permission\s*\(", testo))
+if len(firme) != 1:
+    print("in %s le definizioni di 'fn permission(' sono %d, attesa 1: "
+          "il controllo non sta guardando niente" % (percorso, len(firme)))
+    raise SystemExit
+
+# Corpo della funzione: dalla graffa che apre fino a quella che chiude.
+i = testo.index("{", firme[0].end())
+j, liv = i + 1, 1
+while j < len(testo) and liv:
+    liv += {"{": 1, "}": -1}.get(testo[j], 0)
+    j += 1
+corpo = testo[i + 1:j - 1]
+# Via i commenti di riga (il nostro perche' e' un commento: non deve reggere
+# il controllo) e poi tutti gli spazi a uno solo.
+senza_commenti = "\n".join(r for r in corpo.splitlines() if not r.lstrip().startswith("//"))
+piatto = re.sub(r"\s+", " ", senza_commenti).strip()
+
+GUARDIA = ("if crate::ui_interface::is_option_fixed(enable_prefix_option) { "
+           "return enabled && Self::is_permission_enabled_locally(enable_prefix_option); }")
+NUDO = "return enabled;"
+RIPIEGO = "Self::is_permission_enabled_locally(enable_prefix_option)"
+
+male = []
+if "crate::get_control_permission(" not in piatto:
+    male.append("Connection::permission() non legge piu' crate::get_control_permission: "
+                "il bitmap dei permessi e' cambiato di posto, rileggere questa sezione")
+if GUARDIA not in piatto:
+    male.append("Connection::permission() non ha piu' la guardia esatta "
+                "'%s'" % GUARDIA)
+elif NUDO in piatto and piatto.index(GUARDIA) > piatto.index(NUDO):
+    male.append("in Connection::permission() la guardia viene dopo '%s': "
+                "il bitmap ritorna prima che si guardi la chiave locale" % NUDO)
+if piatto.count(NUDO) != 1:
+    male.append("in Connection::permission() le righe '%s' sono %d, attesa 1: "
+                "rileggere la funzione" % (NUDO, piatto.count(NUDO)))
+if not piatto.rstrip().endswith(RIPIEGO):
+    male.append("Connection::permission() non finisce piu' con il ripiego locale "
+                "'%s': senza, una chiave non bloccata non legge piu' access-mode "
+                "ne' enable-*" % RIPIEGO)
+for r in male:
+    print(r)
+PY
+) || esito_perm="${esito_perm:-}"$'\n'"controllo della guardia dei permessi non eseguito: python3 terminato con errore"
+if [ -z "$esito_perm" ]; then
+  ok 'un permesso bloccato in OVERWRITE_SETTINGS non lo riaccende il bitmap dei messaggi di rendezvous'
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r: un messaggio di rendezvous con il bit a \"enable\" riaccenderebbe videocamera, registrazione o modalita' privacy senza leggere nessuna delle sei chiavi bloccate  [$CONN]"
+  done <<<"$esito_perm"
+fi
+
+# La guardia ha due operandi e tutti e due sono codice upstream che non
+# modifichiamo: crate::ui_interface::is_option_fixed (qui sotto) e
+# Self::is_permission_enabled_locally (in fondo alla sezione). Di quest'ultima
+# il controllo qui sopra pretende solo il NOME -- dentro il testo della guardia
+# e come ultima riga di permission() -- quindi i due blocchi che seguono ne
+# tengono fermo il corpo. Primo operando: is_option_fixed. Se un merge ne
+# cambia il corpo -- per
+# esempio restringendolo a una sola delle tre mappe OVERWRITE, o spostando le
+# statiche -- la guardia torna un "return enabled;" mascherato e il controllo
+# qui sopra resta verde, perche' legge solo src/server/connection.rs. REMOTEK.md
+# elenca src/ui_interface.rs per il filtro delle lingue, quindi un conflitto su
+# quella riga non porta nessuno a rileggere questa funzione trenta righe prima.
+# Si pretende: una sola definizione, e il corpo che guarda ancora
+# OVERWRITE_SETTINGS (spazi e a capo non contano).
+UI=src/ui_interface.rs
+esito_fixed=$(UI="$UI" python3 - <<'PY'
+import os, re
+
+percorso = os.environ["UI"]
+try:
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+except OSError as e:
+    print("%s non leggibile (%s): is_option_fixed non e' controllata" % (percorso, e))
+    raise SystemExit
+
+firme = list(re.finditer(r"\bfn is_option_fixed\s*\(", testo))
+if len(firme) != 1:
+    print("in %s le definizioni di 'fn is_option_fixed(' sono %d, attesa 1: "
+          "il controllo non sta guardando niente" % (percorso, len(firme)))
+    raise SystemExit
+
+i = testo.index("{", firme[0].end())
+j, liv = i + 1, 1
+while j < len(testo) and liv:
+    liv += {"{": 1, "}": -1}.get(testo[j], 0)
+    j += 1
+corpo = testo[i + 1:j - 1]
+senza_commenti = "\n".join(r for r in corpo.splitlines() if not r.lstrip().startswith("//"))
+compatto = re.sub(r"\s+", "", senza_commenti)
+
+ATTESO = "config::OVERWRITE_SETTINGS.read().unwrap().contains_key(key)"
+if ATTESO not in compatto:
+    print("il corpo di is_option_fixed in %s non contiene piu' '%s'" % (percorso, ATTESO))
+PY
+) || esito_fixed="${esito_fixed:-}"$'\n'"controllo di is_option_fixed non eseguito: python3 terminato con errore"
+if [ -z "$esito_fixed" ]; then
+  ok 'is_option_fixed guarda ancora OVERWRITE_SETTINGS: la guardia dei permessi restringe davvero'
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r: la guardia di Connection::permission non restringerebbe piu' niente e il controllo qui sopra resterebbe verde  [$UI]"
+  done <<<"$esito_fixed"
+fi
+
+# Secondo operando: Self::is_permission_enabled_locally, nello stesso file di
+# permission(). Non e' solo meta' dell'AND: e' anche l'unica riga che legge
+# access-mode e la chiave enable-* per tutte e dodici le voci quando il bitmap
+# non risponde, cioe' il percorso normale, quello senza nessun messaggio che
+# porti permessi. Il nostro diff su questo file e' di 9 righe, tutte la guardia
+# (git diff 1.4.9 HEAD -- src/server/connection.rs), quindi questa funzione
+# arriva dal prossimo merge upstream intatta e senza conflitto: se il suo corpo
+# cambia -- un ramo nuovo davanti, il corto-circuito allargato oltre "full" --
+# la guardia resta scritta identica, i controlli qui sopra restano verdi e
+# cambia solo il risultato, sia dentro l'AND sia sul percorso senza bitmap.
+# Si pretende: una sola definizione, e il corpo che legge ancora access-mode,
+# esce ancora prima su "full"/"view" e finisce ancora su config::option2bool
+# con la chiave enable-*. Spazi e a capo non contano, come per is_option_fixed.
+esito_locale=$(CONN="$CONN" python3 - <<'PY'
+import os, re
+
+percorso = os.environ["CONN"]
+try:
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+except OSError as e:
+    print("%s non leggibile (%s): is_permission_enabled_locally non e' controllata" % (percorso, e))
+    raise SystemExit
+
+firme = list(re.finditer(r"\bfn is_permission_enabled_locally\s*\(", testo))
+if len(firme) != 1:
+    print("in %s le definizioni di 'fn is_permission_enabled_locally(' sono %d, attesa 1: "
+          "il controllo non sta guardando niente" % (percorso, len(firme)))
+    raise SystemExit
+
+i = testo.index("{", firme[0].end())
+j, liv = i + 1, 1
+while j < len(testo) and liv:
+    liv += {"{": 1, "}": -1}.get(testo[j], 0)
+    j += 1
+corpo = testo[i + 1:j - 1]
+senza_commenti = "\n".join(r for r in corpo.splitlines() if not r.lstrip().startswith("//"))
+compatto = re.sub(r"\s+", "", senza_commenti)
+
+ATTESI = [
+    ('Config::get_option("access-mode")',
+     "non legge piu' access-mode"),
+    ('ifaccess_mode=="full"{returntrue;}elseifaccess_mode=="view"{returnfalse;}',
+     "non esce piu' prima su access-mode \"full\"/\"view\", oppure il corto-circuito e' cambiato"),
+    ('config::option2bool(enable_prefix_option,&Config::get_option(enable_prefix_option)',
+     "non finisce piu' su config::option2bool con la chiave enable-*"),
+]
+for atteso, perche in ATTESI:
+    if atteso not in compatto:
+        print("il corpo di is_permission_enabled_locally in %s %s (atteso '%s')"
+              % (percorso, perche, atteso))
+PY
+) || esito_locale="${esito_locale:-}"$'\n'"controllo di is_permission_enabled_locally non eseguito: python3 terminato con errore"
+if [ -z "$esito_locale" ]; then
+  ok "is_permission_enabled_locally legge ancora access-mode e la chiave enable-*: il secondo operando della guardia e il ripiego di tutte e dodici le chiavi sono quelli su cui si e' ragionato"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r: rileggere insieme la guardia di Connection::permission e ADR-0017 prima di toccare questa sezione, non correggerla a naso: cambia sia il secondo operando dell'AND sia il percorso senza bitmap, cioe' quello normale  [$CONN]"
+  done <<<"$esito_locale"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

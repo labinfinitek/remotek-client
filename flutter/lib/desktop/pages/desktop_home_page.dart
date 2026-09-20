@@ -412,11 +412,64 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           SizedBox(
             height: 10.0,
           ),
+          // La frase segue la stessa condizione del binario, cioe' i tre casi
+          // che approve_mode() distingue (approve_mode(),
+          // libs/hbb_common/src/password_security.rs: "password", "click",
+          // tutto il resto -> ApproveMode::Both), cosi' schermata e
+          // comportamento non possono divergere:
+          //  - click: il PC controllato non legge nessuna password e risponde
+          //    LOGIN_MSG_NO_PASSWORD_ACCESS (src/server/connection.rs, primo
+          //    operando del ramo di rifiuto), quindi il desk_tip di upstream
+          //    ("ID e password") prometteva un meccanismo che non c'e'; il
+          //    riquadro qui sotto mostra infatti un trattino. Unica eccezione
+          //    nota: la chiave builtin allow-logon-screen-password, che a
+          //    schermo bloccato riaprirebbe la password anche in modo click;
+          //    oggi non e' impostata (BUILTIN_SETTINGS vuota,
+          //    libs/hbb_common/src/config.rs) e se un giorno lo fosse questa
+          //    frase va riletta insieme a quella chiave.
+          //  - password: la password e' l'unica via, il clic non viene
+          //    nemmeno offerto (showAccept,
+          //    flutter/lib/desktop/pages/server_page.dart).
+          //  - Both: connection.rs entra con la password se ce n'e' una
+          //    valida, altrimenti ricade sul clic; la frase dice tutte e due
+          //    le cose perche' da qui non si puo' sapere quale delle due vale
+          //    (has_valid_password() vive solo in Rust e chiederla al servizio
+          //    costerebbe una IPC a ogni giro del timer da mezzo secondo).
+          // Non si guarda il trattino: lo mostra anche a servizio fermo e con
+          // la sola password permanente (updatePasswordModel,
+          // flutter/lib/models/server_model.dart), e li' una password c'e'
+          // davvero. `desk_tip` resta intatto nei 51 file di src/lang/.
+          // Il valore si legge da mainGetOptionSync e non da model.approveMode
+          // perche' ServerModel._approveMode parte da "" e "" e' anche un
+          // valore vero (ApproveMode::Both, la voce "in tutti e due i modi"):
+          // dalla copia del modello "non ancora letto" e "Both" non si
+          // distinguono. mainGetOptionSync legge la mappa OPTIONS gia' in
+          // memoria (get_option, src/ui_interface.rs): nessuna IPC. Il
+          // Consumer resta perche' approve-mode puo' cambiare mentre la home
+          // e' aperta e buildTip viene costruita una volta sola da
+          // buildLeftPane.
           if (!isOutgoingOnly)
-            Text(
-              translate("desk_tip"),
-              overflow: TextOverflow.clip,
-              style: Theme.of(context).textTheme.bodySmall,
+            ChangeNotifierProvider.value(
+              value: gFFI.serverModel,
+              child: Consumer<ServerModel>(
+                builder: (context, model, child) {
+                  final approveMode =
+                      bind.mainGetOptionSync(key: kOptionApproveMode);
+                  final String tipKey;
+                  if (approveMode == 'click') {
+                    tipKey = "remotek_desk_tip_click";
+                  } else if (approveMode == 'password') {
+                    tipKey = "remotek_desk_tip_password";
+                  } else {
+                    tipKey = "remotek_desk_tip_both";
+                  }
+                  return Text(
+                    translate(tipKey),
+                    overflow: TextOverflow.clip,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  );
+                },
+              ),
             ),
           if (isOutgoingOnly)
             Text(

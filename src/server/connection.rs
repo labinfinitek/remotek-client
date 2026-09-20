@@ -2410,6 +2410,15 @@ impl Connection {
                 if let Some(enabled) =
                     crate::get_control_permission(control_permissions.permissions, permission)
                 {
+                    // Remotek: il bitmap arriva da un messaggio di rendezvous ricevuto dalla
+                    // rete, senza firma ne' verifica del mittente, quindi puo' solo
+                    // restringere. Per una chiave bloccata nel binario (OVERWRITE_SETTINGS,
+                    // ADR-0017) vale anche il valore locale: un "disable" dalla rete
+                    // disabilita come in upstream, un "enable" non riaccende cio' che in
+                    // Impostazioni e' gia' grigio. Le chiavi non bloccate non cambiano.
+                    if crate::ui_interface::is_option_fixed(enable_prefix_option) {
+                        return enabled && Self::is_permission_enabled_locally(enable_prefix_option);
+                    }
                     return enabled;
                 }
             }

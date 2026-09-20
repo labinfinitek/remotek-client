@@ -9,7 +9,9 @@
 # file; nessuna chiamata automatica ai server RustDesk; il token dell'account
 # del tecnico fuori dai messaggi di rendezvous; un permesso bloccato che un
 # messaggio di rendezvous non puo' riaccendere; il changelog che cita
-# l'hbb_common del submodule.
+# l'hbb_common del submodule; il riquadro degli avvisi della home col colore
+# del marchio e i comandi che le chiavi bloccate lasciano senza effetto
+# (scheda 2FA, "Visualizza telecamera") che non si mostrano.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1147,6 +1149,199 @@ PY
       [ -n "$r" ] && errore "$r: chi lega l'exe consegnato ai sorgenti dei default leggerebbe uno sha scaduto  [CHANGELOG-REMOTEK.md]"
     done <<<"$esito_sha"
   fi
+fi
+
+# --- 14. Il riquadro della home e i comandi lasciati senza effetto -------------
+# Due cose che il cliente vede appena apre il programma e che un merge upstream
+# riporta indietro senza conflitti: sono poche righe dentro widget upstream e
+# nessun test le guarda. Il collaudo del 2026-09-20 le ha trovate tutte e due.
+#
+# (a) Il riquadro degli avvisi della home (invito a installare, installazione di
+#     versione precedente, errori di sistema) deve restare a tinta piena
+#     MyTheme.accent. Il gradiente magenta/salmone di RustDesk dava al testo
+#     bianco che il riquadro contiene 3,66:1 e 2,78:1, sotto il 4,5:1 di WCAG
+#     AA, ed era l'elemento piu' vistoso della prima schermata con i colori
+#     scritti a mano fuori dal marchio (ADR-0004); gli altri letterali dello
+#     stesso file (il grigio #DDDDDD delle iconcine della password, le spunte
+#     del dialogo della password, borderColor) restano upstream, sempre per
+#     ADR-0004.
+#     Si guarda DENTRO buildInstallCard, non il file: la stringa
+#     "BoxDecoration(color: MyTheme.accent)" sta anche nella barretta di
+#     accento accanto alla password, quindi cercarla nel file sarebbe verde
+#     anche con il riquadro tornato magenta. E si pretende che dentro quel
+#     corpo non ci sia nessun gradiente e nessun colore scritto a mano, in
+#     qualunque forma (Color.fromARGB, Color(0x...)): un merge upstream puo'
+#     riportare gli stessi colori in esadecimale o su piu' righe, e un
+#     controllo legato ai due letterali esatti non se ne accorgerebbe.
+DHP=flutter/lib/desktop/pages/desktop_home_page.dart
+esito_riquadro=$(python3 - <<'PY'
+import re
+
+DHP = "flutter/lib/desktop/pages/desktop_home_page.dart"
+guai = []
+try:
+    with open(DHP, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+except OSError as e:
+    print("%s non leggibile (%s): il riquadro degli avvisi non e' controllato"
+          % (DHP, e))
+    raise SystemExit(0)
+
+# I nostri "perche'" sono commenti: non devono reggere il controllo.
+testo = "\n".join(r for r in testo.splitlines() if not r.lstrip().startswith("//"))
+
+def corpo_di(testo, inizio):
+    # Dalla parentesi dei parametri (che contiene a sua volta le graffe dei
+    # parametri con nome) al } che chiude il corpo della funzione.
+    prof, i, fine_par = 0, inizio, -1
+    while i < len(testo):
+        if testo[i] == "(":
+            prof += 1
+        elif testo[i] == ")":
+            prof -= 1
+            if prof == 0:
+                fine_par = i
+                break
+        i += 1
+    if fine_par < 0:
+        return None
+    apre = testo.find("{", fine_par)
+    if apre < 0:
+        return None
+    prof, i = 0, apre
+    while i < len(testo):
+        if testo[i] == "{":
+            prof += 1
+        elif testo[i] == "}":
+            prof -= 1
+            if prof == 0:
+                return testo[apre:i]
+        i += 1
+    return None
+
+
+firme = [m.end() - 1 for m in re.finditer(r"\bWidget buildInstallCard\(", testo)]
+if len(firme) != 1:
+    guai.append("%s: le definizioni di buildInstallCard() sono %d, attesa 1"
+                % (DHP, len(firme)))
+else:
+    corpo = corpo_di(testo, firme[0])
+    if corpo is None:
+        guai.append("%s: il corpo di buildInstallCard() non si delimita" % DHP)
+    else:
+        if not re.search(r"decoration:\s*(?:const\s+)?BoxDecoration\(\s*"
+                         r"color:\s*MyTheme\.accent\s*,?\s*\)", corpo):
+            guai.append("%s: il riquadro degli avvisi della home non e' piu' a "
+                        "tinta piena MyTheme.accent" % DHP)
+        for regola, che in ((r"\bgradient\s*:", "un gradiente"),
+                            (r"Color\.fromARGB\(", "un Color.fromARGB(...)"),
+                            (r"Color\(0x", "un Color(0x...)")):
+            if re.search(regola, corpo):
+                guai.append("%s: dentro buildInstallCard() c'e' %s, cioe' un "
+                            "colore fuori dal marchio" % (DHP, che))
+
+print("\n".join(guai))
+PY
+) || esito_riquadro="${esito_riquadro:-}"$'\n'"controllo del riquadro della home non eseguito: python3 terminato con errore"
+if [ -z "$esito_riquadro" ]; then
+  ok 'il riquadro degli avvisi della home prende il colore dal marchio (tinta piena MyTheme.accent dentro buildInstallCard, nessun colore scritto a mano)'
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r: la prima schermata che vede il cliente torna fuori dal marchio (ADR-0004)"
+  done <<<"$esito_riquadro"
+fi
+non_contiene "$DHP" 'Color\.fromARGB\(255, ?226, ?66, ?188\)|Color\.fromARGB\(255, ?244, ?114, ?124\)' \
+  'il gradiente magenta/salmone di RustDesk non e'"'"' tornato nella home'
+#
+# (b) I due comandi che le chiavi bloccate hanno lasciato senza effetto non si
+#     devono mostrare: la scheda 2FA di Impostazioni > Sicurezza (chiave "2fa"
+#     bloccata vuota, ADR-0016) e "Visualizza telecamera" in tutti e tre i punti
+#     che la offrono (enable-camera bloccata a N: il PC controllato risponde
+#     sempre "No permission of viewing camera", per giunta non tradotto). Si
+#     contano i punti, non si cerca solo la guardia: una voce che torna
+#     scoperta -- per esempio una sottoclasse di BasePeerCard aggiunta da
+#     upstream -- non si nota finche' non la clicca un cliente.
+esito_vuoti=$(python3 - <<'PY'
+import re
+
+def senza_commenti(percorso):
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+    # I nostri "perche'" sono commenti: non devono reggere il controllo.
+    return "\n".join(r for r in testo.splitlines() if not r.lstrip().startswith("//"))
+
+guai = []
+letti = {}
+PERCORSI = (
+    "flutter/lib/common.dart",
+    "flutter/lib/common/widgets/peer_card.dart",
+    "flutter/lib/common/widgets/toolbar.dart",
+    "flutter/lib/desktop/pages/connection_page.dart",
+    "flutter/lib/desktop/pages/desktop_setting_page.dart",
+)
+for p in PERCORSI:
+    try:
+        letti[p] = senza_commenti(p)
+    except OSError as e:
+        guai.append("%s non leggibile (%s): i comandi senza effetto non sono controllati" % (p, e))
+
+# La condizione della videocamera sta in un solo posto ed e' "bloccata E
+# spenta": con il solo is_option_fixed la voce resterebbe nascosta anche a un
+# cliente a cui un custom.txt firmato riapre la videocamera.
+CAM = "flutter/lib/common.dart"
+if CAM in letti:
+    testo = letti[CAM]
+    if len(re.findall(r"bool isViewCameraFixedOff\(\)", testo)) != 1:
+        guai.append("%s: le definizioni di isViewCameraFixedOff() non sono una" % CAM)
+    elif not re.search(r"isOptionFixed\(kOptionEnableCamera\)\s*&&\s*"
+                       r"!mainGetBoolOptionSync\(kOptionEnableCamera\)", testo):
+        guai.append('%s: isViewCameraFixedOff() non e\' piu\' "bloccata E spenta": '
+                    "o non nasconde piu' la voce, o la nasconde anche dove un "
+                    "custom.txt firmato ha riaperto la videocamera" % CAM)
+
+# Ogni punto che offre "Visualizza telecamera" ha la sua guardia.
+PUNTI = (
+    ("flutter/lib/common/widgets/peer_card.dart", 5,
+     r"_viewCameraAction\(context\)",
+     r"if \(!isViewCameraFixedOff\(\)\)\s*_viewCameraAction\(context\)"),
+    ("flutter/lib/desktop/pages/connection_page.dart", 1,
+     r"isViewCamera: true",
+     r"if \(!isViewCameraFixedOff\(\)\)\s*\(\s*'View camera'"),
+    ("flutter/lib/common/widgets/toolbar.dart", 1,
+     r"isViewCamera: true",
+     r"if \(!isViewCameraFixedOff\(\)\)\s*\{\s*v\.add\("),
+)
+for percorso, attesi, offerta, guardia in PUNTI:
+    if percorso not in letti:
+        continue
+    n_offerte = len(re.findall(offerta, letti[percorso]))
+    n_guardie = len(re.findall(guardia, letti[percorso]))
+    if n_offerte != attesi or n_guardie != attesi:
+        guai.append("%s: punti che aprono la videocamera %d, di cui con la "
+                    "guardia isViewCameraFixedOff() %d, attesi %d e %d"
+                    % (percorso, n_offerte, n_guardie, attesi, attesi))
+
+# La scheda 2FA: una sola, e solo dietro la guardia.
+SET = "flutter/lib/desktop/pages/desktop_setting_page.dart"
+if SET in letti:
+    testo = letti[SET]
+    schede = len(re.findall(r"_Card\(title: '2FA'", testo))
+    guardate = len(re.findall(r"if \(!_is2faFixedOff\)\s*_Card\(title: '2FA'", testo))
+    if schede != 1 or guardate != 1:
+        guai.append("%s: le schede 2FA sono %d e quelle dietro la guardia %d, "
+                    "attesa 1 e 1" % (SET, schede, guardate))
+    if not re.search(r"isOptionFixed\('2fa'\)\s*&&\s*!bind\.mainHasValid2FaSync\(\)", testo):
+        guai.append('%s: _is2faFixedOff non e\' piu\' "bloccata E nessuna 2FA valida"' % SET)
+
+print("\n".join(guai))
+PY
+) || esito_vuoti="${esito_vuoti:-}"$'\n'"controllo dei comandi senza effetto non eseguito: python3 terminato con errore"
+if [ -z "$esito_vuoti" ]; then
+  ok 'i comandi che le chiavi bloccate lasciano senza effetto non si mostrano (scheda 2FA, "Visualizza telecamera" nei tre punti che la offrono)'
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r: tornerebbe visibile un comando che non puo' funzionare (l'interruttore 2FA fallisce in silenzio, \"Visualizza telecamera\" con un messaggio in inglese non tradotto)"
+  done <<<"$esito_vuoti"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

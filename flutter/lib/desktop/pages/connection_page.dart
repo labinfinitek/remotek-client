@@ -560,10 +560,13 @@ class _ConnectionPageState extends State<ConnectionPage>
                                       'Transfer file',
                                       () => onConnect(isFileTransfer: true)
                                     ),
-                                    (
-                                      'View camera',
-                                      () => onConnect(isViewCamera: true)
-                                    ),
+                                    // Remotek: vedi isViewCameraFixedOff()
+                                    // in common.dart.
+                                    if (!isViewCameraFixedOff())
+                                      (
+                                        'View camera',
+                                        () => onConnect(isViewCamera: true)
+                                      ),
                                     (
                                       '${translate('Terminal')} (beta)',
                                       () => onConnect(isTerminal: true)

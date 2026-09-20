@@ -2189,7 +2189,14 @@ pub fn read_custom_client(config: &str) {
         log::error!("Failed to decode custom client config");
         return;
     };
-    const KEY: &str = "5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM=";
+    // Chiave pubblica Remotek (ed25519, 32 byte): verifica la firma del
+    // custom.txt accanto all'eseguibile, cioe' le impostazioni per cliente
+    // (app-name, default-settings, override-settings). La chiave privata che
+    // firma quei file non sta in nessun repo. Sostituisce la chiave pubblica di
+    // RustDesk: con quella, un file firmato da loro riscriveva i nostri default
+    // (accesso presidiato compreso) e noi non potevamo firmarne nessuno.
+    // Rif: ADR-0003.
+    const KEY: &str = "P0M92FARVRfUC+84V77gcMlFV8Xmk4Q1exLp58xJir0=";
     let Some(pk) = get_rs_pk(KEY) else {
         log::error!("Failed to parse public key of custom client");
         return;

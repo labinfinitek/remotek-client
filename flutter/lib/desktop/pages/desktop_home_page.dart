@@ -605,15 +605,24 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           margin: EdgeInsets.fromLTRB(
               0, marginTop, 0, bind.isIncomingOnly() ? marginTop : 0),
           child: Container(
-              decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  Color.fromARGB(255, 226, 66, 188),
-                  Color.fromARGB(255, 244, 114, 124),
-                ],
-              )),
+              // Remotek: il riquadro degli avvisi della home (invito a
+              // installare, installazione di versione precedente, errori di
+              // sistema) prende il colore dal marchio, come il resto del tema
+              // (ADR-0004), al posto del gradiente magenta/salmone di
+              // RustDesk. Tinta piena e non gradiente: il testo qui dentro e'
+              // bianco e i due colori upstream gli davano 3,66:1 e 2,78:1,
+              // sotto il 4,5:1 di WCAG AA; un gradiente verso un blu piu'
+              // chiaro del marchio (button #2B7FFF, 3,76:1) riporterebbe
+              // sotto soglia meta' del riquadro. MyTheme.accent da' 4,56:1 al
+              // testo bianco, e quel rapporto non dipende dal fondo.
+              // Il fondo su cui il riquadro si stacca e' quello del pannello
+              // di sinistra, cioe' colorScheme.background e non
+              // scaffoldBackgroundColor (che e' il pannello di destra):
+              // 4,09:1 sul grayBg #EEF3FB del tema chiaro e 3,35:1 sul
+              // #24252B del tema scuro, sopra il 3:1 che WCAG chiede agli
+              // elementi non testuali. grayBg e' una chiave di brand.toml:
+              // chi la cambia cambia anche questo margine.
+              decoration: BoxDecoration(color: MyTheme.accent),
               padding: EdgeInsets.all(20),
               child: Column(
                   mainAxisAlignment: MainAxisAlignment.start,

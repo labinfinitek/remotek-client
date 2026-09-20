@@ -470,11 +470,14 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
           child: Text(translate('Transfer file')),
           onPressed: () => connectWithToken(isFileTransfer: true)),
     );
-    v.add(
-      TTextMenu(
-          child: Text(translate('View camera')),
-          onPressed: () => connectWithToken(isViewCamera: true)),
-    );
+    // Remotek: vedi isViewCameraFixedOff() in common.dart.
+    if (!isViewCameraFixedOff()) {
+      v.add(
+        TTextMenu(
+            child: Text(translate('View camera')),
+            onPressed: () => connectWithToken(isViewCamera: true)),
+      );
+    }
     v.add(
       TTextMenu(
           child: Text('${translate('Terminal')} (beta)'),

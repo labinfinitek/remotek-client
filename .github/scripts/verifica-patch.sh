@@ -11,7 +11,9 @@
 # messaggio di rendezvous non puo' riaccendere; il changelog che cita
 # l'hbb_common del submodule; il riquadro degli avvisi della home col colore
 # del marchio e i comandi che le chiavi bloccate lasciano senza effetto
-# (scheda 2FA, "Visualizza telecamera") che non si mostrano.
+# (scheda 2FA, "Visualizza telecamera") che non si mostrano; la frase della
+# home che segue i tre casi di approve_mode() invece di promettere una
+# password.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1342,6 +1344,167 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r: tornerebbe visibile un comando che non puo' funzionare (l'interruttore 2FA fallisce in silenzio, \"Visualizza telecamera\" con un messaggio in inglese non tradotto)"
   done <<<"$esito_vuoti"
+fi
+
+# --- 15. La frase della home segue la condizione della password ----------------
+# La home promette quello che il binario fa, e lo promette seguendo la stessa
+# condizione: i tre casi di approve_mode()
+# (libs/hbb_common/src/password_security.rs -- "password", "click", tutto il
+# resto -> ApproveMode::Both). Con ApproveMode::Click il PC controllato non
+# legge nessuna password e risponde LOGIN_MSG_NO_PASSWORD_ACCESS
+# (src/server/connection.rs, primo operando del ramo di rifiuto), e il riquadro
+# sotto la frase mostra un trattino. Al collaudo del 2026-09-20 la frase
+# upstream chiedeva comunque "l'ID e la password indicati qui sotto": e' il
+# difetto che questa sezione deve impedire di riavere a un merge, visto che
+# sono poche righe dentro un widget upstream e nessun test le guarda.
+#
+# Si controllano cinque cose, perche' ognuna riporterebbe la bugia da sola:
+# (a) dentro buildTip la frase e' scelta dal valore vero di approve-mode fra le
+#     tre chiavi nostre, e desk_tip non e' piu' la costante di quel punto. Il
+#     valore si legge con mainGetOptionSync e non da ServerModel.approveMode:
+#     quella copia parte da "" e "" e' anche un valore vero (ApproveMode::Both,
+#     la voce "in tutti e due i modi" della combo di Impostazioni), quindi dal
+#     modello "non ancora letto" e "Both" non si distinguono;
+# (b) la frase sta dentro un Consumer<ServerModel>: buildTip viene costruita
+#     una volta sola da buildLeftPane e senza il Consumer resterebbe quella del
+#     primo disegno, mentre approve-mode puo' cambiare mentre la home e' aperta;
+# (c) in server_model.dart il trattino segue ancora _approveMode == 'click':
+#     e' l'altra meta' della stessa verita' e se upstream la cambia le due
+#     divergono di nuovo (il trattino non e' la condizione della frase -- lo
+#     mostra anche a servizio fermo e con la sola password permanente -- ma se
+#     smettesse di seguire 'click' andrebbe riletto tutto il punto);
+# (d) le tre chiavi esistono e non sono vuote in it.rs e in en.rs: src/lang.rs
+#     per una chiave mancante o vuota ripiega su en::T e poi stampa il NOME
+#     della chiave. Sul lab non si compila e non si apre la finestra: questo
+#     controllo e' l'unico posto in cui quell'errore si vede, ed e' anche la
+#     rete se qualcuno esegue res/lang.py, che rigenera it.rs da template.rs e
+#     porterebbe via le chiavi di prodotto (vedi REMOTEK.md);
+# (e) BUILTIN_SETTINGS non forza allow-logon-screen-password: con quella chiave
+#     a "Y" e lo schermo bloccato il ramo di rifiuto di connection.rs non
+#     scatta nemmeno in modo click (src/server/connection.rs:2681-2687) e la
+#     frase "la connessione parte solo dopo che l'hai accettata" direbbe il
+#     falso. Oggi la mappa e' vuota; se un giorno la si accende, la frase della
+#     home va riletta insieme a quella chiave.
+esito_frase=$(python3 - <<'PY'
+import re
+
+DHP = "flutter/lib/desktop/pages/desktop_home_page.dart"
+SM = "flutter/lib/models/server_model.dart"
+CFG = "libs/hbb_common/src/config.rs"
+CHIAVI = ("remotek_desk_tip_click", "remotek_desk_tip_password",
+          "remotek_desk_tip_both")
+LINGUE = (("src/lang/it.rs", "italiano"),
+          ("src/lang/en.rs", "inglese, ripiego di tutte le altre lingue"))
+
+PROMESSA = "la home tornerebbe a promettere al cliente una password che non esiste"
+NOME = ("la home mostrerebbe la frase inglese, o il nome della chiave se manca "
+        "anche in en.rs")
+CLIC = ("la frase della home prometterebbe un'accettazione che il binario non "
+        "chiede")
+
+guai = []
+
+
+def guaio(testo, conseguenza):
+    guai.append("%s: %s" % (testo, conseguenza))
+
+
+def senza_commenti(percorso):
+    with open(percorso, encoding="utf-8", errors="replace") as fh:
+        testo = fh.read()
+    # I nostri "perche'" sono commenti: non devono reggere il controllo.
+    return "\n".join(r for r in testo.splitlines() if not r.lstrip().startswith("//"))
+
+
+def corpo(percorso, firma, conseguenza):
+    try:
+        testo = senza_commenti(percorso)
+    except OSError as e:
+        guaio("%s non leggibile (%s): la frase della home non e' controllata"
+              % (percorso, e), conseguenza)
+        return None
+    trovati = re.findall(r"^  %s \{\n(.*?)^  \}$" % firma, testo, re.M | re.S)
+    if len(trovati) != 1:
+        guaio("%s: le definizioni di %s sono %d, attesa 1: rileggere il punto"
+              % (percorso, firma, len(trovati)), conseguenza)
+        return None
+    return trovati[0]
+
+# (a) e (b): buildTip.
+c = corpo(DHP, r"buildTip\(BuildContext context\)", PROMESSA)
+if c is not None:
+    letto = re.search(r"final approveMode =\s*"
+                      r"bind\.mainGetOptionSync\(key: kOptionApproveMode\);", c)
+    tre = re.search(r"if \(approveMode == 'click'\) \{\s*"
+                    r'tipKey = "%s";\s*\}'
+                    r" else if \(approveMode == 'password'\) \{\s*"
+                    r'tipKey = "%s";\s*\}'
+                    r" else \{\s*"
+                    r'tipKey = "%s";\s*\}' % CHIAVI, c)
+    if not letto or not tre:
+        guaio("%s: dentro buildTip la frase non e' piu' scelta dai tre casi di "
+              "approve_mode() (click, password, tutto il resto = Both) letti "
+              "con mainGetOptionSync fra %s, %s e %s" % ((DHP,) + CHIAVI),
+              PROMESSA)
+    if re.search(r'translate\(\s*"desk_tip"\s*\)', c):
+        guaio("%s: dentro buildTip e' tornata la costante desk_tip, che "
+              "promette una password che con l'accettazione a clic non esiste"
+              % DHP, PROMESSA)
+    if "Consumer<ServerModel>" not in c:
+        guaio("%s: la frase di buildTip non sta piu' dentro un "
+              "Consumer<ServerModel>: resterebbe quella del primo disegno"
+              % DHP, PROMESSA)
+
+# (c) il trattino.
+c = corpo(SM, r"updatePasswordModel\(\) async", PROMESSA)
+if c is not None:
+    if not re.search(r"_approveMode == 'click'", c) or \
+       not re.search(r"_serverPasswd\.text = '-'", c):
+        guaio("%s: in updatePasswordModel il trattino non segue piu' "
+              "_approveMode == 'click': rileggere la frase della home, che e' "
+              "legata alla stessa impostazione" % SM, PROMESSA)
+
+# (d) le tre chiavi, in tutte e due le lingue che le hanno.
+for percorso, che in LINGUE:
+    try:
+        testo = open(percorso, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        guaio("%s non leggibile (%s): le chiavi della frase della home non "
+              "sono controllate" % (percorso, e), NOME)
+        continue
+    for chiave in CHIAVI:
+        valori = re.findall(r'\("%s",\s*"([^"]*)"\)' % chiave, testo)
+        pieni = [v for v in valori if v.strip()]
+        if len(valori) != 1 or not pieni:
+            guaio("%s (%s): la chiave %s compare %d volte con un valore non "
+                  "vuoto, attesa 1" % (percorso, che, chiave, len(pieni)), NOME)
+
+# (e) allow-logon-screen-password non e' accesa di fabbrica.
+try:
+    testo = open(CFG, encoding="utf-8", errors="replace").read()
+except OSError as e:
+    guaio("%s non leggibile (%s): non si sa se allow-logon-screen-password sia "
+          "accesa di fabbrica" % (CFG, e), CLIC)
+else:
+    riga = [r for r in testo.splitlines()
+            if "static ref BUILTIN_SETTINGS" in r]
+    if len(riga) != 1:
+        guaio("%s: le dichiarazioni di BUILTIN_SETTINGS sono %d, attesa 1: "
+              "rileggere il punto" % (CFG, len(riga)), CLIC)
+    elif "Default::default()" not in riga[0]:
+        guaio("%s: BUILTIN_SETTINGS non e' piu' vuota di fabbrica; se contiene "
+              "allow-logon-screen-password, in modo click la password torna "
+              "utilizzabile a schermo bloccato" % CFG, CLIC)
+
+print("\n".join(guai))
+PY
+) || esito_frase="${esito_frase:-}"$'\n'"controllo della frase della home non eseguito: python3 terminato con errore"
+if [ -z "$esito_frase" ]; then
+  ok "la frase della home segue i tre casi di approve_mode(), le tre chiavi ci sono in italiano e in inglese e allow-logon-screen-password non e' accesa di fabbrica"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_frase"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

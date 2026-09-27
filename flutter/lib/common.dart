@@ -3975,6 +3975,30 @@ setResizable(bool resizable) {
 
 isOptionFixed(String key) => bind.mainIsOptionFixed(key: key);
 
+// Remotek: "Visualizza telecamera" apre una sessione che il PC controllato
+// rifiuta sempre, perche' `enable-camera` e' bloccata a N nell'eseguibile
+// (ADR-0017) e src/server/connection.rs risponde "No permission of viewing
+// camera", per giunta non tradotto. Un comando che non puo' funzionare non si
+// mostra: i menu che la offrono la nascondono con questa funzione.
+// La condizione e' "bloccata E spenta", non "bloccata": il giorno in cui un
+// `custom.txt` firmato riaprisse la videocamera per un cliente, la voce
+// tornerebbe da sola senza rimettere le mani qui.
+// Nascosta nei menu, non tolta dal codice: `--view-camera <ID>` da riga di
+// comando e i link `remotek://` aprono ancora la sessione, quindi il rifiuto
+// che ADR-0017 usa come prova resta riproducibile in collaudo.
+// Limite: si legge la configurazione LOCALE, non quella del PC remoto, che il
+// lato di chi controlla non conosce. In Remotek ogni peer e' un Remotek con lo
+// stesso eseguibile e le due coincidono; un tecnico con l'eseguibile standard
+// non vedrebbe la voce verso un cliente a cui la videocamera e' stata riaperta.
+// Al client del tecnico serve allora un `custom.txt` firmato con la SOLA
+// chiave `enable-camera`, non quello emesso per il cliente: la sezione
+// override non si filtra per chiave (src/common.rs,
+// read_custom_client_advanced_settings), quindi quel file porterebbe sul PC
+// del tecnico anche l'approve-mode e ogni altra impostazione del cliente.
+bool isViewCameraFixedOff() =>
+    isOptionFixed(kOptionEnableCamera) &&
+    !mainGetBoolOptionSync(kOptionEnableCamera);
+
 bool isChangePermanentPasswordDisabled() =>
     bind.mainGetBuildinOption(key: kOptionDisableChangePermanentPassword) ==
     'Y';

@@ -898,7 +898,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               child: Column(children: [
                 permissions(context),
                 password(context),
-                _Card(title: '2FA', children: [tfa()]),
+                if (!_is2faFixedOff) _Card(title: '2FA', children: [tfa()]),
                 if (!isChangeIdDisabled())
                   _Card(title: 'ID', children: [changeId()]),
                 more(context),
@@ -907,6 +907,23 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
           ],
         )).marginOnly(bottom: _kListViewBottomMargin);
   }
+
+  // Remotek: la chiave `2fa` e' bloccata vuota in OVERWRITE_SETTINGS
+  // (ADR-0016), quindi l'interruttore qui sotto non accendeva niente e
+  // falliva in silenzio: un comando che non puo' funzionare non si mostra, e
+  // la scheda sparisce.
+  // La condizione e' "bloccata E nessuna 2FA valida", non "bloccata": se un
+  // giorno la chiave fosse bloccata a un valore vero, la scheda tornerebbe,
+  // perche' il bot Telegram e i dispositivi fidati stanno solo qui dentro e
+  // le loro chiavi non sono bloccate. La chiave e' la stringa "2fa", come in
+  // common/widgets/dialog.dart: hbb_common non ne ha una costante.
+  // Nascosta nell'interfaccia, chiave non toccata: `--option 2fa` da riga di
+  // comando stampa ancora una riga vuota, quindi la prova di collaudo che la
+  // 2FA non si attiva resta riproducibile; il passo che chiedeva di cliccare
+  // la casella qui non si puo' piu' eseguire e va riformulato, come quello di
+  // ADR-0017 per la videocamera.
+  bool get _is2faFixedOff =>
+      isOptionFixed('2fa') && !bind.mainHasValid2FaSync();
 
   Widget tfa() {
     bool enabled = !locked;

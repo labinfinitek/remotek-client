@@ -69,6 +69,38 @@ else
     'accesso presidiato: approve-mode forzato a click in OVERWRITE_SETTINGS (senza, bastano ID e password)'
   contiene "$CFG" "$OVR"'.*\("2fa"\.to_owned\(\), ""\.to_owned\(\)\)' \
     '2FA spenta in OVERWRITE_SETTINGS (con click il codice aprirebbe la sessione senza clic)'
+  # I default di privacy del 2026-09-20 (ADR-0017): quattro funzioni, sei
+  # chiavi. Prima le quattro enable-*. Il valore deve essere "N" e non la
+  # stringa vuota: per le chiavi enable-* option2bool accende tutto cio' che
+  # non e' esattamente "N", quindi ("", stringa vuota) le lascerebbe accese.
+  for coppia in \
+    'OPTION_ENABLE_LAN_DISCOVERY|rete locale: il PC non risponde piu'"'"' a chi lo cerca (rispondeva con MAC, ID, nome del PC e utente a chiunque sulla stessa rete; la porta UDP resta in ascolto come in upstream)' \
+    'OPTION_ENABLE_RECORD_SESSION|registrazione della sessione spenta (copia dello schermo del cliente senza avviso)' \
+    'OPTION_ENABLE_PRIVACY_MODE|modalita'"'"' privacy spenta (oscurare lo schermo contraddice l'"'"'accesso presidiato)' \
+    'OPTION_ENABLE_CAMERA|videocamera spenta (su un PC aziendale e'"'"' videosorveglianza)'
+  do
+    chiave=${coppia%%|*}
+    testo=${coppia#*|}
+    contiene "$CFG" "$OVR"'.*'"$chiave"'\.to_owned\(\), "N"\.to_owned\(\)' \
+      "$testo"
+  done
+  # Quinto controllo: la registrazione ha due porte e la seconda non passa dai
+  # permessi. Con allow-auto-record-incoming il PC controllato avvia da solo un
+  # registratore a ogni sessione in entrata (src/server/video_service.rs,
+  # get_recorder), senza leggere enable-record-session ne' Permission::Recording
+  # e senza accendere l'icona della telecamera nella finestra di accettazione.
+  # Qui il valore atteso e' "N" come per allow-auto-update: per il prefisso
+  # allow- option2bool accende solo l'esatto "Y".
+  contiene "$CFG" "$OVR"'.*OPTION_ALLOW_AUTO_RECORD_INCOMING\.to_owned\(\), "N"\.to_owned\(\)' \
+    'registrazione automatica delle sessioni in entrata spenta (partiva senza permesso e senza avviso, bastava una riga di strategia)'
+  # Sesto controllo, che tiene su gli altri quattro: il client concede
+  # registrazione, modalita' privacy e videocamera senza nemmeno leggere la
+  # chiave enable-* appena access-mode vale "full" (src/server/connection.rs,
+  # is_permission_enabled_locally). Qui il valore atteso e' la stringa vuota:
+  # e' il valore neutro, quello di un'installazione appena fatta, mentre "N"
+  # per questa chiave non significherebbe niente.
+  contiene "$CFG" "$OVR"'.*OPTION_ACCESS_MODE\.to_owned\(\), ""\.to_owned\(\)' \
+    'access-mode bloccata a vuota (con "full" il preset riaccende tre dei quattro default)'
 
   server=$(sed -nE 's/.*static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new\("([^"]*)".*/\1/p' "$CFG")
   elenco=$(sed -nE 's/^pub const RENDEZVOUS_SERVERS: &\[&str\] = &\["([^"]*)"\];.*/\1/p' "$CFG")

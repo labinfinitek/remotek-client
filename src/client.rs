@@ -461,7 +461,14 @@ impl Client {
         let punch_type = if udp_nat_port > 0 { "UDP" } else { "TCP" };
         msg_out.set_punch_hole_request(PunchHoleRequest {
             id: peer.to_owned(),
-            token: token.to_owned(),
+            // Remotek, REM-2026-001: campo svuotato di proposito. Il token
+            // dell'account del tecnico apre anche /api/admin/* dell'API e non
+            // entra in un messaggio di rendezvous che hbbs puo' inoltrare o
+            // registrare. Vuoto e' lo stato di un client non autenticato
+            // all'API, caso normale in RustDesk: non toglie funzioni. La
+            // variabile token resta piena: la usa la guardia di secure_tcp qui
+            // sopra per cifrare lo scambio col server.
+            token: Default::default(),
             nat_type: nat_type.into(),
             licence_key: key.to_owned(),
             conn_type: conn_type.into(),
@@ -873,7 +880,16 @@ impl Client {
             );
             msg_out.set_request_relay(RequestRelay {
                 id: peer.to_owned(),
-                token: token.to_owned(),
+                // Remotek, REM-2026-001: campo svuotato di proposito. hbbs
+                // inoltra RequestRelay al PC controllato e questo campo gli
+                // porterebbe il token dell'account del tecnico, che apre anche
+                // /api/admin/* dell'API. Il PC controllato non lo legge
+                // (rendezvous_mediator.rs, handle_request_relay) e vuoto e' lo
+                // stato di un client non autenticato all'API, caso normale in
+                // RustDesk: non toglie funzioni. La variabile token resta
+                // piena: la usa la guardia di secure_tcp qui sopra per cifrare
+                // lo scambio col server.
+                token: Default::default(),
                 uuid: uuid.clone(),
                 relay_server: relay_server.clone(),
                 secure,

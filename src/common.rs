@@ -2378,17 +2378,12 @@ async fn stun_ipv4_test(stun_server: &str) -> ResultType<(SocketAddr, String)> {
     })
 }
 
-static STUNS_V4: [&str; 3] = [
-    "stun.l.google.com:19302",
-    "stun.cloudflare.com:3478",
-    "stun.nextcloud.com:3478",
-];
+// Remotek: solo lo STUN Infinitek, cosi' l'IP pubblico del PC non va a terze
+// parti (decisione del titolare del 2026-09-20). Se non risponde manca solo la
+// scoperta dell'indirizzo per la connessione diretta; il relay resta.
+static STUNS_V4: [&str; 1] = ["stun.infinitek.it:3478"];
 
-static STUNS_V6: [&str; 3] = [
-    "stun.l.google.com:19302",
-    "stun.cloudflare.com:3478",
-    "stun.nextcloud.com:3478",
-];
+static STUNS_V6: [&str; 1] = ["stun.infinitek.it:3478"];
 
 pub async fn test_nat_ipv4() -> ResultType<(SocketAddr, String)> {
     use hbb_common::futures::future::{select_ok, FutureExt};

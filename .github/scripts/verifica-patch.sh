@@ -13,7 +13,7 @@
 # del marchio e i comandi che le chiavi bloccate lasciano senza effetto
 # (scheda 2FA, "Visualizza telecamera") che non si mostrano; la frase della
 # home che segue i tre casi di approve_mode() invece di promettere una
-# password.
+# password; lo STUN solo sul server Infinitek.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1505,6 +1505,55 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_frase"
+fi
+
+# --- 16. STUN solo sul server Infinitek ----------------------------------------
+# Lo STUN riceve l'IP pubblico dei due PC quando si apre una sessione
+# (test_udp_uat e test_ipv6 in src/client.rs, start_ipv6 in
+# src/rendezvous_mediator.rs). Le due liste di src/common.rs contengono solo il
+# nostro server, una dichiarazione ciascuna: un merge che riporta le liste
+# upstream (Google, Cloudflare, Nextcloud) o ne aggiunge una seconda deve
+# fermarsi qui. La lista di STUN pubblici di libs/hbb_common/src/webrtc.rs non
+# entra nell'eseguibile solo perche' il client non accende la feature webrtc di
+# hbb_common: se un merge la accende, quella lista torna viva. Se python3
+# fallisce il controllo non e' eseguito ed e' un errore.
+esito_stun=$(python3 - <<'PY'
+import re
+
+NOSTRO = ["stun.infinitek.it:3478"]
+guai = []
+testo = open("src/common.rs", encoding="utf-8").read()
+for nome in ("STUNS_V4", "STUNS_V6"):
+    dich = re.findall(r"static\s+%s\s*:\s*\[&str;\s*(\d+)\]\s*=\s*\[(.*?)\];" % nome,
+                      testo, re.S)
+    if len(dich) != 1:
+        guai.append("src/common.rs: le dichiarazioni di %s sono %d, attesa 1"
+                    % (nome, len(dich)))
+        continue
+    n, corpo = dich[0]
+    voci = re.findall(r'"([^"]*)"', corpo)
+    if voci != NOSTRO or int(n) != len(NOSTRO):
+        guai.append("src/common.rs: %s = %s, atteso %s" % (nome, voci, NOSTRO))
+for host in ("stun.l.google.com", "stun.cloudflare.com", "stun.nextcloud.com"):
+    if host in testo:
+        guai.append("src/common.rs: torna lo STUN di terze parti %s" % host)
+for riga in open("Cargo.toml", encoding="utf-8"):
+    r = riga.split("#", 1)[0]
+    if re.match(r"\s*hbb_common\s*=", r) and "webrtc" in r:
+        guai.append("Cargo.toml: la feature webrtc di hbb_common e' accesa, "
+                    "tornano gli STUN pubblici di libs/hbb_common/src/webrtc.rs")
+    if "hbb_common/webrtc" in r:
+        guai.append("Cargo.toml: una feature accende hbb_common/webrtc, "
+                    "tornano gli STUN pubblici di libs/hbb_common/src/webrtc.rs")
+print("\n".join(guai))
+PY
+) || esito_stun="${esito_stun:-}"$'\n'"controllo dello STUN non eseguito: python3 terminato con errore"
+if [ -z "$esito_stun" ]; then
+  ok "STUN solo su stun.infinitek.it:3478 (IPv4 e IPv6) e feature webrtc di hbb_common spenta"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_stun"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

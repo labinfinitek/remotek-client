@@ -9,7 +9,18 @@ introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 li tiene
 allineati tutti al gitlink di `libs/hbb_common`.
 
 ## [Non rilasciato]
-Base upstream: RustDesk 1.4.9.
+
+## [remotek-1.4.9-1] - 2026-09-29
+Base upstream: RustDesk 1.4.9. Primo rilascio con tag: exe Windows x86_64
+**non firmato** (Windows SmartScreen puo' avvisare al primo avvio), sorgenti
+al tag `remotek-1.4.9-1` di remotek-client e remotek-hbb-common.
+**Per i tecnici**: rispetto all'exe di collaudo pubblicato il 2026-09-20
+(commit `33328b45`) cambiano la frase della home, che non promette piu' una
+password, e spariscono i comandi 2FA e "Visualizza telecamera", che non
+funzionavano (Corretto). Il riquadro degli avvisi e' blu Infinitek
+(Modificato), e lo STUN interroga solo `stun.infinitek.it` (Sicurezza).
+Al telefono si fa leggere al cliente solo l'ID, e il cliente accetta la
+finestra che compare. Si installa sopra la versione precedente.
 
 ### Modificato
 - Proprieta' dei file Windows (exe interno e autoestraente): prodotto "Remotek", societa' "Infinitek S.r.l.", copyright con attribuzione a RustDesk; cartella di estrazione del portable separata da quella di RustDesk.

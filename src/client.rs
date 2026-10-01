@@ -32,7 +32,6 @@ use crate::{
     common::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP},
     create_symmetric_key_msg, decode_id_pk, get_rs_pk, is_keyboard_mode_supported,
     kcp_stream::KcpStream,
-    secure_tcp,
     ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
@@ -426,12 +425,22 @@ impl Client {
             NatType::from_i32(my_nat_type).unwrap_or(NatType::UNKNOWN_NAT)
         };
 
-        if !key.is_empty() && !token.is_empty() {
-            // mainly for the security of token
-            secure_tcp(&mut socket, &key)
-                .await
-                .map_err(|e| anyhow!("Failed to secure tcp: {}", e))?;
-        } else if let Some(udp) = udp.1.as_ref() {
+        // Remotek, da remotek-1.4.9-2: niente secure_tcp verso hbbs. Upstream
+        // lo fa solo se il client ha il token dell'account ("for the security
+        // of token"), ma il token non entra piu' nei messaggi di rendezvous
+        // (REM-2026-001, piu' sotto) e l'hbbs ufficiale non avvia lo scambio
+        // di chiavi su TCP: il client aspettava READ_TIMEOUT e falliva
+        // ("Failed to secure tcp: deadline has elapsed"), cioe' un tecnico
+        // autenticato all'API non si collegava a nessun PC (collaudo del
+        // 2026-09-30, caso 19). Lo scambio col server e' quello di un client
+        // non autenticato, che upstream non cifra.
+        // if !key.is_empty() && !token.is_empty() {
+        //     // mainly for the security of token
+        //     secure_tcp(&mut socket, &key)
+        //         .await
+        //         .map_err(|e| anyhow!("Failed to secure tcp: {}", e))?;
+        // } else if let Some(udp) = udp.1.as_ref() {
+        if let Some(udp) = udp.1.as_ref() {
             let tm = Instant::now();
             loop {
                 let port = *udp.lock().unwrap();
@@ -465,9 +474,9 @@ impl Client {
             // dell'account del tecnico apre anche /api/admin/* dell'API e non
             // entra in un messaggio di rendezvous che hbbs puo' inoltrare o
             // registrare. Vuoto e' lo stato di un client non autenticato
-            // all'API, caso normale in RustDesk: non toglie funzioni. La
-            // variabile token resta piena: la usa la guardia di secure_tcp qui
-            // sopra per cifrare lo scambio col server.
+            // all'API, caso normale in RustDesk: non toglie funzioni. Da
+            // remotek-1.4.9-2 la variabile token non decide piu' secure_tcp
+            // (vedi sopra): hbbs non riceve il token in nessun messaggio.
             token: Default::default(),
             nat_type: nat_type.into(),
             licence_key: key.to_owned(),
@@ -849,7 +858,7 @@ impl Client {
         rendezvous_server: &str,
         secure: bool,
         key: &str,
-        token: &str,
+        _token: &str,
         conn_type: ConnType,
     ) -> ResultType<Stream> {
         let mut succeed = false;
@@ -862,10 +871,13 @@ impl Client {
                 .await
                 .with_context(|| "Failed to connect to rendezvous server")?;
 
-            if !key.is_empty() && !token.is_empty() {
-                // mainly for the security of token
-                secure_tcp(&mut socket, key).await?;
-            }
+            // Remotek, da remotek-1.4.9-2: niente secure_tcp, come in
+            // _start_inner (vedi li'): l'hbbs ufficiale non fa lo scambio di
+            // chiavi su TCP e il tecnico autenticato non otteneva il relay.
+            // if !key.is_empty() && !token.is_empty() {
+            //     // mainly for the security of token
+            //     secure_tcp(&mut socket, key).await?;
+            // }
 
             ipv4 = socket.local_addr().is_ipv4();
             let mut msg_out = RendezvousMessage::new();
@@ -886,9 +898,9 @@ impl Client {
                 // /api/admin/* dell'API. Il PC controllato non lo legge
                 // (rendezvous_mediator.rs, handle_request_relay) e vuoto e' lo
                 // stato di un client non autenticato all'API, caso normale in
-                // RustDesk: non toglie funzioni. La variabile token resta
-                // piena: la usa la guardia di secure_tcp qui sopra per cifrare
-                // lo scambio col server.
+                // RustDesk: non toglie funzioni. Da remotek-1.4.9-2 il
+                // parametro token non serve piu' qui (_token): hbbs non lo
+                // riceve in nessun messaggio.
                 token: Default::default(),
                 uuid: uuid.clone(),
                 relay_server: relay_server.clone(),

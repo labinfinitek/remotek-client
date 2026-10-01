@@ -9,6 +9,23 @@ introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 li tiene
 allineati tutti al gitlink di `libs/hbb_common`.
 
 ## [Non rilasciato]
+Base upstream: RustDesk 1.4.9.
+
+### Corretto
+- Un tecnico collegato al suo account Remotek si connette di nuovo ai PC. Con
+  l'account collegato il client chiedeva al server di cifrare lo scambio con
+  cui si apre la sessione, e il server Remotek (hbbs ufficiale, open source)
+  questo scambio non lo fa: il client aspettava e falliva con "Failed to secure
+  tcp: deadline has elapsed", su qualunque PC, mentre senza account si
+  collegava subito (collaudo del 2026-09-30, caso 19). Era cosi' anche negli
+  eseguibili precedenti. Ora, collegato o no, il client apre la sessione nello
+  stesso modo: quello di un client senza account, che e' il comportamento di
+  RustDesk con il server open source. **Cosa resta uguale:** la sessione fra i
+  due PC e' cifrata da un capo all'altro come prima; il token dell'account non
+  va al server da `remotek-1.4.9-1`. **Correzione di una voce precedente:** la
+  riga di `remotek-1.4.9-1` sul token (sezione Sicurezza) diceva che il
+  collegamento fra client e server "resta cifrato come prima": non era vero,
+  con il server Remotek non lo e' mai stato, ne' prima ne' dopo.
 
 ## [remotek-1.4.9-1] - 2026-09-29
 Base upstream: RustDesk 1.4.9. Primo rilascio con tag: exe Windows x86_64

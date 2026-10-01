@@ -9,7 +9,14 @@ introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 li tiene
 allineati tutti al gitlink di `libs/hbb_common`.
 
 ## [Non rilasciato]
-Base upstream: RustDesk 1.4.9.
+
+## [remotek-1.4.9-2] - 2026-10-01
+Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti
+al tag `remotek-1.4.9-2` di remotek-client e remotek-hbb-common
+(hbb_common invariato rispetto a `remotek-1.4.9-1`).
+**Per i tecnici**: con l'account Remotek collegato ci si connette di nuovo
+ai PC; fino a `remotek-1.4.9-1` compreso bisognava uscire dall'account
+(Corretto). Si installa sopra la versione precedente.
 
 ### Corretto
 - Un tecnico collegato al suo account Remotek si connette di nuovo ai PC. Con

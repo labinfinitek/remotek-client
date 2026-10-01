@@ -895,17 +895,12 @@ else
     [ -n "$r" ] && errore "$r: uscirebbe il token dell'account del tecnico, che apre anche /api/admin/* dell'API, e RequestRelay hbbs lo inoltra al PC controllato (REM-2026-001)"
   done <<<"$esito_token"
 fi
-# Il rovescio dello stesso controllo: si svuotano i campi dei messaggi, mai la
-# variabile token. Le due guardie !key.is_empty() && !token.is_empty() decidono
-# secure_tcp, cioe' la cifratura dello scambio col server: con la variabile
-# vuota il canale verso il server resterebbe in chiaro, molto peggio del difetto
-# che la sezione chiude.
-n_guardie=$(grep -Ec '^[[:space:]]*if !key\.is_empty\(\) && !token\.is_empty\(\) \{$' "$CLI" || true)
-if [ "$n_guardie" = 2 ]; then
-  ok 'le due guardie di secure_tcp leggono ancora la variabile token (lo scambio col server resta cifrato)'
-else
-  errore "guardie !key.is_empty() && !token.is_empty() trovate $n_guardie, attese 2: se e' stata svuotata la variabile token invece dei campi dei messaggi, lo scambio col server non e' piu' cifrato  [$CLI]"
-fi
+# Fino a remotek-1.4.9-1 qui si controllava che le due guardie
+# !key.is_empty() && !token.is_empty() di secure_tcp restassero, nell'idea che
+# cifrassero lo scambio col server. Era sbagliato: l'hbbs ufficiale non fa lo
+# scambio di chiavi su TCP, e con quelle guardie il tecnico autenticato non si
+# collegava (collaudo del 2026-09-30, caso 19). Da remotek-1.4.9-2 le guardie
+# sono commentate e la sezione 17 controlla che non tornino.
 
 # --- 12. Un permesso bloccato non lo riaccende un messaggio di rendezvous -------
 # PunchHole, RequestRelay e FetchLocalAddr portano un bitmap ControlPermissions
@@ -1554,6 +1549,35 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_stun"
+fi
+
+# --- 17. Nessun secure_tcp verso hbbs legato al token --------------------------
+# Upstream, solo col token dell'account, il client chiede a hbbs di cifrare lo
+# scambio (`if !key.is_empty() && !token.is_empty() { secure_tcp(...) }` in
+# _start_inner e request_relay di src/client.rs). L'hbbs ufficiale non fa lo
+# scambio di chiavi su TCP (nessun KeyExchange in rustdesk-server 1.1.16): il
+# client aspettava e falliva, e un tecnico autenticato all'API non si collegava
+# (collaudo del 2026-09-30, caso 19). Da remotek-1.4.9-2 i due blocchi sono
+# commentati; un merge che li riporta attivi deve fermarsi qui. Resta
+# crate::secure_tcp della connessione HealthCheck, che non porta a nessuna
+# sessione. Se python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_secure=$(python3 - <<'PY'
+guai = []
+for n, riga in enumerate(open("src/client.rs", encoding="utf-8"), 1):
+    codice = riga.split("//", 1)[0]
+    if "!token.is_empty()" in codice and "key.is_empty()" in codice:
+        guai.append("src/client.rs:%d: torna la condizione sul token per secure_tcp" % n)
+    if "secure_tcp(&mut socket" in codice:
+        guai.append("src/client.rs:%d: torna secure_tcp sulla connessione a hbbs" % n)
+print("\n".join(guai))
+PY
+) || esito_secure="${esito_secure:-}"$'\n'"controllo di secure_tcp non eseguito: python3 terminato con errore"
+if [ -z "$esito_secure" ]; then
+  ok "nessun secure_tcp verso hbbs legato al token (tecnico autenticato: connessione come da non autenticato)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_secure"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

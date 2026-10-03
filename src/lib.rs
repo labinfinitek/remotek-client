@@ -75,5 +75,4 @@ pub mod virtual_display_manager;
 
 mod kcp_stream;
 
-#[cfg(target_os = "linux")]
 pub mod remotek;

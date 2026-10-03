@@ -1535,7 +1535,9 @@ impl Connection {
 
     #[inline]
     async fn post_audit_async(url: String, v: Value) -> ResultType<String> {
-        crate::post_request(url, v.to_string(), "").await
+        let corpo = v.to_string();
+        let firma = crate::remotek::firma::intestazione(&url, &corpo);
+        crate::post_request(url, corpo, &firma).await
     }
 
     fn set_conn_audit_primary_auth(&mut self, method: ConnAuditPrimaryAuth) {

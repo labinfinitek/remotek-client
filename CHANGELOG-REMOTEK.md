@@ -30,6 +30,16 @@ allineati tutti al gitlink di `libs/hbb_common`.
   `exit`.
 
 ### Sicurezza
+- Il PC firma con la sua chiave le richieste all'API (scheda del PC,
+  heartbeat, registro delle connessioni e dei file) (REM-2026-006). L'uuid
+  che lega l'ID al PC il client lo manda anche al server ID in chiaro: chi
+  osservava la rete poteva scrivere all'API a nome del PC. Col primo
+  aggiornamento della scheda l'API registra la chiave del PC e da li' accetta
+  da quel PC solo richieste firmate. **Per chi installa**: l'orologio del PC
+  dev'essere giusto; con piu' di 5 minuti di scarto l'API rifiuta le
+  richieste del PC (la scheda non si aggiorna, le connessioni non finiscono
+  nel registro). Un PC reinstallato ha una chiave nuova: si cancella dal
+  pannello e si lascia che si registri di nuovo.
 - Le richieste all'API non ripiegano piu' sul canale TCP verso il server
   (REM-2026-005). Se l'HTTPS falliva, il client di upstream rimandava la
   richiesta via TCP, cifrata solo se il server faceva lo scambio di chiavi:

@@ -1,0 +1,92 @@
+# Build Linux della libreria del client sulle PR verso `remotek`, per
+# remotek-cli (ADR-0021): il CLI vive dentro la libreria, quindi ogni MR che
+# tocca il codice Rust deve almeno compilarla su Linux e far girare i test del
+# terminale. Nessun segreto, nessun artefatto, nessun push: solo un esito.
+#
+# Librerie di sistema (feature linux-pkg-config) invece del vcpkg completo di
+# ci.yml: vpx, aom e opus da apt. libyuv no: libyuv-dev di Ubuntu 24.04 non
+# installa libyuv.pc, quindi solo libyuv viene da vcpkg (NO_PKG_CONFIG_libyuv,
+# libs/scrap/build.rs:125-138), allo stesso commit e con la stessa overlay port
+# di vcpkg.json.
+#
+# Regole di questo file: azioni pinnate a SHA con la versione in commento,
+# permessi minimi, nessun cron, nessun tag (verifica-patch.sh sez. 7).
+name: remotek-cli
+
+on:
+  pull_request:
+    branches: [remotek]
+    paths:
+      - "src/**"
+      - "libs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".github/workflows/remotek-cli.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Lo stesso commit di ci.yml e della baseline di vcpkg.json.
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+
+jobs:
+  linux:
+    name: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # solo libs/hbb_common
+          persist-credentials: false
+
+      # I pacchetti di ci.yml:106-128 piu' i -dev dei codec e pkg-config.
+      - name: Pacchetti di sistema
+        run: |
+          set -euo pipefail
+          sudo apt-get -y update
+          sudo apt-get install -y \
+            clang cmake curl gcc git g++ \
+            libpam0g-dev libasound2-dev libunwind-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libgtk-3-dev libpulse-dev libva-dev libvdpau-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxdo-dev libxfixes-dev nasm wget \
+            libvpx-dev libaom-dev libopus-dev pkg-config
+
+      - name: libyuv da vcpkg
+        run: |
+          set -euo pipefail
+          vcpkg_root="$RUNNER_TEMP/vcpkg"
+          git init -q "$vcpkg_root"
+          git -C "$vcpkg_root" fetch -q --depth=1 https://github.com/microsoft/vcpkg "$VCPKG_COMMIT_ID"
+          git -C "$vcpkg_root" checkout -q FETCH_HEAD
+          "$vcpkg_root/bootstrap-vcpkg.sh" -disableMetrics
+          # Fuori dal repo: qui vcpkg.json metterebbe vcpkg in modo manifest.
+          cd "$RUNNER_TEMP"
+          "$vcpkg_root/vcpkg" install libyuv:x64-linux --overlay-ports="$GITHUB_WORKSPACE/res/vcpkg"
+          echo "VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
+
+      - name: Rust stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build della libreria
+        env:
+          NO_PKG_CONFIG_libyuv: "1"
+        run: cargo build --locked --lib --features linux-pkg-config
+
+      - name: Test del terminale
+        env:
+          NO_PKG_CONFIG_libyuv: "1"
+        run: cargo test --locked --lib --features linux-pkg-config server::terminal_service

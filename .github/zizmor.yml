@@ -12,6 +12,10 @@ rules:
       # compilano; si riallineano al prossimo merge upstream.
       - remotek-build.yml:159
       - remotek-build.yml:166
+      # Stessi due pin in remotek-cli.yml, dagli stessi commit di ci.yml:146 e
+      # :162 (MR del build Linux di remotek-cli).
+      - remotek-cli.yml:78
+      - remotek-cli.yml:82
   self-repository:
     ignore:
       # `uses: ./.github/workflows/...` per bridge.yml e TopMostWindow: la

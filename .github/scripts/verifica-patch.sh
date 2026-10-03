@@ -1581,5 +1581,32 @@ else
   done <<<"$esito_secure"
 fi
 
+# --- 18. Nessun ripiego dall'HTTPS al proxy TCP via hbbs ----------------------
+# REM-2026-005: upstream, se una richiesta HTTPS all'API fallisce, la rimanda
+# via TCP a hbbs (with_tcp_proxy_fallback in src/common.rs), cifrata solo se il
+# primo messaggio e' un KeyExchange, che l'hbbs ufficiale non manda: chi sta in
+# mezzo la riceverebbe in chiaro. Da remotek-1.4.9-3 can_fallback_to_raw_tcp
+# restituisce false; un merge che riporta la condizione di upstream deve
+# fermarsi qui. Se python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_tcp=$(python3 - <<'PY'
+import re
+testo = open("src/common.rs", encoding="utf-8").read()
+m = re.search(r"fn can_fallback_to_raw_tcp\(url: &str\) -> bool \{(.*?)\n\}", testo, re.S)
+if not m:
+    print("src/common.rs: can_fallback_to_raw_tcp non trovata")
+else:
+    codice = "\n".join(r.split("//", 1)[0] for r in m.group(1).splitlines())
+    if "is_tcp_proxy_api_target" in codice or not re.search(r"^\s*false\s*$", codice, re.M):
+        print("src/common.rs: can_fallback_to_raw_tcp non restituisce piu' false, torna il ripiego sul proxy TCP")
+PY
+) || esito_tcp="${esito_tcp:-}"$'\n'"controllo del proxy TCP non eseguito: python3 terminato con errore"
+if [ -z "$esito_tcp" ]; then
+  ok "nessun ripiego dall'HTTPS al proxy TCP via hbbs (REM-2026-005)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_tcp"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

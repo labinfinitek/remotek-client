@@ -1136,7 +1136,13 @@ fn should_use_raw_tcp_for_api(url: &str) -> bool {
 /// Check if we can attempt raw TCP proxy fallback for this target URL.
 #[inline]
 fn can_fallback_to_raw_tcp(url: &str) -> bool {
-    !use_ws() && is_tcp_proxy_api_target(url)
+    // Remotek (REM-2026-005): nessun ripiego dall'HTTPS al proxy TCP via hbbs.
+    // `secure_tcp_silent` cifra solo se il primo messaggio e' un KeyExchange,
+    // che l'hbbs ufficiale non manda mai: chi sta in mezzo, fatto fallire
+    // l'HTTPS, riceverebbe in chiaro richiesta, intestazioni (token) e uuid.
+    // !use_ws() && is_tcp_proxy_api_target(url)
+    let _ = url;
+    false
 }
 
 #[inline]

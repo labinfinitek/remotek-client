@@ -1,7 +1,7 @@
-# Build Linux della libreria del client sulle PR verso `remotek`, per
-# remotek-cli (ADR-0021): il CLI vive dentro la libreria, quindi ogni MR che
-# tocca il codice Rust deve almeno compilarla su Linux e far girare i test del
-# terminale. Nessun segreto, nessun artefatto, nessun push: solo un esito.
+# Build Linux della libreria del client e di remotek-cli sulle PR verso
+# `remotek` (ADR-0021): il CLI vive dentro la libreria, quindi ogni MR che tocca
+# il codice Rust la compila su Linux, compila il binario e fa girare i test del
+# terminale e del CLI. Nessun segreto, nessun artefatto, nessun push: un esito.
 #
 # Librerie di sistema (feature linux-pkg-config) invece del vcpkg completo di
 # ci.yml: vpx, aom e opus da apt. libyuv no: libyuv-dev di Ubuntu 24.04 non
@@ -97,3 +97,12 @@ jobs:
           set -euo pipefail
           cargo test --locked --lib --features linux-pkg-config server::terminal_service | tee "$RUNNER_TEMP/test.log"
           grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/test.log"
+
+      - name: Build e test di remotek-cli
+        env:
+          NO_PKG_CONFIG_libyuv: "1"
+        run: |
+          set -euo pipefail
+          cargo build --locked --bin remotek-cli --features linux-pkg-config
+          cargo test --locked --lib --features linux-pkg-config remotek:: | tee "$RUNNER_TEMP/test-cli.log"
+          grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/test-cli.log"

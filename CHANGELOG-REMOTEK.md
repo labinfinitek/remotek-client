@@ -19,6 +19,15 @@ allineati tutti al gitlink di `libs/hbb_common`.
   Accetta solo account di agenti AI; i clienti vedranno l'agente come
   "Agente AI per <nome del tecnico>". Nessuna password dei PC dei clienti.
 
+### Sicurezza
+- Le richieste all'API non ripiegano piu' sul canale TCP verso il server
+  (REM-2026-005). Se l'HTTPS falliva, il client di upstream rimandava la
+  richiesta via TCP, cifrata solo se il server faceva lo scambio di chiavi:
+  chi si metteva in mezzo riceveva in chiaro l'uuid del PC, il token
+  dell'account e il resto della richiesta, e poteva rispondere
+  all'heartbeat con una strategia. Col server Remotek quel ripiego non
+  riusciva mai, quindi non si perde niente.
+
 ## [remotek-1.4.9-2] - 2026-10-01
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti
 al tag `remotek-1.4.9-2` di remotek-client e remotek-hbb-common

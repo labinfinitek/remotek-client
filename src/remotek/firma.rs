@@ -1,0 +1,155 @@
+//! Firma delle richieste del PC all'API (ADR-0023). Il contratto e' il README
+//! di remotek-api, sezione "Firma del dispositivo": l'uuid che lega l'ID al PC
+//! va a hbbs in chiaro, quindi il PC firma sysinfo, heartbeat e audit con la
+//! sua chiave Ed25519, la stessa di `RegisterPk`.
+
+use hbb_common::{bail, config::Config, log, sodiumoxide::crypto::sign, ResultType};
+use sha2::{Digest, Sha256};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const VERSIONE: &str = "remotek-api-v1";
+const INTESTAZIONE: &str = "X-Remotek-Firma";
+
+/// L'intestazione di firma di una POST a `url` con questo `corpo`, nel formato
+/// "Nome: valore" che `crate::post_request` passa alla richiesta. `corpo`
+/// dev'essere esattamente la stringa mandata.
+///
+/// La firma Ed25519 e' deterministica: due richieste identiche nello stesso
+/// secondo hanno la stessa firma e l'API rifiuta la seconda come ripetuta.
+/// Oggi non succede: l'heartbeat parte ogni 3 o 15 secondi con corpi diversi,
+/// gli audit hanno corpi diversi. Un PC con l'orologio sbagliato di piu' di 5
+/// minuti e' rifiutato.
+///
+/// Se la firma non si puo' fare (chiave del PC illeggibile, orologio prima del
+/// 1970) lo scrive nel log e restituisce "": la richiesta parte senza firma e
+/// decide l'API, che la rifiuta se il PC ha una chiave registrata.
+pub fn intestazione(url: &str, corpo: &str) -> String {
+    match firma_ora(url, corpo) {
+        Ok(valore) => format!("{}: {}", INTESTAZIONE, valore),
+        Err(e) => {
+            log::error!(
+                "firma della richiesta a {} non riuscita: {}",
+                percorso(url),
+                e
+            );
+            String::new()
+        }
+    }
+}
+
+/// La chiave pubblica Ed25519 del PC in base64 standard, il campo `pk` del
+/// sysinfo.
+pub fn chiave_pubblica() -> String {
+    crate::encode64(Config::get_key_pair().1)
+}
+
+fn firma_ora(url: &str, corpo: &str) -> ResultType<String> {
+    let (sk, _) = Config::get_key_pair();
+    let Some(sk) = sign::SecretKey::from_slice(&sk) else {
+        bail!(
+            "chiave del PC di {} byte invece di {}",
+            sk.len(),
+            sign::SECRETKEYBYTES
+        );
+    };
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    Ok(valore("POST", percorso(url), ts, corpo.as_bytes(), &sk))
+}
+
+/// `<ts>.<firma>`: firma in base64 standard del messaggio di cinque righe del
+/// contratto.
+fn valore(metodo: &str, percorso: &str, ts: u64, corpo: &[u8], sk: &sign::SecretKey) -> String {
+    let messaggio = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        VERSIONE,
+        metodo.to_uppercase(),
+        percorso,
+        ts,
+        hex::encode(Sha256::digest(corpo))
+    );
+    let firma = sign::sign_detached(messaggio.as_bytes(), sk);
+    format!("{}.{}", ts, crate::encode64(firma.to_bytes()))
+}
+
+/// Il percorso dell'URL, senza schema, host, query e frammento. Con un'API
+/// dietro un prefisso (`https://host/prefisso`) il prefisso resta: il README
+/// vuole il percorso che arriva all'API.
+fn percorso(url: &str) -> &str {
+    let dopo_host = match url.find("://") {
+        Some(i) => &url[i + 3..],
+        None => url,
+    };
+    let p = match dopo_host.find(|c| c == '/' || c == '?' || c == '#') {
+        Some(inizio) if dopo_host[inizio..].starts_with('/') => &dopo_host[inizio..],
+        _ => return "/",
+    };
+    match p.find(|c| c == '?' || c == '#') {
+        Some(fine) => &p[..fine],
+        None => p,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chiavi_di_prova() -> (sign::PublicKey, sign::SecretKey) {
+        let mut seme = [0u8; 32];
+        for (i, b) in seme.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        sign::keypair_from_seed(&sign::Seed(seme))
+    }
+
+    #[test]
+    fn vettore_del_readme() {
+        let (pk, sk) = chiavi_di_prova();
+        assert_eq!(
+            crate::encode64(pk.0),
+            "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+        );
+        let corpo = r#"{"id":"999000111","uuid":"dXVpZA=="}"#;
+        assert_eq!(
+            hex::encode(Sha256::digest(corpo.as_bytes())),
+            "8ce852e69dbc62f20c29f8fcfb77e1a1922d73c7a185de173bb31139f4089d10"
+        );
+        let v = valore("POST", "/api/heartbeat", 1791000000, corpo.as_bytes(), &sk);
+        assert_eq!(
+            v,
+            "1791000000.otUjpW4BdAQnl0TuN1E/GmD3LAx38zzpYTczckv70y3hYSIVtkA7urCTqftTR9BXPMoDc//+nyxItL73nbrHCw=="
+        );
+    }
+
+    #[test]
+    fn forma_dell_intestazione() {
+        let (_, sk) = chiavi_di_prova();
+        let v = valore("post", "/api/sysinfo", 1791000001, b"{}", &sk);
+        let (ts, firma) = v.split_once('.').unwrap();
+        assert_eq!(ts, "1791000001");
+        #[allow(deprecated)]
+        let byte = hbb_common::base64::decode(firma).unwrap();
+        assert_eq!(byte.len(), sign::SIGNATUREBYTES);
+        let riga = format!("{}: {}", INTESTAZIONE, v);
+        // post_request divide l'intestazione su ": " e la usa solo se le parti sono due.
+        assert_eq!(riga.split(": ").count(), 2);
+    }
+
+    #[test]
+    fn percorso_dall_url() {
+        assert_eq!(
+            percorso("https://api.example.it/api/heartbeat"),
+            "/api/heartbeat"
+        );
+        assert_eq!(
+            percorso("https://api.example.it:21114/api/sysinfo?a=1&b=2"),
+            "/api/sysinfo"
+        );
+        assert_eq!(percorso("http://h/api/audit/conn#x"), "/api/audit/conn");
+        assert_eq!(
+            percorso("https://h/pre/api/audit/file"),
+            "/pre/api/audit/file"
+        );
+        assert_eq!(percorso("https://h"), "/");
+        assert_eq!(percorso("https://h?q=1/2"), "/");
+    }
+}

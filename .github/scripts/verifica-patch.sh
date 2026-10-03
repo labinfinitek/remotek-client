@@ -411,7 +411,8 @@ try:
 except ImportError:
     print("SENZA-YAML"); sys.exit(0)
 AMMESSI = {"workflow_dispatch", "workflow_call"}
-NOSTRI = {".github/workflows/remotek-controlli.yml": AMMESSI | {"push", "pull_request"}}
+NOSTRI = {".github/workflows/remotek-controlli.yml": AMMESSI | {"push", "pull_request"},
+          ".github/workflows/remotek-cli.yml": AMMESSI | {"pull_request"}}
 for f in sorted(glob.glob(".github/workflows/*.y*ml")):
     with open(f, encoding="utf-8") as fh:
         d = yaml.safe_load(fh) or {}
@@ -428,7 +429,7 @@ if [ "$esito_wf" = "SENZA-YAML" ]; then
 elif [ -n "$esito_wf" ]; then
   while IFS= read -r r; do errore "trigger automatico in $r"; done <<<"$esito_wf"
 else
-  ok "nessun workflow parte da solo (solo workflow_dispatch e workflow_call; remotek-controlli su push e PR)"
+  ok "nessun workflow parte da solo (solo workflow_dispatch e workflow_call; remotek-controlli su push e PR, remotek-cli su PR)"
 fi
 
 # --- 8. Ogni file diverso da upstream e' elencato in REMOTEK.md -----------------

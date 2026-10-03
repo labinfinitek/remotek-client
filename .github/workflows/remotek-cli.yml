@@ -22,6 +22,8 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "build.rs"
+      - "vcpkg.json" # baseline di vcpkg per libyuv
+      - "res/vcpkg/**" # porta overlay di libyuv
       - ".github/workflows/remotek-cli.yml"
   workflow_dispatch:
 
@@ -86,7 +88,12 @@ jobs:
           NO_PKG_CONFIG_libyuv: "1"
         run: cargo build --locked --lib --features linux-pkg-config
 
+      # Un filtro che non trova test (per esempio dopo un rinomino upstream)
+      # passerebbe verde a vuoto: si controlla che ne giri almeno uno.
       - name: Test del terminale
         env:
           NO_PKG_CONFIG_libyuv: "1"
-        run: cargo test --locked --lib --features linux-pkg-config server::terminal_service
+        run: |
+          set -euo pipefail
+          cargo test --locked --lib --features linux-pkg-config server::terminal_service | tee "$RUNNER_TEMP/test.log"
+          grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/test.log"

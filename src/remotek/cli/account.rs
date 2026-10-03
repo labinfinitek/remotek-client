@@ -4,7 +4,7 @@
 //! il cliente vede quando il CLI si collega (src/client.rs, `user_info`).
 
 use hbb_common::config::{Config, LocalConfig};
-use hbb_common::{tls::TlsType, tokio};
+use hbb_common::tls::TlsType;
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -31,7 +31,6 @@ fn api() -> Result<String, String> {
 /// Un solo tentativo con il certificato sempre verificato: niente ripieghi di
 /// `crate::http_request_sync` (certificati non validi, proxy TCP via hbbs).
 /// Il messaggio d'errore non contiene mai corpo ne' intestazioni.
-#[tokio::main(flavor = "current_thread")]
 async fn richiesta(
     url: String,
     metodo: Method,
@@ -136,21 +135,24 @@ fn user_info_agente(mut utente: Value, tecnico: &str) -> Value {
     utente
 }
 
-fn logout_api(api: &str, token: &str) -> Result<(), String> {
+async fn logout_api(api: &str, token: &str) -> Result<(), String> {
     let corpo = json!({ "id": Config::get_id(), "uuid": crate::encode64(hbb_common::get_uuid()) });
     let r = richiesta(
         format!("{api}/api/logout"),
         Method::POST,
         Some(corpo.to_string()),
         Some(token),
-    )?;
+    )
+    .await?;
     if r.status_code != 200 {
         return Err(errore_api("logout rifiutato", &r));
     }
     Ok(())
 }
 
-pub(super) fn login(utente: &str) -> Result<String, String> {
+/// La password dell'account dell'agente, una riga da stdin: si legge prima di
+/// entrare nel runtime, che non deve bloccarsi su stdin.
+pub(super) fn leggi_password() -> Result<String, String> {
     let mut password = String::new();
     std::io::stdin()
         .read_line(&mut password)
@@ -159,6 +161,10 @@ pub(super) fn login(utente: &str) -> Result<String, String> {
     if password.is_empty() {
         return Err("password vuota: si legge da stdin, una riga".to_owned());
     }
+    Ok(password.to_owned())
+}
+
+pub(super) async fn login(utente: &str, password: &str) -> Result<String, String> {
     let api = api()?;
     let dispositivo = serde_json::to_value(crate::ui_interface::get_login_device_info())
         .map_err(|e| format!("deviceInfo: {e}"))?;
@@ -169,19 +175,21 @@ pub(super) fn login(utente: &str) -> Result<String, String> {
         &crate::encode64(hbb_common::get_uuid()),
         dispositivo,
     );
-    let (token, utente_api) = esito_login(&richiesta(
-        format!("{api}/api/login"),
-        Method::POST,
-        Some(corpo.to_string()),
-        None,
-    )?)?;
-    let tecnico = match richiesta(format!("{api}/api/agente"), Method::GET, None, Some(&token))
-        .and_then(|r| esito_agente(&r))
-    {
+    let (token, utente_api) = esito_login(
+        &richiesta(
+            format!("{api}/api/login"),
+            Method::POST,
+            Some(corpo.to_string()),
+            None,
+        )
+        .await?,
+    )?;
+    let agente = richiesta(format!("{api}/api/agente"), Method::GET, None, Some(&token)).await;
+    let tecnico = match agente.and_then(|r| esito_agente(&r)) {
         Ok(t) => t,
         Err(e) => {
             // Il token appena avuto non serve: si chiude la sessione sull'API.
-            if let Err(e2) = logout_api(&api, &token) {
+            if let Err(e2) = logout_api(&api, &token).await {
                 eprintln!("remotek-cli: {e2}");
             }
             return Err(e);
@@ -195,7 +203,7 @@ pub(super) fn login(utente: &str) -> Result<String, String> {
     });
     if let Err(e) = salvato {
         // Senza credenziali salvate il token non serve: si chiude la sessione.
-        if let Err(e2) = logout_api(&api, &token) {
+        if let Err(e2) = logout_api(&api, &token).await {
             eprintln!("remotek-cli: {e2}");
         }
         return Err(e);
@@ -213,15 +221,21 @@ fn salva(chiave: &str, valore: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn logout() -> Result<String, String> {
+pub(super) async fn logout() -> Result<String, String> {
     let token = LocalConfig::get_option("access_token");
     if token.is_empty() {
         return Ok("non collegato".to_owned());
     }
-    let esito = api().and_then(|api| logout_api(&api, &token));
+    let esito = match api() {
+        Ok(api) => logout_api(&api, &token).await,
+        Err(e) => Err(e),
+    };
     // Le credenziali locali si tolgono comunque.
     let tolte = salva("access_token", "").and_then(|()| salva("user_info", ""));
-    esito.and(tolte).map(|()| "scollegato".to_owned())
+    match (esito, tolte) {
+        (Err(a), Err(b)) => Err(format!("{a}; {b}")),
+        (esito, tolte) => esito.and(tolte).map(|()| "scollegato".to_owned()),
+    }
 }
 
 pub(super) fn whoami() -> Result<String, String> {

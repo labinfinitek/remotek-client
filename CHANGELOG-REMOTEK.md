@@ -18,6 +18,16 @@ allineati tutti al gitlink di `libs/hbb_common`.
   `remotek-cli whoami` (ID, utente e tecnico), `remotek-cli logout`.
   Accetta solo account di agenti AI; i clienti vedranno l'agente come
   "Agente AI per <nome del tecnico>". Nessuna password dei PC dei clienti.
+- `remotek-cli terminal <ID>`: il terminale del PC del cliente per l'agente AI,
+  solo dopo che il cliente accetta la finestra, mai come amministratore. Uso:
+  `remotek-cli terminal 123456789` (stdin va al terminale, l'uscita su stdout);
+  `--attesa 300` per aspettare il clic fino a 5 minuti (default 120 secondi);
+  `--righe 40 --colonne 120` per la dimensione (default 24x80).
+  Il CLI esce col codice del terminale (un codice fuori da 0-255 diventa 255).
+  La fine di stdin (Ctrl-D) chiude subito il terminale sul PC e ne termina
+  la shell: il CLI esce con 255 e si perde l'uscita di un comando ancora in
+  corso. Per avere il codice della shell si tiene stdin aperto e si manda
+  `exit`.
 
 ### Sicurezza
 - Le richieste all'API non ripiegano piu' sul canale TCP verso il server

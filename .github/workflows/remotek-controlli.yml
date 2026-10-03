@@ -5,9 +5,9 @@
 # file della patch e cargo-deny entrano con una MR successiva.
 #
 # Regole di questo file: azioni pinnate a SHA con la versione in commento,
-# permessi minimi per job, nessun cron, nessun tag. Con remotek-cli.yml (solo
-# PR) e' l'unico workflow del fork che parte da solo (lo controlla
-# verifica-patch.sh).
+# permessi minimi per job, nessun cron, nessun tag. Questo e remotek-cli.yml
+# (solo PR) sono gli unici due workflow del fork che partono da soli (lo
+# controlla verifica-patch.sh).
 name: remotek-controlli
 
 on:

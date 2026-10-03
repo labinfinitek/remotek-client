@@ -20,6 +20,10 @@ path = "src/naming.rs"
 name = "service"
 path = "src/service.rs"
 
+[[bin]]
+name = "remotek-cli"
+path = "src/remotek_cli.rs"
+
 [features]
 inline = []
 use_samplerate = ["samplerate"]

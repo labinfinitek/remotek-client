@@ -10,6 +10,15 @@ allineati tutti al gitlink di `libs/hbb_common`.
 
 ## [Non rilasciato]
 
+### Aggiunto
+- `remotek-cli`, client a riga di comando per Linux, per l'agente AI di
+  Infinitek (non per i clienti; l'exe Windows non cambia). Per chi installa
+  l'agente: `echo "$PASSWORD" | remotek-cli login <utente-agente>` (la
+  password dell'account dell'agente si legge da stdin, una riga),
+  `remotek-cli whoami` (ID, utente e tecnico), `remotek-cli logout`.
+  Accetta solo account di agenti AI; i clienti vedranno l'agente come
+  "Agente AI per <nome del tecnico>". Nessuna password dei PC dei clienti.
+
 ## [remotek-1.4.9-2] - 2026-10-01
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti
 al tag `remotek-1.4.9-2` di remotek-client e remotek-hbb-common

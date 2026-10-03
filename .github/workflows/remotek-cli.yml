@@ -1,7 +1,7 @@
 # Build Linux della libreria del client e di remotek-cli sulle PR verso
-# `remotek` (ADR-0021): il CLI vive dentro la libreria, quindi ogni MR che tocca
-# il codice Rust la compila su Linux, compila il binario e fa girare i test del
-# terminale e del CLI. Nessun segreto, nessun artefatto, nessun push: un esito.
+# `remotek` (ADR-0021): compila libreria e binario, fa girare i test del
+# terminale e del CLI e salva il CLI in release come artefatto per 7 giorni
+# (ADR-0022, regola 3). Nessun segreto, nessun push.
 #
 # Librerie di sistema (feature linux-pkg-config) invece del vcpkg completo di
 # ci.yml: vpx, aom e opus da apt. libyuv no: libyuv-dev di Ubuntu 24.04 non
@@ -106,3 +106,16 @@ jobs:
           cargo build --locked --bin remotek-cli --features linux-pkg-config
           cargo test --locked --lib --features linux-pkg-config remotek:: | tee "$RUNNER_TEMP/test-cli.log"
           grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/test-cli.log"
+
+      # Il CLI che il collaudo con l'agente di setup-lab scarica dalla run.
+      - name: Build release di remotek-cli
+        env:
+          NO_PKG_CONFIG_libyuv: "1"
+        run: cargo build --locked --release --bin remotek-cli --features linux-pkg-config
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: remotek-cli-linux-x86_64
+          path: target/release/remotek-cli
+          if-no-files-found: error
+          retention-days: 7

@@ -1608,5 +1608,48 @@ else
   done <<<"$esito_tcp"
 fi
 
+# --- 19. remotek-cli: niente password del PC, mai amministratore ---------------
+# ADR-0021, regole 2 e 3 (la Conferma): il CLI entra solo col clic del
+# cliente e mai come amministratore. Nel codice di src/remotek/, fuori dai
+# test: nessun os_login, nessuna variabile d'ambiente letta, nessuna opzione
+# o file per la password (custom.txt compreso), e IS_TERMINAL_ADMIN solo per
+# toglierla dall'ambiente (LoginConfigHandler::initialize la legge).
+esito_cli=$(python3 - <<'PY2'
+import glob, re
+VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|env::var(_os)?\(|set_var\(|--pass|password_preset|shared_password")
+guai, toglie = [], False
+for f in sorted(glob.glob("src/remotek/**/*.rs", recursive=True)):
+    # Si salta solo il blocco che segue un #[cfg(test)], dovunque sia nel file.
+    test, profondita = False, 0
+    for n, riga in enumerate(open(f, encoding="utf-8"), 1):
+        codice = riga.split("//", 1)[0]
+        if codice.strip().startswith("#[cfg(test)]"):
+            test, profondita = True, 0
+            continue
+        if test:
+            profondita += codice.count("{") - codice.count("}")
+            if profondita <= 0 and "}" in codice:
+                test = False
+            continue
+        if VIETATI.search(codice):
+            guai.append("%s:%d: %s" % (f, n, codice.strip()))
+        if "IS_TERMINAL_ADMIN" in codice:
+            if 'remove_var("IS_TERMINAL_ADMIN")' in codice:
+                toglie = True
+            else:
+                guai.append("%s:%d: IS_TERMINAL_ADMIN non solo tolta" % (f, n))
+if glob.glob("src/remotek/**/*.rs", recursive=True) and not toglie:
+    guai.append("src/remotek: IS_TERMINAL_ADMIN non e' tolta dall'ambiente")
+print("\n".join(guai))
+PY2
+) || esito_cli="${esito_cli:-}"$'\n'"controllo di remotek-cli non eseguito: python3 terminato con errore"
+if [ -z "$esito_cli" ]; then
+  ok "remotek-cli: nessuna via per la password del PC, nessun os_login, IS_TERMINAL_ADMIN tolta"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_cli"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

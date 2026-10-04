@@ -1710,7 +1710,7 @@ def codice(f):
 guai = []
 c = codice("src/server/connection.rs")
 attese = {
-    "ingresso": r"Some\(message::Union::TerminalAction\(action\)\) => \{\s*crate::remotek::trascrizione::ingresso\(\s*&mut self\.trascrizione,\s*self\.inner\.id,\s*&self\.tx_post_seq,\s*&action,?\s*\);",
+    "ingresso": r"Some\(message::Union::TerminalAction\(action\)\) => \{\s*if self\.terminal \{\s*crate::remotek::trascrizione::ingresso\(\s*&mut self\.trascrizione,\s*self\.inner\.id,\s*&self\.tx_post_seq,\s*&action,?\s*\);",
     "uscita": r"crate::remotek::trascrizione::uscita\(&mut conn\.trascrizione, &msg\);\s*let msg: &Message = &msg;",
     "tick": r"_ = second_timer\.tick\(\) => \{(?:(?!\.tick\(\) =>).)*?if let Some\(t\) = conn\.trascrizione\.as_mut\(\) \{\s*t\.tick\(\);",
 }

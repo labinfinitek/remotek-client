@@ -3677,12 +3677,14 @@ impl Connection {
                     }
                 }
                 Some(message::Union::TerminalAction(action)) => {
-                    crate::remotek::trascrizione::ingresso(
-                        &mut self.trascrizione,
-                        self.inner.id,
-                        &self.tx_post_seq,
-                        &action,
-                    );
+                    if self.terminal {
+                        crate::remotek::trascrizione::ingresso(
+                            &mut self.trascrizione,
+                            self.inner.id,
+                            &self.tx_post_seq,
+                            &action,
+                        );
+                    }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     allow_err!(self.handle_terminal_action(action).await);
                     #[cfg(any(target_os = "android", target_os = "ios"))]

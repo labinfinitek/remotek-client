@@ -1696,5 +1696,44 @@ else
   done <<<"$esito_firma"
 fi
 
+# --- 21. Trascrizione delle sessioni terminale --------------------------------
+# ADR-0021, regole 5 e 6: ogni sessione terminale si trascrive dal PC
+# controllato (src/remotek/trascrizione.rs) e la shell non sopravvive alla
+# connessione, qualunque cosa chieda il controllante. Un merge che toglie una
+# delle chiamate da src/server/connection.rs, o che riporta terminal_persistent
+# a seguire il controllante (login o opzione), deve fermarsi qui. Se python3
+# fallisce il controllo non e' eseguito ed e' un errore.
+esito_trascr=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+c = codice("src/server/connection.rs")
+attese = {
+    "ingresso": r"Some\(message::Union::TerminalAction\(action\)\) => \{\s*crate::remotek::trascrizione::ingresso\(\s*&mut self\.trascrizione,\s*self\.inner\.id,\s*&self\.tx_post_seq,\s*&action,?\s*\);",
+    "uscita": r"crate::remotek::trascrizione::uscita\(&mut conn\.trascrizione, &msg\);\s*let msg: &Message = &msg;",
+    "tick": r"_ = second_timer\.tick\(\) => \{(?:(?!\.tick\(\) =>).)*?if let Some\(t\) = conn\.trascrizione\.as_mut\(\) \{\s*t\.tick\(\);",
+}
+for nome, rx in attese.items():
+    if not re.search(rx, c, re.S):
+        guai.append("src/server/connection.rs: manca la cattura della trascrizione (%s)" % nome)
+for m in re.finditer(r"self\.terminal_persistent\s*=\s*([^;]*);", c):
+    if m.group(1).strip() not in ("false", "persistent"):
+        guai.append("src/server/connection.rs: terminal_persistent = %s (deve restare false)" % " ".join(m.group(1).split()))
+if re.search(r"\.update_terminal_persistence\(", c):
+    guai.append("src/server/connection.rs: update_terminal_persistence richiamata (la shell tornerebbe persistente)")
+if "crate::remotek::trascrizione::pulizia" not in codice("src/server.rs"):
+    guai.append("src/server.rs: manca la pulizia delle trascrizioni locali all'avvio del servizio")
+print("\n".join(guai))
+PY
+) || esito_trascr="${esito_trascr:-}"$'\n'"controllo della trascrizione non eseguito: python3 terminato con errore"
+if [ -z "$esito_trascr" ]; then
+  ok "sessioni terminale trascritte e non persistenti (ADR-0021, regole 5 e 6)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_trascr"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

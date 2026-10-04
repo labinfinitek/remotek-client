@@ -3,3 +3,4 @@
 #[cfg(target_os = "linux")]
 pub mod cli;
 pub mod firma;
+pub mod trascrizione;

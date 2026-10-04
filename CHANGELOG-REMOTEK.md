@@ -28,6 +28,20 @@ allineati tutti al gitlink di `libs/hbb_common`.
   la shell: il CLI esce con 255 e si perde l'uscita di un comando ancora in
   corso. Per avere il codice della shell si tiene stdin aperto e si manda
   `exit`.
+- Le sessioni terminale (dell'agente AI e dei tecnici) si registrano dal PC
+  del cliente: una copia va al server Remotek, dove il pannello la mostra e ne
+  verifica l'integrita', e una resta sul PC, nella cartella `terminale`
+  accanto a quella dei log del servizio (su Windows
+  `C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Remotek\terminale`),
+  un file per sessione, per 365 giorni: i file piu' vecchi si cancellano
+  all'avvio del servizio.
+
+### Modificato
+- **Per i tecnici**: una sessione terminale non resta piu' aperta dopo la
+  disconnessione, nemmeno se lo si chiede dalla finestra del terminale
+  ("persistente"): chiusa la connessione, la shell sul PC del cliente
+  termina. Una shell che sopravvive restava fuori dalla registrazione e dal
+  controllo del cliente.
 
 ### Sicurezza
 - Il PC firma con la sua chiave le richieste all'API (scheda del PC,

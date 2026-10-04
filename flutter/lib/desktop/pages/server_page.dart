@@ -21,6 +21,7 @@ import '../../common/widgets/chat_page.dart';
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
+import 'remotek_terminale_cm.dart';
 
 class DesktopServerPage extends StatefulWidget {
   const DesktopServerPage({Key? key}) : super(key: key);
@@ -273,6 +274,10 @@ class ConnectionManagerState extends State<ConnectionManager>
     final clientType = gFFI.serverModel.clients[selected].type_();
     if (clientType == ClientType.file) {
       return _FileTransferLogPage();
+    } else if (clientType == ClientType.terminal) {
+      // Remotek: la sessione terminale in sola lettura, al posto della chat.
+      return RemotekVistaTerminale(
+          connId: gFFI.serverModel.clients[selected].id);
     } else {
       return ChatPage(type: ChatPageType.desktopCM);
     }
@@ -543,10 +548,12 @@ class _CmHeaderState extends State<_CmHeader>
             offstage: !client.authorized ||
                 (client.type_() != ClientType.remote &&
                     client.type_() != ClientType.file &&
+                    client.type_() != ClientType.terminal &&
                     client.type_() != ClientType.camera),
             child: IconButton(
               onPressed: () => checkClickTime(client.id, () {
-                if (client.type_() == ClientType.file) {
+                if (client.type_() == ClientType.file ||
+                    client.type_() == ClientType.terminal) {
                   gFFI.chatModel.toggleCMFilePage();
                 } else {
                   gFFI.chatModel

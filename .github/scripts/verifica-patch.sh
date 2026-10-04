@@ -1701,7 +1701,9 @@ fi
 # controllato (src/remotek/trascrizione.rs) e la shell non sopravvive alla
 # connessione, qualunque cosa chieda il controllante. Un merge che toglie una
 # delle chiamate da src/server/connection.rs, o che riporta terminal_persistent
-# a seguire il controllante (login o opzione), deve fermarsi qui. Se python3
+# a seguire il controllante (login o opzione), o che toglie la vista del
+# terminale dal connection manager (il cliente la vede e la chiude),
+# deve fermarsi qui. Se python3
 # fallisce il controllo non e' eseguito ed e' un errore.
 esito_trascr=$(python3 - <<'PY'
 import re
@@ -1710,7 +1712,7 @@ def codice(f):
 guai = []
 c = codice("src/server/connection.rs")
 attese = {
-    "ingresso": r"Some\(message::Union::TerminalAction\(action\)\) => \{\s*if self\.terminal \{\s*crate::remotek::trascrizione::ingresso\(\s*&mut self\.trascrizione,\s*self\.inner\.id,\s*&self\.tx_post_seq,\s*&action,?\s*\);",
+    "ingresso": r"Some\(message::Union::TerminalAction\(action\)\) => \{\s*if self\.terminal \{\s*crate::remotek::trascrizione::ingresso\(\s*&mut self\.trascrizione,\s*self\.inner\.id,\s*&self\.tx_post_seq,\s*&self\.tx_to_cm,\s*&action,?\s*\);",
     "uscita": r"crate::remotek::trascrizione::uscita\(&mut conn\.trascrizione, &msg\);\s*let msg: &Message = &msg;",
     "tick": r"_ = second_timer\.tick\(\) => \{(?:(?!\.tick\(\) =>).)*?if let Some\(t\) = conn\.trascrizione\.as_mut\(\) \{\s*t\.tick\(\);",
 }
@@ -1722,6 +1724,12 @@ for m in re.finditer(r"self\.terminal_persistent\s*=\s*([^;]*);", c):
         guai.append("src/server/connection.rs: terminal_persistent = %s (deve restare false)" % " ".join(m.group(1).split()))
 if re.search(r"\.update_terminal_persistence\(", c):
     guai.append("src/server/connection.rs: update_terminal_persistence richiamata (la shell tornerebbe persistente)")
+# La vista del CM: l'output arriva al modello nostro e il pannello a lato di
+# un cliente terminale e' la vista in sola lettura.
+if "RemotekTerminaleCm.istanza.onEvento(evt);" not in codice("flutter/lib/models/model.dart"):
+    guai.append("flutter/lib/models/model.dart: l'output del terminale non arriva alla vista del CM")
+if not re.search(r"clientType == ClientType\.terminal\) \{\s*return RemotekVistaTerminale\(", codice("flutter/lib/desktop/pages/server_page.dart")):
+    guai.append("flutter/lib/desktop/pages/server_page.dart: il CM non mostra la vista del terminale")
 if "crate::remotek::trascrizione::pulizia" not in codice("src/server.rs"):
     guai.append("src/server.rs: manca la pulizia delle trascrizioni locali all'avvio del servizio")
 print("\n".join(guai))

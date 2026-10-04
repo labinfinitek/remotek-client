@@ -46,6 +46,7 @@ import '../common/widgets/dialog.dart';
 import 'input_model.dart';
 import 'platform_model.dart';
 import 'package:flutter_hbb/utils/scale.dart';
+import 'package:flutter_hbb/desktop/pages/remotek_terminale_cm.dart';
 
 import 'package:flutter_hbb/generated_bridge.dart'
     if (dart.library.html) 'package:flutter_hbb/web/bridge.dart';
@@ -458,6 +459,8 @@ class FfiModel with ChangeNotifier {
       } else if (name == "cm_file_transfer_log") {
         if (isDesktop) {
           gFFI.cmFileModel.onFileTransferLog(evt);
+          // Remotek: output dei terminali per la vista del CM.
+          RemotekTerminaleCm.istanza.onEvento(evt);
         }
       } else if (name == 'sync_peer_option') {
         _handleSyncPeerOption(evt, peerId);

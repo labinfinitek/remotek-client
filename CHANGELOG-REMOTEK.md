@@ -35,6 +35,11 @@ allineati tutti al gitlink di `libs/hbb_common`.
   `C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Remotek\terminale`),
   un file per sessione, per 365 giorni: i file piu' vecchi si cancellano
   all'avvio del servizio.
+- Il cliente vede la sessione terminale e puo' chiuderla: nella finestra
+  delle connessioni in entrata, accanto alla scheda di una sessione
+  terminale, si apre da solo il pannello con quello che la shell scrive,
+  dalla prima riga, in sola lettura; il pulsante "Disconnetti" chiude la
+  sessione e la shell sul PC.
 
 ### Modificato
 - **Per i tecnici**: una sessione terminale non resta piu' aperta dopo la

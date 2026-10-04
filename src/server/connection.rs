@@ -3682,6 +3682,7 @@ impl Connection {
                             &mut self.trascrizione,
                             self.inner.id,
                             &self.tx_post_seq,
+                            &self.tx_to_cm,
                             &action,
                         );
                     }

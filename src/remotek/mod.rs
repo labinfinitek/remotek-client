@@ -4,3 +4,4 @@
 pub mod cli;
 pub mod firma;
 pub mod trascrizione;
+pub mod vista_cm;

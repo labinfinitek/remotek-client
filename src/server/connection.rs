@@ -404,6 +404,8 @@ pub struct Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     terminal_user_token: Option<TerminalUserToken>,
     terminal_generic_service: Option<Box<GenericService>>,
+    // Remotek: trascrizione della sessione terminale (src/remotek/trascrizione.rs).
+    trascrizione: Option<crate::remotek::trascrizione::Trascrizione>,
 }
 
 impl ConnInner {
@@ -589,6 +591,7 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             terminal_user_token: None,
             terminal_generic_service: None,
+            trascrizione: None,
             conn_audit_primary_auth: ConnAuditPrimaryAuth::None,
             conn_audit_two_factor: ConnAuditTwoFactor::None,
         };
@@ -1044,6 +1047,7 @@ impl Connection {
                         }
                         _ => {}
                     }
+                    crate::remotek::trascrizione::uscita(&mut conn.trascrizione, &msg);
 
                     let msg: &Message = &msg;
                     if let Err(err) = conn.stream.send(msg).await {
@@ -1076,6 +1080,9 @@ impl Connection {
                         }
                     }
                     conn.file_remove_log_control.on_timer().drain(..).map(|x| conn.send_to_cm(x)).count();
+                    if let Some(t) = conn.trascrizione.as_mut() {
+                        t.tick();
+                    }
                     #[cfg(feature = "hwcodec")]
                     conn.update_supported_encoding();
                 }
@@ -2576,10 +2583,12 @@ impl Connection {
                     }
 
                     self.terminal = true;
-                    if let Some(o) = self.options_in_login.as_ref() {
-                        self.terminal_persistent =
-                            o.terminal_persistent.enum_value() == Ok(BoolOption::Yes);
-                    }
+                    // Remotek: la shell non sopravvive alla connessione, qualunque
+                    // cosa chieda il controllante (trascrizione e chiusura del cliente).
+                    // if let Some(o) = self.options_in_login.as_ref() {
+                    //     self.terminal_persistent =
+                    //         o.terminal_persistent.enum_value() == Ok(BoolOption::Yes);
+                    // }
                     self.terminal_service_id = terminal.service_id;
                 }
                 Some(login_request::Union::PortForward(mut pf)) => {
@@ -3668,6 +3677,12 @@ impl Connection {
                     }
                 }
                 Some(message::Union::TerminalAction(action)) => {
+                    crate::remotek::trascrizione::ingresso(
+                        &mut self.trascrizione,
+                        self.inner.id,
+                        &self.tx_post_seq,
+                        &action,
+                    );
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     allow_err!(self.handle_terminal_action(action).await);
                     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -4604,12 +4619,13 @@ impl Connection {
                 }
             }
         }
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if let Ok(q) = o.terminal_persistent.enum_value() {
-            if q != BoolOption::NotSet {
-                self.update_terminal_persistence(q == BoolOption::Yes).await;
-            }
-        }
+        // Remotek: la shell resta non persistente (vedi il login del terminale).
+        // #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        // if let Ok(q) = o.terminal_persistent.enum_value() {
+        //     if q != BoolOption::NotSet {
+        //         self.update_terminal_persistence(q == BoolOption::Yes).await;
+        //     }
+        // }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Ok(q) = o.show_my_cursor.enum_value() {
             if q != BoolOption::NotSet {
@@ -5733,6 +5749,7 @@ impl Connection {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[allow(dead_code)] // Remotek: non si chiama piu', la shell resta non persistente.
     async fn update_terminal_persistence(&mut self, persistent: bool) {
         self.terminal_persistent = persistent;
         terminal_service::set_persistent(&self.terminal_service_id, persistent).ok();

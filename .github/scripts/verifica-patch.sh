@@ -13,7 +13,8 @@
 # del marchio e i comandi che le chiavi bloccate lasciano senza effetto
 # (scheda 2FA, "Visualizza telecamera") che non si mostrano; la frase della
 # home che segue i tre casi di approve_mode() invece di promettere una
-# password; lo STUN solo sul server Infinitek.
+# password; lo STUN solo sul server Infinitek; le richieste del PC all'API
+# firmate con la sua chiave.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1649,6 +1650,50 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_cli"
+fi
+
+# --- 20. Il PC firma le richieste all'API -------------------------------------
+# ADR-0023 (REM-2026-006): l'uuid del PC va a hbbs in chiaro, quindi sysinfo,
+# heartbeat e audit (conn, file, alarm, tutti da post_audit_async) portano
+# l'intestazione X-Remotek-Firma di src/remotek/firma.rs, e il sysinfo la
+# chiave pubblica (`pk`). Un merge che riporta le intestazioni vuote di
+# upstream ("" come terzo argomento di post_request) deve fermarsi qui; resta
+# senza firma solo sysinfo_ver, che non e' una rotta del dispositivo. Se
+# python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_firma=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+s = codice("src/hbbs_http/sync.rs")
+chiamate = re.findall(r"crate::post_request\((.*?)\)\.await", s, re.S)
+firmate = [c for c in chiamate if "sysinfo_ver" not in c]
+if len(firmate) != 2:
+    guai.append("src/hbbs_http/sync.rs: attese 2 post_request da firmare (sysinfo, heartbeat), trovate %d" % len(firmate))
+for c in firmate:
+    if not re.search(r",\s*&firma\s*$", c):
+        guai.append("src/hbbs_http/sync.rs: post_request(%s) senza la firma" % " ".join(c.split()))
+if len(re.findall(r"crate::remotek::firma::intestazione\(", s)) != 2:
+    guai.append("src/hbbs_http/sync.rs: sysinfo e heartbeat non calcolano entrambi la firma")
+if 'v["pk"] = json!(crate::remotek::firma::chiave_pubblica())' not in s:
+    guai.append("src/hbbs_http/sync.rs: il sysinfo non porta la chiave pubblica (pk)")
+c = codice("src/server/connection.rs")
+m = re.search(r"async fn post_audit_async\(url: String, v: Value\) -> ResultType<String> \{(.*?)\n    \}", c, re.S)
+if not m:
+    guai.append("src/server/connection.rs: post_audit_async non trovata")
+elif "crate::remotek::firma::intestazione(&url, &corpo)" not in m.group(1) or not re.search(r"post_request\(url, corpo, &firma\)", m.group(1)):
+    guai.append("src/server/connection.rs: post_audit_async manda l'audit senza firma")
+if len(re.findall(r"crate::post_request\(", c)) != 1:
+    guai.append("src/server/connection.rs: un post_request fuori da post_audit_async")
+print("\n".join(guai))
+PY
+) || esito_firma="${esito_firma:-}"$'\n'"controllo della firma non eseguito: python3 terminato con errore"
+if [ -z "$esito_firma" ]; then
+  ok "sysinfo, heartbeat e audit del PC firmati, sysinfo con pk (ADR-0023)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_firma"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

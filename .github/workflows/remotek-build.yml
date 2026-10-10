@@ -198,6 +198,9 @@ jobs:
 
       # [upstream] flutter-build.yml:254-293
       - name: Build rustdesk
+        env:
+          # Remotek: il tag per il link ai sorgenti (build.py), vuoto se il ref non e' un tag.
+          REMOTEK_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           # Windows: build RustDesk
           # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix

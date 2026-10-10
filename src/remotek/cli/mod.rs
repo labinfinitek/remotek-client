@@ -15,7 +15,8 @@ const USO: &str = "uso:
                                stdin va al terminale del PC, il terminale su stdout;
                                si entra solo se il cliente accetta (attesa di default 120 s);
                                righe e colonne da 1 a 65535 (default 24 e 80);
-                               esce col codice del terminale (fuori da 0-255: 255);
+                               esce col codice del terminale (fuori da 0-255: 255); 0 anche
+                               quando il PC non conosce il codice della shell;
                                la fine di stdin chiude subito il terminale e la shell: per il
                                codice della shell si manda `exit` e si tiene stdin aperto";
 

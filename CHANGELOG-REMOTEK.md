@@ -25,6 +25,8 @@ allineati tutti al gitlink di `libs/hbb_common`.
   `--righe 40 --colonne 120` per la dimensione (default 24x80, al massimo
   65535 ciascuna).
   Il CLI esce col codice del terminale (un codice fuori da 0-255 diventa 255).
+  Lo 0 non prova che il comando sia riuscito: il PC manda 0 anche quando non
+  conosce il codice della shell.
   La fine di stdin (Ctrl-D) chiude subito il terminale sul PC e ne termina
   la shell: il CLI esce con 255 e si perde l'uscita di un comando ancora in
   corso. Per avere il codice della shell si tiene stdin aperto e si manda

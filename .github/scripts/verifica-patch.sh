@@ -56,15 +56,19 @@ else
     'RS_PUB_KEY e'"'"' una chiave di 32 byte in base64'
   non_contiene "$CFG" "RS_PUB_KEY: &str = \"$CHIAVE_UPSTREAM\"" \
     'RS_PUB_KEY non e'"'"' la chiave del server pubblico di RustDesk'
-  contiene "$CFG" 'static ref DEFAULT_SETTINGS.*OPTION_API_SERVER\.to_owned\(\), "https://[^"]+"' \
-    'API server di default impostato e in https (senza, il client ripiega su admin.rustdesk.com)'
   # OVERWRITE_SETTINGS si cerca dall'inizio della definizione e senza commenti:
   # a un merge, una nostra riga commentata accanto a quella upstream non basta.
   # Una sola definizione: la nostra dentro /* */ su righe proprie, o sotto un
   # #[cfg] che la esclude, lascerebbe compilare solo quella upstream.
   OVR='^[[:space:]]*pub static ref OVERWRITE_SETTINGS:'
-  non_contiene "$CFG" "$OVR"'.*(//|/\*)' \
-    'OVERWRITE_SETTINGS senza commenti nella riga della definizione'
+  # Le stringhe si tolgono prima: il "//" di https:// (api-server) non e' un
+  # commento.
+  riga_ovr=$(grep -E -- "$OVR" "$CFG" | sed -E 's/"([^"\\]|\\.)*"//g')
+  if printf '%s\n' "$riga_ovr" | grep -Eq -- '//|/\*'; then
+    errore "OVERWRITE_SETTINGS senza commenti nella riga della definizione  [$CFG]"
+  else
+    ok 'OVERWRITE_SETTINGS senza commenti nella riga della definizione'
+  fi
   n_ovr=$(grep -Ec -- "$OVR" "$CFG")
   if [ "$n_ovr" = 1 ]; then
     ok 'OVERWRITE_SETTINGS definito una sola volta'
@@ -138,6 +142,25 @@ PY
   # per questa chiave non significherebbe niente.
   contiene "$CFG" "$OVR"'.*OPTION_ACCESS_MODE\.to_owned\(\), ""\.to_owned\(\)' \
     'access-mode bloccata a vuota (con "full" il preset riaccende tre dei quattro default)'
+  # Server, chiave e API bloccati da remotek-1.4.9-3 (osservazione 7 del
+  # collaudo del -1): fino al -2 erano vuoti o solo un default, e Impostazioni >
+  # Rete, --option, --config o una strategia li scavalcavano. I valori vengono
+  # dalle costanti gia' controllate qui sopra, non da una seconda copia; il
+  # relay resta vuoto perche' lo indica hbbs. allow-insecure-tls-fallback a "N"
+  # (per il prefisso allow- option2bool accende solo "Y"): accesa, il nuovo
+  # tentativo HTTPS verso l'API accetterebbe un certificato qualunque.
+  contiene "$CFG" "$OVR"'.*OPTION_API_SERVER\.to_owned\(\), "https://[^"]+"\.to_owned\(\)' \
+    'API server bloccato e in https (senza, il client ripiega su admin.rustdesk.com e chiunque lo cambia)'
+  contiene "$CFG" "$OVR"'.*OPTION_CUSTOM_RENDEZVOUS_SERVER\.to_owned\(\), RENDEZVOUS_SERVERS\[0\]\.to_owned\(\)' \
+    'server ID bloccato sul server Remotek (Impostazioni > Rete non lo cambia)'
+  contiene "$CFG" "$OVR"'.*OPTION_KEY\.to_owned\(\), RS_PUB_KEY\.to_owned\(\)' \
+    'chiave del server bloccata su RS_PUB_KEY'
+  contiene "$CFG" "$OVR"'.*OPTION_RELAY_SERVER\.to_owned\(\), ""\.to_owned\(\)' \
+    'server relay bloccato a vuoto (lo indica hbbs)'
+  contiene "$CFG" "$OVR"'.*OPTION_ALLOW_INSECURE_TLS_FALLBACK\.to_owned\(\), "N"\.to_owned\(\)' \
+    'ripiego HTTPS con certificato non valido spento e bloccato (REM-2026-005)'
+  non_contiene "$CFG" 'static ref DEFAULT_SETTINGS.*OPTION_(API_SERVER|CUSTOM_RENDEZVOUS_SERVER|KEY|RELAY_SERVER)\b' \
+    'server, chiave e API non sono solo un default (si scavalcherebbero)'
 
   server=$(sed -nE 's/.*static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new\("([^"]*)".*/\1/p' "$CFG")
   elenco=$(sed -nE 's/^pub const RENDEZVOUS_SERVERS: &\[&str\] = &\["([^"]*)"\];.*/\1/p' "$CFG")

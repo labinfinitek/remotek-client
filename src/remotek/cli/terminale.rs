@@ -245,7 +245,11 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
         .get_id()
         .to_owned();
     let ciclo = session.clone();
+    let fine = FineSessione(tx.clone());
     std::thread::spawn(move || {
+        // Anche dopo un panic o un'uscita senza msgbox: `attendi` e il
+        // `Gestore` tengono un `tx`, quindi il canale non si chiude da solo.
+        let _fine = fine;
         let round = match ciclo.connection_round_state.lock() {
             Ok(mut stato) => stato.new_round(),
             Err(_) => return,
@@ -265,6 +269,18 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
     // non ne tiene.
     PeerConfig::remove(&id);
     esito
+}
+
+/// Quando il thread di `io_loop` finisce, comunque finisca, `attendi` lo sa.
+struct FineSessione(Sender<Evento>);
+
+impl Drop for FineSessione {
+    fn drop(&mut self) {
+        // Fallisce solo se il CLI sta gia' uscendo.
+        self.0
+            .send(Evento::Errore("la sessione e' finita".to_owned()))
+            .ok();
+    }
 }
 
 fn attendi(
@@ -481,6 +497,22 @@ mod tests {
         let attesa = evento_da_msgbox("wait-remote-accept-nook", "", "");
         assert_eq!(attesa, Some(Evento::Attesa));
         assert!(ciclo(vec![Evento::Attesa], 0).0.is_err());
+    }
+
+    #[test]
+    fn fine_del_ciclo_senza_msgbox_e_un_errore() {
+        for panic in [false, true] {
+            let (tx, rx) = channel();
+            let fine = FineSessione(tx.clone());
+            let ciclo = std::thread::spawn(move || {
+                let _fine = fine;
+                assert!(!panic, "io_loop in panic");
+            });
+            assert_eq!(ciclo.join().is_err(), panic);
+            let session = Session::<Gestore>::default();
+            let esito = attendi(&session, &rx, tx, Duration::from_secs(5), 24, 80);
+            assert_eq!(esito, Err("la sessione e' finita".to_owned()));
+        }
     }
 
     #[test]

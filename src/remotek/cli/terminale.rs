@@ -212,6 +212,17 @@ fn sessione(id: &str, gestore: Gestore) -> Result<Session<Gestore>, String> {
             lc.get_id()
         ));
     }
+    // Il servizio terminale di un CLI ucciso prima di `PeerConfig::remove`:
+    // `create_login_msg` (src/client.rs) ne manderebbe l'id e il PC
+    // riattaccherebbe la sessione a quella shell.
+    let mut config = lc.load_config();
+    if config
+        .options
+        .remove(lc.get_key_terminal_service_id())
+        .is_some()
+    {
+        lc.save_config(config);
+    }
     drop(lc);
     Ok(session)
 }
@@ -555,6 +566,28 @@ mod tests {
         let esito = sessione(&format!("{id}/r"), Gestore::default());
         PeerConfig::remove(id);
         assert!(esito.is_err());
+    }
+
+    #[test]
+    fn servizio_terminale_rimasto_non_si_riattacca() {
+        let _ambiente = AMBIENTE.lock().unwrap();
+        let id = "remotek-cli-test-servizio";
+        let mut config = PeerConfig::default();
+        config
+            .options
+            .insert("terminal-service-id".into(), "ts_vecchio".into());
+        config.store(id);
+        let session = sessione(id, Gestore::default()).unwrap();
+        let lc = session.lc.read().unwrap();
+        // Il valore che `create_login_msg` mette in `Terminal::service_id`.
+        let mandato = lc.get_option(lc.get_key_terminal_service_id());
+        let salvato = PeerConfig::load(id)
+            .options
+            .get("terminal-service-id")
+            .cloned();
+        PeerConfig::remove(id);
+        assert_eq!(mandato, "");
+        assert_eq!(salvato, None);
     }
 
     #[test]

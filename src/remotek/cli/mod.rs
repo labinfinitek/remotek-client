@@ -14,7 +14,9 @@ const USO: &str = "uso:
   remotek-cli terminal <ID> [--attesa <secondi>] [--righe <n>] [--colonne <n>]
                                stdin va al terminale del PC, il terminale su stdout;
                                si entra solo se il cliente accetta (attesa di default 120 s);
-                               esce col codice del terminale (fuori da 0-255: 255);
+                               righe e colonne da 1 a 65535 (default 24 e 80);
+                               esce col codice del terminale (fuori da 0-255: 255); 0 anche
+                               quando il PC non conosce il codice della shell;
                                la fine di stdin chiude subito il terminale e la shell: per il
                                codice della shell si manda `exit` e si tiene stdin aperto";
 
@@ -48,10 +50,12 @@ fn leggi_terminale(id: &str, opzioni: &[&str]) -> Result<Comando, String> {
     let mut resto = opzioni.chunks(2);
     while let Some(coppia) = resto.next() {
         let valore = |v: Option<&&str>| v.and_then(|v| v.parse::<u32>().ok()).filter(|n| *n > 0);
+        // Il PC converte righe e colonne in u16 (src/server/terminal_service.rs).
+        let dimensione = |n: u32| n <= u32::from(u16::MAX);
         match (coppia.first(), valore(coppia.get(1))) {
             (Some(&"--attesa"), Some(n)) => attesa = n,
-            (Some(&"--righe"), Some(n)) => righe = n,
-            (Some(&"--colonne"), Some(n)) => colonne = n,
+            (Some(&"--righe"), Some(n)) if dimensione(n) => righe = n,
+            (Some(&"--colonne"), Some(n)) if dimensione(n) => colonne = n,
             _ => return Err("argomenti non validi".to_owned()),
         }
     }
@@ -188,6 +192,10 @@ mod tests {
             ]),
             Ok(t(30, 24, 132))
         );
+        assert_eq!(
+            leggi(&["terminal", "123456789", "--righe", "65535"]),
+            Ok(t(120, 65535, 80))
+        );
     }
 
     #[test]
@@ -205,6 +213,8 @@ mod tests {
             &["terminal", "--attesa", "10"],
             &["terminal", "123456789", "--attesa"],
             &["terminal", "123456789", "--attesa", "-1"],
+            &["terminal", "123456789", "--righe", "65536"],
+            &["terminal", "123456789", "--colonne", "4294967295"],
             &["terminal", "123456789/r"],
             &["terminal", "123456789@server"],
             &[],

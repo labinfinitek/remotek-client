@@ -25,7 +25,7 @@ const INTESTAZIONE: &str = "X-Remotek-Firma";
 /// decide l'API, che la rifiuta se il PC ha una chiave registrata.
 pub fn intestazione(url: &str, corpo: &str) -> String {
     match firma_ora(url, corpo) {
-        Ok(valore) => format!("{}: {}", INTESTAZIONE, valore),
+        Ok(valore) => riga(&valore),
         Err(e) => {
             log::error!(
                 "firma della richiesta a {} non riuscita: {}",
@@ -35,6 +35,11 @@ pub fn intestazione(url: &str, corpo: &str) -> String {
             String::new()
         }
     }
+}
+
+/// "X-Remotek-Firma: <valore>", la riga che `crate::post_request` divide su ": ".
+fn riga(valore: &str) -> String {
+    format!("{}: {}", INTESTAZIONE, valore)
 }
 
 /// La chiave pubblica Ed25519 del PC in base64 standard, il campo `pk` del
@@ -72,8 +77,11 @@ fn valore(metodo: &str, percorso: &str, ts: u64, corpo: &[u8], sk: &sign::Secret
 }
 
 /// Il percorso dell'URL, senza schema, host, query e frammento. Con un'API
-/// dietro un prefisso (`https://host/prefisso`) il prefisso resta: il README
-/// vuole il percorso che arriva all'API.
+/// dietro un prefisso (`https://host/prefisso`) il prefisso resta nel
+/// percorso firmato, mentre il README vuole il percorso che arriva all'API:
+/// dietro un reverse proxy che toglie il prefisso la firma non torna e l'API
+/// rifiuta le richieste del PC. L'API va servita senza prefisso, o con un
+/// proxy che lo lascia.
 fn percorso(url: &str) -> &str {
     let dopo_host = match url.find("://") {
         Some(i) => &url[i + 3..],
@@ -118,6 +126,11 @@ mod tests {
             v,
             "1791000000.otUjpW4BdAQnl0TuN1E/GmD3LAx38zzpYTczckv70y3hYSIVtkA7urCTqftTR9BXPMoDc//+nyxItL73nbrHCw=="
         );
+        // La riga intera del README: nome e separatore compresi.
+        assert_eq!(
+            riga(&v),
+            "X-Remotek-Firma: 1791000000.otUjpW4BdAQnl0TuN1E/GmD3LAx38zzpYTczckv70y3hYSIVtkA7urCTqftTR9BXPMoDc//+nyxItL73nbrHCw=="
+        );
     }
 
     #[test]
@@ -129,9 +142,8 @@ mod tests {
         #[allow(deprecated)]
         let byte = hbb_common::base64::decode(firma).unwrap();
         assert_eq!(byte.len(), sign::SIGNATUREBYTES);
-        let riga = format!("{}: {}", INTESTAZIONE, v);
         // post_request divide l'intestazione su ": " e la usa solo se le parti sono due.
-        assert_eq!(riga.split(": ").count(), 2);
+        assert_eq!(riga(&v).split(": ").count(), 2);
     }
 
     #[test]

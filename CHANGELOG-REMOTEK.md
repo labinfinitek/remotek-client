@@ -22,7 +22,8 @@ allineati tutti al gitlink di `libs/hbb_common`.
   solo dopo che il cliente accetta la finestra, mai come amministratore. Uso:
   `remotek-cli terminal 123456789` (stdin va al terminale, l'uscita su stdout);
   `--attesa 300` per aspettare il clic fino a 5 minuti (default 120 secondi);
-  `--righe 40 --colonne 120` per la dimensione (default 24x80).
+  `--righe 40 --colonne 120` per la dimensione (default 24x80, al massimo
+  65535 ciascuna).
   Il CLI esce col codice del terminale (un codice fuori da 0-255 diventa 255).
   La fine di stdin (Ctrl-D) chiude subito il terminale sul PC e ne termina
   la shell: il CLI esce con 255 e si perde l'uscita di un comando ancora in

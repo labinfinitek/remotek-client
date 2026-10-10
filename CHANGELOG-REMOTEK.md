@@ -3,10 +3,11 @@
 Formato: Keep a Changelog 1.1.0, in italiano. Versioni: `remotek-<upstream>-<n>`.
 Una riga per cambiamento visibile a chi usa o installa il client; la sezione
 "Sicurezza" e' obbligatoria per ogni correzione di sicurezza.
-Gli sha `hbb_common` fra parentesi sono sempre lo stesso: il commit del
-submodule che l'eseguibile di questa versione porta con se', non quello che
-introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 li tiene
-allineati tutti al gitlink di `libs/hbb_common`.
+Gli sha `hbb_common` fra parentesi, in ogni versione, sono il commit del
+submodule che l'eseguibile di quella versione porta con se', non quello che
+introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 tiene quelli di
+"Non rilasciato" allineati al gitlink di `libs/hbb_common`; le versioni
+rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 

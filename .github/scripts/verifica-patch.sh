@@ -1105,10 +1105,14 @@ fi
 # del submodule compaia da qualche parte: bastava una riga aggiornata e le altre
 # restavano scadute con il controllo verde, che e' il difetto che questa sezione
 # deve impedire. Si pretende quindi che OGNI sha citato come ``hbb_common `...` ``
-# sia un prefisso del gitlink, e che ce ne sia almeno uno. La convenzione ("e'
-# sempre il commit del submodule, non quello che introdusse il cambiamento") e'
-# scritta in testa al changelog: se un giorno si vuole citare anche il commit di
-# origine, prima si cambia quella e poi questa sezione.
+# nella sezione "Non rilasciato" sia un prefisso del gitlink, e che il gitlink
+# sia citato almeno una volta. Le sezioni delle versioni rilasciate citano
+# l'hbb_common che quell'exe porta con se' e non si riscrivono: dal primo bump
+# dopo un rilascio (remotek-1.4.9-3) non coincidono piu' col gitlink. La
+# convenzione ("e' il commit del submodule dell'exe di quella versione, non
+# quello che introdusse il cambiamento") e' scritta in testa al changelog: se un
+# giorno si vuole citare anche il commit di origine, prima si cambia quella e
+# poi questa sezione.
 SUB=libs/hbb_common
 sha_sub=$(git ls-tree HEAD "$SUB" | awk '$2 == "commit" { print $3 }')
 if [ -z "$sha_sub" ]; then
@@ -1128,21 +1132,25 @@ except OSError as e:
 
 # "hbb_common `2b42505`" e non "`libs/hbb_common` dal fork": dopo il nome ci
 # vuole almeno uno spazio, poi lo sha fra apici inversi.
-citazioni = re.findall(r"hbb_common\s+`([0-9a-fA-F]{7,40})`", testo)
-if not citazioni:
-    print("%s non cita nessuno sha di hbb_common (atteso %s): manca il puntatore "
+cita = re.compile(r"hbb_common\s+`([0-9a-fA-F]{7,40})`")
+citazioni = cita.findall(testo)
+if not any(sha.startswith(c.lower()) for c in citazioni):
+    print("%s non cita lo sha di hbb_common del submodule (%s): manca il puntatore "
           "con cui si lega l'eseguibile consegnato ai sorgenti dei suoi valori "
           "di fabbrica" % (percorso, sha[:7]))
-    raise SystemExit
 
-scadute = sorted({c for c in citazioni if not sha.startswith(c.lower())})
+m = re.search(r"^## \[Non rilasciato\]\s*$(.*?)(?=^## \[|\Z)", testo, re.M | re.S)
+if not m:
+    print("%s: manca la sezione \"## [Non rilasciato]\"" % percorso)
+    raise SystemExit
+scadute = sorted({c for c in cita.findall(m.group(1)) if not sha.startswith(c.lower())})
 if scadute:
-    print("%s cita %d sha di hbb_common che non sono quello del submodule (%s): %s"
+    print("%s cita in \"Non rilasciato\" %d sha di hbb_common che non sono quello del submodule (%s): %s"
           % (percorso, len(scadute), sha[:7], ", ".join(scadute)))
 PY
 ) || esito_sha="${esito_sha:-}"$'\n'"controllo del puntatore a hbb_common non eseguito: python3 terminato con errore"
   if [ -z "$esito_sha" ]; then
-    ok "CHANGELOG-REMOTEK.md cita l'hbb_common del submodule (${sha_sub:0:7}) e nessun altro"
+    ok "CHANGELOG-REMOTEK.md cita l'hbb_common del submodule (${sha_sub:0:7}) e in \"Non rilasciato\" nessun altro"
   else
     while IFS= read -r r; do
       [ -n "$r" ] && errore "$r: chi lega l'exe consegnato ai sorgenti dei default leggerebbe uno sha scaduto  [CHANGELOG-REMOTEK.md]"

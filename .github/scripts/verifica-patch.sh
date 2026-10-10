@@ -1683,6 +1683,8 @@ if not m:
     guai.append("src/server/connection.rs: post_audit_async non trovata")
 elif "crate::remotek::firma::intestazione(&url, &corpo)" not in m.group(1) or not re.search(r"post_request\(url, corpo, &firma\)", m.group(1)):
     guai.append("src/server/connection.rs: post_audit_async manda l'audit senza firma")
+if '"ms": crate::remotek::firma::ora_ms(),' not in c:
+    guai.append("src/server/connection.rs: l'audit dei file senza il campo ms (due audit uguali avrebbero la stessa firma)")
 if len(re.findall(r"crate::post_request\(", c)) != 1:
     guai.append("src/server/connection.rs: un post_request fuori da post_audit_async")
 print("\n".join(guai))

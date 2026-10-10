@@ -5,6 +5,7 @@
 
 use hbb_common::{bail, config::Config, log, sodiumoxide::crypto::sign, ResultType};
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const VERSIONE: &str = "remotek-api-v1";
@@ -16,9 +17,10 @@ const INTESTAZIONE: &str = "X-Remotek-Firma";
 ///
 /// La firma Ed25519 e' deterministica: due richieste identiche nello stesso
 /// secondo hanno la stessa firma e l'API rifiuta la seconda come ripetuta.
-/// Oggi non succede: l'heartbeat parte ogni 3 o 15 secondi con corpi diversi,
-/// gli audit hanno corpi diversi. Un PC con l'orologio sbagliato di piu' di 5
-/// minuti e' rifiutato.
+/// L'heartbeat parte ogni 3 o 15 secondi con corpi diversi; gli audit dei
+/// file, che possono ripetersi uguali (lo stesso file mandato due volte),
+/// portano il campo `ms` di [`ora_ms`]. Un PC con l'orologio sbagliato di
+/// piu' di 5 minuti e' rifiutato.
 ///
 /// Se la firma non si puo' fare (chiave del PC illeggibile, orologio prima del
 /// 1970) lo scrive nel log e restituisce "": la richiesta parte senza firma e
@@ -34,6 +36,22 @@ pub fn intestazione(url: &str, corpo: &str) -> String {
             );
             String::new()
         }
+    }
+}
+
+/// I millisecondi UNIX, strettamente crescenti nel processo: il campo `ms`
+/// degli audit dei file, che li distingue anche nello stesso millisecondo.
+/// L'API ignora i campi che non conosce. Con l'orologio prima del 1970 parte
+/// da 0 e cresce lo stesso.
+pub fn ora_ms() -> u64 {
+    static ULTIMA: AtomicU64 = AtomicU64::new(0);
+    let ora = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let prossima = |ultima: u64| ora.max(ultima.saturating_add(1));
+    // La chiusura restituisce sempre Some: Ok e Err portano lo stesso valore.
+    match ULTIMA.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |u| Some(prossima(u))) {
+        Ok(ultima) | Err(ultima) => prossima(ultima),
     }
 }
 
@@ -144,6 +162,20 @@ mod tests {
         assert_eq!(byte.len(), sign::SIGNATUREBYTES);
         // post_request divide l'intestazione su ": " e la usa solo se le parti sono due.
         assert_eq!(riga(&v).split(": ").count(), 2);
+    }
+
+    #[test]
+    fn audit_dei_file_uguali_nello_stesso_secondo_firme_diverse() {
+        let (_, sk) = chiavi_di_prova();
+        let corpo = || {
+            serde_json::json!({"id": "999000111", "path": "C:\\a.txt", "ms": ora_ms()}).to_string()
+        };
+        let (a, b) = (corpo(), corpo());
+        assert_ne!(a, b);
+        let firma = |c: &str| valore("POST", "/api/audit/file", 1791000000, c.as_bytes(), &sk);
+        assert_ne!(firma(&a), firma(&b));
+        let prima = ora_ms();
+        assert!(ora_ms() > prima);
     }
 
     #[test]

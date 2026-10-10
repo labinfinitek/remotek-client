@@ -560,7 +560,10 @@ class _CmHeaderState extends State<_CmHeader>
                       .toggleCMChatPage(MessageKey(client.peerId, client.id));
                 }
               }),
-              icon: SvgPicture.asset(client.type_() == ClientType.file
+              // Remotek: il pannello di un terminale e' la sua vista, non la
+              // chat; negli asset non c'e' un'icona del terminale.
+              icon: SvgPicture.asset(client.type_() == ClientType.file ||
+                      client.type_() == ClientType.terminal
                   ? 'assets/file_transfer.svg'
                   : 'assets/chat2.svg'),
               splashRadius: kDesktopIconButtonSplashRadius,

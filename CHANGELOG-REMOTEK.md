@@ -44,7 +44,8 @@ rilasciate non si riscrivono.
   delle connessioni in entrata, accanto alla scheda di una sessione
   terminale, si apre da solo il pannello con quello che la shell scrive,
   dalla prima riga, in sola lettura; il pulsante "Disconnetti" chiude la
-  sessione e la shell sul PC.
+  sessione e la shell sul PC. Il pulsante che apre e chiude il pannello ha
+  l'icona dei file, non quella della chat.
 
 ### Modificato
 - Il link "sorgenti" del dialogo Informazioni porta ai sorgenti del tag da cui

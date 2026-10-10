@@ -33,9 +33,10 @@ allineati tutti al gitlink di `libs/hbb_common`.
   `exit`.
 - Le sessioni terminale (dell'agente AI e dei tecnici) si registrano dal PC
   del cliente: una copia va al server Remotek, dove il pannello la mostra e ne
-  verifica l'integrita', e una resta sul PC, nella cartella `terminale`
-  accanto a quella dei log del servizio (su Windows
-  `C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Remotek\terminale`),
+  verifica l'integrita', e una resta sul PC, nella cartella `terminale` di
+  Remotek (su Windows
+  `C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Remotek\terminale`,
+  su Linux `~/.config/remotek/terminale` dell'utente del servizio),
   un file per sessione, per 365 giorni: i file piu' vecchi si cancellano
   all'avvio del servizio.
 - Il cliente vede la sessione terminale e puo' chiuderla: nella finestra

@@ -71,6 +71,35 @@ else
   else
     errore "OVERWRITE_SETTINGS definito $n_ovr volte, atteso 1 (una riga dentro /* */ o sotto #[cfg]?)  [$CFG]"
   fi
+  # Una chiave ripetuta nella riga: HashMap::from tiene l'ultima coppia, quindi
+  # i controlli qui sopra e sotto, che trovano la prima con il valore giusto,
+  # passerebbero anche con una seconda, piu' avanti, che la smentisce. La
+  # chiave si confronta per valore: keys::OPTION_* diventa la stringa della sua
+  # costante, perche' la stessa chiave si puo' scrivere anche come stringa
+  # (come "2fa"), e con .to_owned() o .to_string().
+  esito_rip=$(CFG="$CFG" python3 - <<'PY'
+import os, re
+testo = open(os.environ["CFG"], encoding="utf-8").read()
+costanti = dict(re.findall(r'pub const (OPTION_[A-Z0-9_]+): &str = "([^"]*)";', testo))
+righe = [r for r in testo.splitlines() if re.match(r"\s*pub static ref OVERWRITE_SETTINGS:", r)]
+chiavi = []
+for r in righe:
+    for nome, letterale in re.findall(r'\(\s*(?:keys::(OPTION_[A-Z0-9_]+)|"([^"]*)")\s*\.to_(?:owned|string)\(\)\s*,', r):
+        if nome and nome not in costanti:
+            print("costante %s senza valore in config.rs: la chiave ripetuta non e' controllata" % nome)
+        chiavi.append(costanti.get(nome, nome) if nome else letterale)
+ripetute = sorted({c for c in chiavi if chiavi.count(c) > 1})
+if ripetute:
+    print("chiavi ripetute in OVERWRITE_SETTINGS (vale l'ultima): %s" % ", ".join(ripetute))
+PY
+) || esito_rip="${esito_rip:-}"$'\n'"controllo delle chiavi ripetute non eseguito: python3 terminato con errore"
+  if [ -z "$esito_rip" ]; then
+    ok 'nessuna chiave ripetuta in OVERWRITE_SETTINGS (confronto per valore)'
+  else
+    while IFS= read -r r; do
+      [ -n "$r" ] && errore "$r  [$CFG]"
+    done <<<"$esito_rip"
+  fi
   contiene "$CFG" "$OVR"'.*OPTION_ALLOW_AUTO_UPDATE\.to_owned\(\), "N"' \
     'auto-update upstream spento in OVERWRITE_SETTINGS'
   contiene "$CFG" "$OVR"'.*OPTION_APPROVE_MODE\.to_owned\(\), "click"' \

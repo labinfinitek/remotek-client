@@ -47,6 +47,10 @@ rilasciate non si riscrivono.
   sessione e la shell sul PC.
 
 ### Modificato
+- Il link "sorgenti" del dialogo Informazioni porta ai sorgenti del tag da cui
+  e' stato costruito l'exe (per esempio
+  `https://github.com/labinfinitek/remotek-client/tree/remotek-1.4.9-3`); un
+  exe costruito fuori da un tag porta al repo.
 - **Per i tecnici**: una sessione terminale non resta piu' aperta dopo la
   disconnessione, nemmeno se lo si chiede dalla finestra del terminale
   ("persistente"): chiusa la connessione, la shell sul PC del cliente

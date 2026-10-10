@@ -443,8 +443,15 @@ def build_flutter_windows(version, features, skip_portable_pack):
         if not os.path.exists("target/release/librustdesk.dll"):
             print("cargo build failed, please check rust source code.")
             exit(-1)
+    # Remotek: il tag del build (remotek-build.yml, solo se il ref e' un tag)
+    # per il link ai sorgenti del dialogo Informazioni.
+    remotek_tag = os.environ.get('REMOTEK_TAG', '')
+    if not all(c.isascii() and (c.isalnum() or c in '._-') for c in remotek_tag):
+        print(f'REMOTEK_TAG non valido: {remotek_tag!r}')
+        exit(-1)
+    remotek_define = f' --dart-define=REMOTEK_TAG={remotek_tag}' if remotek_tag else ''
     os.chdir('flutter')
-    system2('flutter build windows --release')
+    system2('flutter build windows --release' + remotek_define)
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)

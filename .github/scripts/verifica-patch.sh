@@ -80,18 +80,53 @@ else
   # passerebbero anche con una seconda, piu' avanti, che la smentisce. La
   # chiave si confronta per valore: keys::OPTION_* diventa la stringa della sua
   # costante, perche' la stessa chiave si puo' scrivere anche come stringa
-  # (come "2fa"), e con .to_owned() o .to_string().
+  # (come "2fa"), e con .to_owned() o .to_string(). Una chiave scritta in un
+  # altro modo (.into(), String::from(...)) il confronto non la vede: per
+  # questo le tuple della riga si contano e devono essere quante le chiavi
+  # riconosciute.
   esito_rip=$(CFG="$CFG" python3 - <<'PY'
 import os, re
 testo = open(os.environ["CFG"], encoding="utf-8").read()
 costanti = dict(re.findall(r'pub const (OPTION_[A-Z0-9_]+): &str = "([^"]*)";', testo))
 righe = [r for r in testo.splitlines() if re.match(r"\s*pub static ref OVERWRITE_SETTINGS:", r)]
+
+def tuple_della_mappa(r):
+    """Le tuple dentro HashMap::from([...]): le "(" al primo livello della
+    lista, con le stringhe saltate. None se la lista non si trova o non chiude."""
+    i = r.find("HashMap::from([")
+    if i < 0:
+        return None
+    i += len("HashMap::from([")
+    profondita, n = 0, 0
+    while i < len(r):
+        c = r[i]
+        if c == '"':
+            i += 1
+            while i < len(r) and r[i] != '"':
+                i += 2 if r[i] == "\\" else 1
+        elif c in "([{":
+            if c == "(" and profondita == 0:
+                n += 1
+            profondita += 1
+        elif c in ")]}":
+            if profondita == 0:
+                return n if c == "]" else None
+            profondita -= 1
+        i += 1
+    return None
+
 chiavi = []
 for r in righe:
-    for nome, letterale in re.findall(r'\(\s*(?:keys::(OPTION_[A-Z0-9_]+)|"([^"]*)")\s*\.to_(?:owned|string)\(\)\s*,', r):
+    trovate = re.findall(r'\(\s*(?:keys::(OPTION_[A-Z0-9_]+)|"([^"]*)")\s*\.to_(?:owned|string)\(\)\s*,', r)
+    for nome, letterale in trovate:
         if nome and nome not in costanti:
             print("costante %s senza valore in config.rs: la chiave ripetuta non e' controllata" % nome)
         chiavi.append(costanti.get(nome, nome) if nome else letterale)
+    n = tuple_della_mappa(r)
+    if n is None:
+        print("HashMap::from([...]) non trovata o non chiusa nella riga di OVERWRITE_SETTINGS: le chiavi non sono contate")
+    elif n != len(trovate):
+        print("OVERWRITE_SETTINGS ha %d coppie ma solo %d chiavi scritte come keys::OPTION_*.to_owned() o \"...\".to_owned(): una chiave scritta in un altro modo (.into(), String::from) puo' ripeterne una e vincere" % (n, len(trovate)))
 ripetute = sorted({c for c in chiavi if chiavi.count(c) > 1})
 if ripetute:
     print("chiavi ripetute in OVERWRITE_SETTINGS (vale l'ultima): %s" % ", ".join(ripetute))

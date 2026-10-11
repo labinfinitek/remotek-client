@@ -82,7 +82,8 @@ void showServerSettingsWithValue(
   final controllers = [idCtrl, relayCtrl, apiCtrl, keyCtrl];
   // Remotek (ADR-0025): con le quattro chiavi in OVERWRITE_SETTINGS "OK" e
   // l'import scriverebbero valori che si scartano senza messaggio; il dialogo
-  // le mostra in sola lettura. Con un custom.txt che ne sblocca una, upstream.
+  // le mostra in sola lettura. Un custom.txt non le sblocca: read_custom_client
+  // aggiunge soltanto a OVERWRITE_SETTINGS (REMOTEK.md).
   final bloccato = [
     'custom-rendezvous-server',
     'relay-server',

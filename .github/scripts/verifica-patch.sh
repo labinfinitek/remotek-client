@@ -14,7 +14,7 @@
 # (scheda 2FA, "Visualizza telecamera") che non si mostrano; la frase della
 # home che segue i tre casi di approve_mode() invece di promettere una
 # password; lo STUN solo sul server Infinitek; le richieste del PC all'API
-# firmate con la sua chiave.
+# firmate con la sua chiave; il dialogo del server bloccato senza l'import.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -80,18 +80,53 @@ else
   # passerebbero anche con una seconda, piu' avanti, che la smentisce. La
   # chiave si confronta per valore: keys::OPTION_* diventa la stringa della sua
   # costante, perche' la stessa chiave si puo' scrivere anche come stringa
-  # (come "2fa"), e con .to_owned() o .to_string().
+  # (come "2fa"), e con .to_owned() o .to_string(). Una chiave scritta in un
+  # altro modo (.into(), String::from(...)) il confronto non la vede: per
+  # questo le tuple della riga si contano e devono essere quante le chiavi
+  # riconosciute.
   esito_rip=$(CFG="$CFG" python3 - <<'PY'
 import os, re
 testo = open(os.environ["CFG"], encoding="utf-8").read()
 costanti = dict(re.findall(r'pub const (OPTION_[A-Z0-9_]+): &str = "([^"]*)";', testo))
 righe = [r for r in testo.splitlines() if re.match(r"\s*pub static ref OVERWRITE_SETTINGS:", r)]
+
+def tuple_della_mappa(r):
+    """Le tuple dentro HashMap::from([...]): le "(" al primo livello della
+    lista, con le stringhe saltate. None se la lista non si trova o non chiude."""
+    i = r.find("HashMap::from([")
+    if i < 0:
+        return None
+    i += len("HashMap::from([")
+    profondita, n = 0, 0
+    while i < len(r):
+        c = r[i]
+        if c == '"':
+            i += 1
+            while i < len(r) and r[i] != '"':
+                i += 2 if r[i] == "\\" else 1
+        elif c in "([{":
+            if c == "(" and profondita == 0:
+                n += 1
+            profondita += 1
+        elif c in ")]}":
+            if profondita == 0:
+                return n if c == "]" else None
+            profondita -= 1
+        i += 1
+    return None
+
 chiavi = []
 for r in righe:
-    for nome, letterale in re.findall(r'\(\s*(?:keys::(OPTION_[A-Z0-9_]+)|"([^"]*)")\s*\.to_(?:owned|string)\(\)\s*,', r):
+    trovate = re.findall(r'\(\s*(?:keys::(OPTION_[A-Z0-9_]+)|"([^"]*)")\s*\.to_(?:owned|string)\(\)\s*,', r)
+    for nome, letterale in trovate:
         if nome and nome not in costanti:
             print("costante %s senza valore in config.rs: la chiave ripetuta non e' controllata" % nome)
         chiavi.append(costanti.get(nome, nome) if nome else letterale)
+    n = tuple_della_mappa(r)
+    if n is None:
+        print("HashMap::from([...]) non trovata o non chiusa nella riga di OVERWRITE_SETTINGS: le chiavi non sono contate")
+    elif n != len(trovate):
+        print("OVERWRITE_SETTINGS ha %d coppie ma solo %d chiavi scritte come keys::OPTION_*.to_owned() o \"...\".to_owned(): una chiave scritta in un altro modo (.into(), String::from) puo' ripeterne una e vincere" % (n, len(trovate)))
 ripetute = sorted({c for c in chiavi if chiavi.count(c) > 1})
 if ripetute:
     print("chiavi ripetute in OVERWRITE_SETTINGS (vale l'ultima): %s" % ", ".join(ripetute))
@@ -1430,7 +1465,8 @@ fi
 #     divergono di nuovo (il trattino non e' la condizione della frase -- lo
 #     mostra anche a servizio fermo e con la sola password permanente -- ma se
 #     smettesse di seguire 'click' andrebbe riletto tutto il punto);
-# (d) le tre chiavi esistono e non sono vuote in it.rs e in en.rs: src/lang.rs
+# (d) le tre chiavi, e remotek_una_sessione della tray (src/tray.rs), esistono
+#     e non sono vuote in it.rs e in en.rs: src/lang.rs
 #     per una chiave mancante o vuota ripiega su en::T e poi stampa il NOME
 #     della chiave. Sul lab non si compila e non si apre la finestra: questo
 #     controllo e' l'unico posto in cui quell'errore si vede, ed e' anche la
@@ -1454,8 +1490,8 @@ LINGUE = (("src/lang/it.rs", "italiano"),
           ("src/lang/en.rs", "inglese, ripiego di tutte le altre lingue"))
 
 PROMESSA = "la home tornerebbe a promettere al cliente una password che non esiste"
-NOME = ("la home mostrerebbe la frase inglese, o il nome della chiave se manca "
-        "anche in en.rs")
+NOME = ("la home (o la tray) mostrerebbe la frase inglese, o il nome della "
+        "chiave se manca anche in en.rs")
 CLIC = ("la frase della home prometterebbe un'accettazione che il binario non "
         "chiede")
 
@@ -1521,7 +1557,7 @@ if c is not None:
               "_approveMode == 'click': rileggere la frase della home, che e' "
               "legata alla stessa impostazione" % SM, PROMESSA)
 
-# (d) le tre chiavi, in tutte e due le lingue che le hanno.
+# (d) le quattro chiavi, in tutte e due le lingue che le hanno.
 for percorso, che in LINGUE:
     try:
         testo = open(percorso, encoding="utf-8", errors="replace").read()
@@ -1529,7 +1565,8 @@ for percorso, che in LINGUE:
         guaio("%s non leggibile (%s): le chiavi della frase della home non "
               "sono controllate" % (percorso, e), NOME)
         continue
-    for chiave in CHIAVI:
+    # Con le tre della home anche quella della tray (src/tray.rs).
+    for chiave in CHIAVI + ("remotek_una_sessione",):
         valori = re.findall(r'\("%s",\s*"([^"]*)"\)' % chiave, testo)
         pieni = [v for v in valori if v.strip()]
         if len(valori) != 1 or not pieni:
@@ -1557,7 +1594,7 @@ print("\n".join(guai))
 PY
 ) || esito_frase="${esito_frase:-}"$'\n'"controllo della frase della home non eseguito: python3 terminato con errore"
 if [ -z "$esito_frase" ]; then
-  ok "la frase della home segue i tre casi di approve_mode(), le tre chiavi ci sono in italiano e in inglese e allow-logon-screen-password non e' accesa di fabbrica"
+  ok "la frase della home segue i tre casi di approve_mode(), le quattro chiavi remotek_* ci sono in italiano e in inglese e allow-logon-screen-password non e' accesa di fabbrica"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
@@ -1673,7 +1710,9 @@ fi
 # ADR-0021, regole 2 e 3 (la Conferma): il CLI entra solo col clic del
 # cliente e mai come amministratore. Nel codice di src/remotek/ e di
 # src/remotek_cli.rs, fuori dai test: nessun os_login, nessuna variabile
-# d'ambiente letta (env::var, env::vars), nessuna opzione o file per la
+# d'ambiente letta (env::var, env::vars, env::var_os, anche importate con
+# `use`, rinominate con `as`, con lo spazio prima di "(" o col turbofish),
+# nessuna opzione o file per la
 # password (custom.txt compreso), e IS_TERMINAL_ADMIN solo per toglierla
 # dall'ambiente (LoginConfigHandler::initialize la legge). I commenti si
 # tolgono leggendo il Rust (un "//" dentro una stringa non e' un commento) e
@@ -1681,7 +1720,12 @@ fi
 # o col suo ";" (un `use`). La controprova e' controprova-sez19.sh.
 esito_cli=$(python3 - <<'PY2'
 import glob, re
-VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|env::vars?(_os)?\(|set_var\(|--pass|password_preset|shared_password")
+# Il percorso, non la chiamata: `use std::env::var;` o `use std::env::var as x;`
+# seguiti da var(..) o x(..) non hanno piu' "env::" accanto alla chiamata.
+VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|\benv\s*::\s*vars?(_os)?\b|\benv\s+as\b|set_var\(|--pass|password_preset|shared_password")
+# Un `use std::env::{..., var, ...};`, anche su piu' righe.
+IMPORTA_VAR = re.compile(r"\benv\s*::\s*\{[^}]*\bvars?(_os)?\b")
+STRINGA_GREZZA = re.compile(r'b?r(#*)"')
 
 def leggi(testo):
     """Il codice senza commenti, due volte, riga per riga e della stessa
@@ -1712,9 +1756,9 @@ def leggi(testo):
             con.append(pezzo); senza.append(pezzo)
             i = j
             continue
-        m = re.match(r'b?r(#*)"', testo[i:])
+        m = STRINGA_GREZZA.match(testo, i)
         if m and (i == 0 or not (testo[i - 1].isalnum() or testo[i - 1] == "_")):
-            j = stringa(i + m.end(), '"' + m.group(1))
+            j = stringa(m.end(), '"' + m.group(1))
         elif c == '"':
             j = i + 1
             while j < n and testo[j] != '"':
@@ -1738,6 +1782,7 @@ FILE = sorted(glob.glob("src/remotek/**/*.rs", recursive=True)) + ["src/remotek_
 for f in FILE:
     con, senza = leggi(open(f, encoding="utf-8").read())
     test, aperto, profondita = False, False, 0
+    vive = []  # le righe fuori dai test, per IMPORTA_VAR
     for n, (codice, spoglia) in enumerate(zip(con, senza), 1):
         inizio = 0
         if not test and spoglia.strip().startswith("#[cfg(test)]"):
@@ -1754,8 +1799,10 @@ for f in FILE:
                     test, inizio = False, k + 1
                     break
             else:
+                vive.append("")
                 continue
         codice = codice[inizio:]
+        vive.append(codice)
         if VIETATI.search(codice):
             guai.append("%s:%d: %s" % (f, n, codice.strip()))
         if "IS_TERMINAL_ADMIN" in codice:
@@ -1763,6 +1810,10 @@ for f in FILE:
                 toglie = True
             else:
                 guai.append("%s:%d: IS_TERMINAL_ADMIN non solo tolta" % (f, n))
+    tutto = "\n".join(vive)
+    for m in IMPORTA_VAR.finditer(tutto):
+        riga = tutto.count("\n", 0, m.start()) + 1
+        guai.append("%s:%d: %s (importa %s)" % (f, riga, vive[riga - 1].strip(), " ".join(m.group(0).split())))
 if not toglie:
     guai.append("src/remotek: IS_TERMINAL_ADMIN non e' tolta dall'ambiente")
 print("\n".join(guai))
@@ -1867,6 +1918,40 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_trascr"
+fi
+
+# --- 22. Il dialogo del server bloccato non importa ----------------------------
+# ADR-0025: con server, relay, API e chiave bloccati il dialogo "ID/Relay
+# Server" (flutter/lib/mobile/widgets/dialog.dart) toglie l'import con
+# .sublist(1), cioe' togliendo il primo dei due widget di
+# ServerConfigImportExportWidgets (flutter/lib/common/widgets/
+# setting_widgets.dart, file di upstream). Se upstream cambia l'ordine o mette
+# un widget davanti, sparirebbe l'export e l'import resterebbe: il primo
+# elemento della lista deve essere il Tooltip 'Import server config'. Se
+# python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_dialogo=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r for r in open(f, encoding="utf-8").read().splitlines() if not r.lstrip().startswith("//"))
+guai = []
+SW = "flutter/lib/common/widgets/setting_widgets.dart"
+DLG = "flutter/lib/mobile/widgets/dialog.dart"
+corpi = re.findall(r"^List<Widget> ServerConfigImportExportWidgets\((.*?)^\}$", codice(SW), re.M | re.S)
+if len(corpi) != 1:
+    guai.append("%s: le definizioni di ServerConfigImportExportWidgets sono %d, attesa 1" % (SW, len(corpi)))
+elif not re.search(r"return \[\s*Tooltip\(\s*message:\s*translate\('Import server config'\)", corpi[0]):
+    guai.append("%s: il primo widget di ServerConfigImportExportWidgets non e' piu' il Tooltip 'Import server config': il .sublist(1) del dialogo bloccato toglierebbe altro e lascerebbe l'import" % SW)
+if ".sublist(bloccato ? 1 : 0)" not in codice(DLG):
+    guai.append("%s: il dialogo del server non toglie piu' l'import quando le quattro chiavi sono bloccate" % DLG)
+print("\n".join(guai))
+PY
+) || esito_dialogo="${esito_dialogo:-}"$'\n'"controllo del dialogo del server non eseguito: python3 terminato con errore"
+if [ -z "$esito_dialogo" ]; then
+  ok "il dialogo del server bloccato toglie l'import, primo widget di ServerConfigImportExportWidgets (ADR-0025)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_dialogo"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

@@ -256,11 +256,7 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
         .get_id()
         .to_owned();
     let ciclo = session.clone();
-    let fine = FineSessione(tx.clone());
-    std::thread::spawn(move || {
-        // Anche dopo un panic o un'uscita senza msgbox: `attendi` e il
-        // `Gestore` tengono un `tx`, quindi il canale non si chiude da solo.
-        let _fine = fine;
+    avvia_ciclo(FineSessione(tx.clone()), move || {
         let round = match ciclo.connection_round_state.lock() {
             Ok(mut stato) => stato.new_round(),
             Err(_) => return,
@@ -280,6 +276,19 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
     // non ne tiene.
     PeerConfig::remove(&id);
     esito
+}
+
+/// Fa girare `ciclo` (`io_loop`) in un thread che tiene `fine` fino alla fine.
+fn avvia_ciclo(
+    fine: FineSessione,
+    ciclo: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        // Anche dopo un panic o un'uscita senza msgbox: `attendi` e il
+        // `Gestore` tengono un `tx`, quindi il canale non si chiude da solo.
+        let _fine = fine;
+        ciclo();
+    })
 }
 
 /// Quando il thread di `io_loop` finisce, comunque finisca, `attendi` lo sa.
@@ -514,11 +523,15 @@ mod tests {
     fn fine_del_ciclo_senza_msgbox_e_un_errore() {
         for panic in [false, true] {
             let (tx, rx) = channel();
-            let fine = FineSessione(tx.clone());
-            let ciclo = std::thread::spawn(move || {
-                let _fine = fine;
+            let (via, attesa) = channel::<()>();
+            let ciclo = avvia_ciclo(FineSessione(tx.clone()), move || {
+                attesa.recv().unwrap();
                 assert!(!panic, "io_loop in panic");
             });
+            // Finche' il ciclo gira la guardia tace: senza `let _fine = fine;`
+            // in `avvia_ciclo` parlerebbe subito.
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+            via.send(()).unwrap();
             assert_eq!(ciclo.join().is_err(), panic);
             let session = Session::<Gestore>::default();
             let esito = attendi(&session, &rx, tx, Duration::from_secs(5), 24, 80);

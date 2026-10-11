@@ -53,5 +53,21 @@ caso 'std::env::vars()' src/remotek/firma.rs \
   'fn spia_controprova() -> usize { std::env::vars().count() }'
 caso 'src/remotek_cli.rs' src/remotek_cli.rs \
   'fn spia_controprova() -> bool { std::env::var("X").is_ok() }'
+# Nei casi con `use` la spia sta sulla stessa riga: l'errore cita quella.
+caso 'use std::env::var; poi var(..)' src/remotek/firma.rs \
+  'use std::env::var; fn spia_controprova() -> bool { var("X").is_ok() }'
+caso 'use std::env::var as x; poi x(..)' src/remotek/firma.rs \
+  'use std::env::var as x; fn spia_controprova() -> bool { x("X").is_ok() }'
+caso 'use std::env as e; poi e::var(..)' src/remotek/firma.rs \
+  'use std::env as e; fn spia_controprova() -> bool { e::var("X").is_ok() }'
+caso 'use std::env::{..., var} su piu'"'"' righe' src/remotek/firma.rs \
+  'fn spia_controprova() -> bool { true } use std::env::{
+    args,
+    var,
+};'
+caso 'env::var ("X") con lo spazio' src/remotek/firma.rs \
+  'fn spia_controprova() -> bool { std::env::var ("X").is_ok() }'
+caso 'env::var::<&str>(..)' src/remotek/firma.rs \
+  'fn spia_controprova() -> bool { std::env::var::<&str>("X").is_ok() }'
 
 exit "$guai"

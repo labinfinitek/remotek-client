@@ -7,6 +7,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("remotek_desk_tip_click", "Un tecnico può collegarsi a questo computer usando l'ID qui sotto. La connessione parte solo dopo che l'hai accettata."),
         ("remotek_desk_tip_password", "Un tecnico può collegarsi a questo computer usando l'ID qui sotto e la password di accesso remoto."),
         ("remotek_desk_tip_both", "Un tecnico può collegarsi a questo computer usando l'ID qui sotto. Se ha la password di accesso remoto entra subito, altrimenti la connessione parte solo dopo che l'hai accettata."),
+        ("remotek_una_sessione", "1 sessione"),
         ("Password", "Password"),
         ("Ready", "Pronto"),
         ("Established", "Stabilita"),

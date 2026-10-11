@@ -212,6 +212,17 @@ fn sessione(id: &str, gestore: Gestore) -> Result<Session<Gestore>, String> {
             lc.get_id()
         ));
     }
+    // Il servizio terminale di un CLI ucciso prima di `PeerConfig::remove`:
+    // `create_login_msg` (src/client.rs) ne manderebbe l'id e il PC
+    // riattaccherebbe la sessione a quella shell.
+    let mut config = lc.load_config();
+    if config
+        .options
+        .remove(lc.get_key_terminal_service_id())
+        .is_some()
+    {
+        lc.save_config(config);
+    }
     drop(lc);
     Ok(session)
 }
@@ -245,7 +256,11 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
         .get_id()
         .to_owned();
     let ciclo = session.clone();
+    let fine = FineSessione(tx.clone());
     std::thread::spawn(move || {
+        // Anche dopo un panic o un'uscita senza msgbox: `attendi` e il
+        // `Gestore` tengono un `tx`, quindi il canale non si chiude da solo.
+        let _fine = fine;
         let round = match ciclo.connection_round_state.lock() {
             Ok(mut stato) => stato.new_round(),
             Err(_) => return,
@@ -265,6 +280,18 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
     // non ne tiene.
     PeerConfig::remove(&id);
     esito
+}
+
+/// Quando il thread di `io_loop` finisce, comunque finisca, `attendi` lo sa.
+struct FineSessione(Sender<Evento>);
+
+impl Drop for FineSessione {
+    fn drop(&mut self) {
+        // Fallisce solo se il CLI sta gia' uscendo.
+        self.0
+            .send(Evento::Errore("la sessione e' finita".to_owned()))
+            .ok();
+    }
 }
 
 fn attendi(
@@ -484,6 +511,22 @@ mod tests {
     }
 
     #[test]
+    fn fine_del_ciclo_senza_msgbox_e_un_errore() {
+        for panic in [false, true] {
+            let (tx, rx) = channel();
+            let fine = FineSessione(tx.clone());
+            let ciclo = std::thread::spawn(move || {
+                let _fine = fine;
+                assert!(!panic, "io_loop in panic");
+            });
+            assert_eq!(ciclo.join().is_err(), panic);
+            let session = Session::<Gestore>::default();
+            let esito = attendi(&session, &rx, tx, Duration::from_secs(5), 24, 80);
+            assert_eq!(esito, Err("la sessione e' finita".to_owned()));
+        }
+    }
+
+    #[test]
     fn connessione_non_cifrata_rifiutata() {
         let evento = evento_da_msgbox("insecure-connection-nocancel-hasclose", "", "");
         assert_eq!(evento, Some(Evento::NonCifrata));
@@ -523,6 +566,28 @@ mod tests {
         let esito = sessione(&format!("{id}/r"), Gestore::default());
         PeerConfig::remove(id);
         assert!(esito.is_err());
+    }
+
+    #[test]
+    fn servizio_terminale_rimasto_non_si_riattacca() {
+        let _ambiente = AMBIENTE.lock().unwrap();
+        let id = "remotek-cli-test-servizio";
+        let mut config = PeerConfig::default();
+        config
+            .options
+            .insert("terminal-service-id".into(), "ts_vecchio".into());
+        config.store(id);
+        let session = sessione(id, Gestore::default()).unwrap();
+        let lc = session.lc.read().unwrap();
+        // Il valore che `create_login_msg` mette in `Terminal::service_id`.
+        let mandato = lc.get_option(lc.get_key_terminal_service_id());
+        let salvato = PeerConfig::load(id)
+            .options
+            .get("terminal-service-id")
+            .cloned();
+        PeerConfig::remove(id);
+        assert_eq!(mandato, "");
+        assert_eq!(salvato, None);
     }
 
     #[test]

@@ -64,6 +64,8 @@ jobs:
         env:
           VERIFICA_RIGIDA: "1"
         run: bash .github/scripts/verifica-patch.sh
+      - name: Controprova della sez. 19
+        run: bash .github/scripts/controprova-sez19.sh
 
   workflow-audit:
     name: workflow-audit

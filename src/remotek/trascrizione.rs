@@ -3,7 +3,7 @@
 //! terminale": ogni sessione terminale si trascrive dal PC controllato, a
 //! blocchi numerati con hash concatenato; una copia va all'API
 //! (`POST /api/audit/terminal`), una resta sul PC, nella cartella `terminale`
-//! accanto a quella dei log del servizio.
+//! di Remotek (vedi `cartella`).
 //!
 //! Un blocco e' di una sola direzione e di un solo `terminal_id`: si accumulano
 //! i byte consecutivi e il blocco parte quando cambia direzione o terminale,
@@ -239,8 +239,17 @@ fn riga(b: &Blocco, ora_ms: u128) -> String {
     .to_string()
 }
 
+/// Su Windows accanto ai log del servizio (`...\Remotek\terminale` nel suo
+/// profilo); altrove sotto la cartella di configurazione di Remotek, perche'
+/// la cartella dei log li' non e' dentro quella di Remotek (su Linux
+/// `~/.local/share/logs/<APP_NAME>`). `None` se la cartella non si conosce.
 fn cartella() -> Option<PathBuf> {
-    Some(Config::log_path().parent()?.join(CARTELLA))
+    #[cfg(windows)]
+    let c = Config::log_path().parent()?.join(CARTELLA);
+    #[cfg(not(windows))]
+    let c = Config::path(CARTELLA);
+    // `Config::path` senza cartella di configurazione restituisce un percorso relativo.
+    c.is_absolute().then_some(c)
 }
 
 /// Scrive le righe in un thread suo, per non bloccare il ciclo della
@@ -629,6 +638,24 @@ mod tests {
         let b = a.fine(1).expect("fine");
         api.manda(&b);
         assert!(api.fermo && rx.try_recv().is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn cartella_dentro_quella_di_remotek() {
+        let c = cartella().expect("cartella");
+        assert_eq!(c, Config::path("").join(CARTELLA));
+        // Su Linux `directories_next` scrive il nome in minuscolo.
+        let app = hbb_common::config::APP_NAME.read().unwrap().to_lowercase();
+        assert!(
+            c.components().any(|p| p
+                .as_os_str()
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(&app)),
+            "{c:?}"
+        );
+        assert!(!c.starts_with(Config::log_path().parent().expect("log")));
     }
 
     fn cartella_di_prova(nome: &str) -> PathBuf {

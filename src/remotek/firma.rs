@@ -5,6 +5,7 @@
 
 use hbb_common::{bail, config::Config, log, sodiumoxide::crypto::sign, ResultType};
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const VERSIONE: &str = "remotek-api-v1";
@@ -16,16 +17,17 @@ const INTESTAZIONE: &str = "X-Remotek-Firma";
 ///
 /// La firma Ed25519 e' deterministica: due richieste identiche nello stesso
 /// secondo hanno la stessa firma e l'API rifiuta la seconda come ripetuta.
-/// Oggi non succede: l'heartbeat parte ogni 3 o 15 secondi con corpi diversi,
-/// gli audit hanno corpi diversi. Un PC con l'orologio sbagliato di piu' di 5
-/// minuti e' rifiutato.
+/// L'heartbeat parte ogni 3 o 15 secondi con corpi diversi; gli audit dei
+/// file, che possono ripetersi uguali (lo stesso file mandato due volte),
+/// portano il campo `ms` di [`ora_ms`]. Un PC con l'orologio sbagliato di
+/// piu' di 5 minuti e' rifiutato.
 ///
 /// Se la firma non si puo' fare (chiave del PC illeggibile, orologio prima del
 /// 1970) lo scrive nel log e restituisce "": la richiesta parte senza firma e
 /// decide l'API, che la rifiuta se il PC ha una chiave registrata.
 pub fn intestazione(url: &str, corpo: &str) -> String {
     match firma_ora(url, corpo) {
-        Ok(valore) => format!("{}: {}", INTESTAZIONE, valore),
+        Ok(valore) => riga(&valore),
         Err(e) => {
             log::error!(
                 "firma della richiesta a {} non riuscita: {}",
@@ -35,6 +37,27 @@ pub fn intestazione(url: &str, corpo: &str) -> String {
             String::new()
         }
     }
+}
+
+/// I millisecondi UNIX, strettamente crescenti nel processo: il campo `ms`
+/// degli audit dei file, che li distingue anche nello stesso millisecondo.
+/// L'API ignora i campi che non conosce. Con l'orologio prima del 1970 parte
+/// da 0 e cresce lo stesso.
+pub fn ora_ms() -> u64 {
+    static ULTIMA: AtomicU64 = AtomicU64::new(0);
+    let ora = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let prossima = |ultima: u64| ora.max(ultima.saturating_add(1));
+    // La chiusura restituisce sempre Some: Ok e Err portano lo stesso valore.
+    match ULTIMA.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |u| Some(prossima(u))) {
+        Ok(ultima) | Err(ultima) => prossima(ultima),
+    }
+}
+
+/// "X-Remotek-Firma: <valore>", la riga che `crate::post_request` divide su ": ".
+fn riga(valore: &str) -> String {
+    format!("{}: {}", INTESTAZIONE, valore)
 }
 
 /// La chiave pubblica Ed25519 del PC in base64 standard, il campo `pk` del
@@ -72,8 +95,11 @@ fn valore(metodo: &str, percorso: &str, ts: u64, corpo: &[u8], sk: &sign::Secret
 }
 
 /// Il percorso dell'URL, senza schema, host, query e frammento. Con un'API
-/// dietro un prefisso (`https://host/prefisso`) il prefisso resta: il README
-/// vuole il percorso che arriva all'API.
+/// dietro un prefisso (`https://host/prefisso`) il prefisso resta nel
+/// percorso firmato, mentre il README vuole il percorso che arriva all'API:
+/// dietro un reverse proxy che toglie il prefisso la firma non torna e l'API
+/// rifiuta le richieste del PC. L'API va servita senza prefisso, o con un
+/// proxy che lo lascia.
 fn percorso(url: &str) -> &str {
     let dopo_host = match url.find("://") {
         Some(i) => &url[i + 3..],
@@ -118,6 +144,11 @@ mod tests {
             v,
             "1791000000.otUjpW4BdAQnl0TuN1E/GmD3LAx38zzpYTczckv70y3hYSIVtkA7urCTqftTR9BXPMoDc//+nyxItL73nbrHCw=="
         );
+        // La riga intera del README: nome e separatore compresi.
+        assert_eq!(
+            riga(&v),
+            "X-Remotek-Firma: 1791000000.otUjpW4BdAQnl0TuN1E/GmD3LAx38zzpYTczckv70y3hYSIVtkA7urCTqftTR9BXPMoDc//+nyxItL73nbrHCw=="
+        );
     }
 
     #[test]
@@ -129,9 +160,22 @@ mod tests {
         #[allow(deprecated)]
         let byte = hbb_common::base64::decode(firma).unwrap();
         assert_eq!(byte.len(), sign::SIGNATUREBYTES);
-        let riga = format!("{}: {}", INTESTAZIONE, v);
         // post_request divide l'intestazione su ": " e la usa solo se le parti sono due.
-        assert_eq!(riga.split(": ").count(), 2);
+        assert_eq!(riga(&v).split(": ").count(), 2);
+    }
+
+    #[test]
+    fn audit_dei_file_uguali_nello_stesso_secondo_firme_diverse() {
+        let (_, sk) = chiavi_di_prova();
+        let corpo = || {
+            serde_json::json!({"id": "999000111", "path": "C:\\a.txt", "ms": ora_ms()}).to_string()
+        };
+        let (a, b) = (corpo(), corpo());
+        assert_ne!(a, b);
+        let firma = |c: &str| valore("POST", "/api/audit/file", 1791000000, c.as_bytes(), &sk);
+        assert_ne!(firma(&a), firma(&b));
+        let prima = ora_ms();
+        assert!(ora_ms() > prima);
     }
 
     #[test]

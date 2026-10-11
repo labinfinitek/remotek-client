@@ -48,6 +48,9 @@ rilasciate non si riscrivono.
   l'icona dei file, non quella della chat.
 
 ### Modificato
+- Impostazioni > Rete > Server ID/Relay mostra i valori di Remotek in sola
+  lettura: non c'e' piu' "OK" ne' l'import dagli appunti, che prima
+  dicevano "riuscito" senza cambiare niente e sloggavano il tecnico.
 - Il link "sorgenti" del dialogo Informazioni porta ai sorgenti del tag da cui
   e' stato costruito l'exe (per esempio
   `https://github.com/labinfinitek/remotek-client/tree/remotek-1.4.9-3`); un

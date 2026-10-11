@@ -80,6 +80,15 @@ void showServerSettingsWithValue(
   RxString apiServerMsg = ''.obs;
 
   final controllers = [idCtrl, relayCtrl, apiCtrl, keyCtrl];
+  // Remotek (ADR-0025): con le quattro chiavi in OVERWRITE_SETTINGS "OK" e
+  // l'import scriverebbero valori che si scartano senza messaggio; il dialogo
+  // le mostra in sola lettura. Con un custom.txt che ne sblocca una, upstream.
+  final bloccato = [
+    'custom-rendezvous-server',
+    'relay-server',
+    'api-server',
+    'key'
+  ].every((k) => isOptionFixed(k));
   final errMsgs = [
     idServerMsg,
     relayServerMsg,
@@ -126,6 +135,7 @@ void showServerSettingsWithValue(
                 showLabelText: false,
                 validator: validator,
                 autofocus: autofocus,
+                readOnly: bloccato,
               ).workaroundFreezeLinuxMint(),
             ),
           ],
@@ -137,6 +147,7 @@ void showServerSettingsWithValue(
         controller: controller,
         errorMsg: errorMsg,
         validator: validator,
+        readOnly: bloccato,
       ).workaroundFreezeLinuxMint();
     }
 
@@ -144,7 +155,9 @@ void showServerSettingsWithValue(
       title: Row(
         children: [
           Expanded(child: Text(translate('ID/Relay Server'))),
-          ...ServerConfigImportExportWidgets(controllers, errMsgs),
+          // Remotek: bloccato, resta solo l'export (il primo e' l'import).
+          ...ServerConfigImportExportWidgets(controllers, errMsgs)
+              .sublist(bloccato ? 1 : 0),
         ],
       ),
       content: ConstrainedBox(
@@ -187,9 +200,10 @@ void showServerSettingsWithValue(
         ),
       ),
       actions: [
-        dialogButton('Cancel', onPressed: () {
+        dialogButton(bloccato ? 'Close' : 'Cancel', onPressed: () {
           close();
         }, isOutline: true),
+        if (!bloccato)
         dialogButton(
           'OK',
           onPressed: () async {
@@ -215,9 +229,11 @@ TextFormField serverSettingsTextFormField({
   bool autofocus = false,
   bool showLabelText = true,
   EdgeInsetsGeometry? contentPadding,
+  bool readOnly = false,
 }) {
   return TextFormField(
     controller: controller,
+    readOnly: readOnly,
     decoration: InputDecoration(
       labelText: showLabelText ? label : null,
       errorText: errorMsg.isEmpty ? null : errorMsg,

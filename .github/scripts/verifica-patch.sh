@@ -1708,7 +1708,9 @@ fi
 # ADR-0021, regole 2 e 3 (la Conferma): il CLI entra solo col clic del
 # cliente e mai come amministratore. Nel codice di src/remotek/ e di
 # src/remotek_cli.rs, fuori dai test: nessun os_login, nessuna variabile
-# d'ambiente letta (env::var, env::vars), nessuna opzione o file per la
+# d'ambiente letta (env::var, env::vars, env::var_os, anche importate con
+# `use`, rinominate con `as`, con lo spazio prima di "(" o col turbofish),
+# nessuna opzione o file per la
 # password (custom.txt compreso), e IS_TERMINAL_ADMIN solo per toglierla
 # dall'ambiente (LoginConfigHandler::initialize la legge). I commenti si
 # tolgono leggendo il Rust (un "//" dentro una stringa non e' un commento) e
@@ -1716,7 +1718,12 @@ fi
 # o col suo ";" (un `use`). La controprova e' controprova-sez19.sh.
 esito_cli=$(python3 - <<'PY2'
 import glob, re
-VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|env::vars?(_os)?\(|set_var\(|--pass|password_preset|shared_password")
+# Il percorso, non la chiamata: `use std::env::var;` o `use std::env::var as x;`
+# seguiti da var(..) o x(..) non hanno piu' "env::" accanto alla chiamata.
+VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|\benv\s*::\s*vars?(_os)?\b|\benv\s+as\b|set_var\(|--pass|password_preset|shared_password")
+# Un `use std::env::{..., var, ...};`, anche su piu' righe.
+IMPORTA_VAR = re.compile(r"\benv\s*::\s*\{[^}]*\bvars?(_os)?\b")
+STRINGA_GREZZA = re.compile(r'b?r(#*)"')
 
 def leggi(testo):
     """Il codice senza commenti, due volte, riga per riga e della stessa
@@ -1747,9 +1754,9 @@ def leggi(testo):
             con.append(pezzo); senza.append(pezzo)
             i = j
             continue
-        m = re.match(r'b?r(#*)"', testo[i:])
+        m = STRINGA_GREZZA.match(testo, i)
         if m and (i == 0 or not (testo[i - 1].isalnum() or testo[i - 1] == "_")):
-            j = stringa(i + m.end(), '"' + m.group(1))
+            j = stringa(m.end(), '"' + m.group(1))
         elif c == '"':
             j = i + 1
             while j < n and testo[j] != '"':
@@ -1773,6 +1780,7 @@ FILE = sorted(glob.glob("src/remotek/**/*.rs", recursive=True)) + ["src/remotek_
 for f in FILE:
     con, senza = leggi(open(f, encoding="utf-8").read())
     test, aperto, profondita = False, False, 0
+    vive = []  # le righe fuori dai test, per IMPORTA_VAR
     for n, (codice, spoglia) in enumerate(zip(con, senza), 1):
         inizio = 0
         if not test and spoglia.strip().startswith("#[cfg(test)]"):
@@ -1789,8 +1797,10 @@ for f in FILE:
                     test, inizio = False, k + 1
                     break
             else:
+                vive.append("")
                 continue
         codice = codice[inizio:]
+        vive.append(codice)
         if VIETATI.search(codice):
             guai.append("%s:%d: %s" % (f, n, codice.strip()))
         if "IS_TERMINAL_ADMIN" in codice:
@@ -1798,6 +1808,10 @@ for f in FILE:
                 toglie = True
             else:
                 guai.append("%s:%d: IS_TERMINAL_ADMIN non solo tolta" % (f, n))
+    tutto = "\n".join(vive)
+    for m in IMPORTA_VAR.finditer(tutto):
+        riga = tutto.count("\n", 0, m.start()) + 1
+        guai.append("%s:%d: %s (importa %s)" % (f, riga, vive[riga - 1].strip(), " ".join(m.group(0).split())))
 if not toglie:
     guai.append("src/remotek: IS_TERMINAL_ADMIN non e' tolta dall'ambiente")
 print("\n".join(guai))

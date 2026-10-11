@@ -14,7 +14,7 @@
 # (scheda 2FA, "Visualizza telecamera") che non si mostrano; la frase della
 # home che segue i tre casi di approve_mode() invece di promettere una
 # password; lo STUN solo sul server Infinitek; le richieste del PC all'API
-# firmate con la sua chiave.
+# firmate con la sua chiave; il dialogo del server bloccato senza l'import.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1916,6 +1916,40 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_trascr"
+fi
+
+# --- 22. Il dialogo del server bloccato non importa ----------------------------
+# ADR-0025: con server, relay, API e chiave bloccati il dialogo "ID/Relay
+# Server" (flutter/lib/mobile/widgets/dialog.dart) toglie l'import con
+# .sublist(1), cioe' togliendo il primo dei due widget di
+# ServerConfigImportExportWidgets (flutter/lib/common/widgets/
+# setting_widgets.dart, file di upstream). Se upstream cambia l'ordine o mette
+# un widget davanti, sparirebbe l'export e l'import resterebbe: il primo
+# elemento della lista deve essere il Tooltip 'Import server config'. Se
+# python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_dialogo=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r for r in open(f, encoding="utf-8").read().splitlines() if not r.lstrip().startswith("//"))
+guai = []
+SW = "flutter/lib/common/widgets/setting_widgets.dart"
+DLG = "flutter/lib/mobile/widgets/dialog.dart"
+corpi = re.findall(r"^List<Widget> ServerConfigImportExportWidgets\((.*?)^\}$", codice(SW), re.M | re.S)
+if len(corpi) != 1:
+    guai.append("%s: le definizioni di ServerConfigImportExportWidgets sono %d, attesa 1" % (SW, len(corpi)))
+elif not re.search(r"return \[\s*Tooltip\(\s*message:\s*translate\('Import server config'\)", corpi[0]):
+    guai.append("%s: il primo widget di ServerConfigImportExportWidgets non e' piu' il Tooltip 'Import server config': il .sublist(1) del dialogo bloccato toglierebbe altro e lascerebbe l'import" % SW)
+if ".sublist(bloccato ? 1 : 0)" not in codice(DLG):
+    guai.append("%s: il dialogo del server non toglie piu' l'import quando le quattro chiavi sono bloccate" % DLG)
+print("\n".join(guai))
+PY
+) || esito_dialogo="${esito_dialogo:-}"$'\n'"controllo del dialogo del server non eseguito: python3 terminato con errore"
+if [ -z "$esito_dialogo" ]; then
+  ok "il dialogo del server bloccato toglie l'import, primo widget di ServerConfigImportExportWidgets (ADR-0025)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_dialogo"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

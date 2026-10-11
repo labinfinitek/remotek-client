@@ -11,6 +11,21 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-3] - 2026-10-11
+Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti
+al tag `remotek-1.4.9-3` di remotek-client e remotek-hbb-common
+(hbb_common `df5cf4f`, cambiato rispetto a `remotek-1.4.9-2`: server,
+chiave e API bloccati). Con l'exe c'e' `remotek-cli` per Linux, per l'agente
+AI di Infinitek.
+**Per chi installa**: serve l'API `api-v0.5.0` sul server. Con una versione
+precedente il PC funziona, ma le trascrizioni del terminale restano solo
+sul PC e la firma delle richieste non si verifica. L'orologio del PC
+dev'essere giusto, entro 5 minuti. Si installa sopra la versione
+precedente. Server, chiave e API non si cambiano piu' dal PC: un PC di prova
+su un altro server richiede un `custom.txt` firmato da Infinitek.
+**Per i tecnici**: le sessioni terminale non restano aperte dopo la
+chiusura e il cliente le vede nella sua finestra e puo' chiuderle.
+
 ### Aggiunto
 - `remotek-cli`, client a riga di comando per Linux, per l'agente AI di
   Infinitek (non per i clienti; l'exe Windows non cambia). Per chi installa
@@ -49,8 +64,8 @@ rilasciate non si riscrivono.
 
 ### Modificato
 - Impostazioni > Rete > Server ID/Relay mostra i valori di Remotek in sola
-  lettura: non c'e' piu' "OK" ne' l'import dagli appunti, che prima
-  dicevano "riuscito" senza cambiare niente e sloggavano il tecnico.
+  lettura: non c'e' piu' "OK" ne' l'import dagli appunti, perche' server,
+  chiave e API non si cambiano piu' sul PC (Sicurezza).
 - Il link "sorgenti" del dialogo Informazioni porta ai sorgenti del tag da cui
   e' stato costruito l'exe (per esempio
   `https://github.com/labinfinitek/remotek-client/tree/remotek-1.4.9-3`); un

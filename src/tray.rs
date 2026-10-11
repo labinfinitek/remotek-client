@@ -82,7 +82,12 @@ fn make_tray() -> hbb_common::ResultType<()> {
                 "{} - {}\n{}",
                 crate::get_app_name(),
                 translate("Ready".to_owned()),
-                translate("{".to_string() + &format!("{count}") + "} sessions"),
+                // Remotek: "{} sessions" con 1 dava "1 sessioni".
+                if count == 1 {
+                    translate("remotek_una_sessione".to_owned())
+                } else {
+                    translate("{".to_string() + &format!("{count}") + "} sessions")
+                },
             )
         }
     };

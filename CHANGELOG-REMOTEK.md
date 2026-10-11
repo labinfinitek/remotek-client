@@ -11,6 +11,11 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Corretto
+- Il suggerimento dell'icona nell'area di notifica con una sola sessione
+  diceva "1 sessioni": ora dice "1 sessione" (in inglese "1 session"; le
+  altre lingue, che non hanno la frase, la mostrano in inglese).
+
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti
 al tag `remotek-1.4.9-3` di remotek-client e remotek-hbb-common

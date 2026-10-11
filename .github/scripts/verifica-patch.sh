@@ -1465,7 +1465,8 @@ fi
 #     divergono di nuovo (il trattino non e' la condizione della frase -- lo
 #     mostra anche a servizio fermo e con la sola password permanente -- ma se
 #     smettesse di seguire 'click' andrebbe riletto tutto il punto);
-# (d) le tre chiavi esistono e non sono vuote in it.rs e in en.rs: src/lang.rs
+# (d) le tre chiavi, e remotek_una_sessione della tray (src/tray.rs), esistono
+#     e non sono vuote in it.rs e in en.rs: src/lang.rs
 #     per una chiave mancante o vuota ripiega su en::T e poi stampa il NOME
 #     della chiave. Sul lab non si compila e non si apre la finestra: questo
 #     controllo e' l'unico posto in cui quell'errore si vede, ed e' anche la
@@ -1489,8 +1490,8 @@ LINGUE = (("src/lang/it.rs", "italiano"),
           ("src/lang/en.rs", "inglese, ripiego di tutte le altre lingue"))
 
 PROMESSA = "la home tornerebbe a promettere al cliente una password che non esiste"
-NOME = ("la home mostrerebbe la frase inglese, o il nome della chiave se manca "
-        "anche in en.rs")
+NOME = ("la home (o la tray) mostrerebbe la frase inglese, o il nome della "
+        "chiave se manca anche in en.rs")
 CLIC = ("la frase della home prometterebbe un'accettazione che il binario non "
         "chiede")
 
@@ -1556,7 +1557,7 @@ if c is not None:
               "_approveMode == 'click': rileggere la frase della home, che e' "
               "legata alla stessa impostazione" % SM, PROMESSA)
 
-# (d) le tre chiavi, in tutte e due le lingue che le hanno.
+# (d) le quattro chiavi, in tutte e due le lingue che le hanno.
 for percorso, che in LINGUE:
     try:
         testo = open(percorso, encoding="utf-8", errors="replace").read()
@@ -1564,7 +1565,8 @@ for percorso, che in LINGUE:
         guaio("%s non leggibile (%s): le chiavi della frase della home non "
               "sono controllate" % (percorso, e), NOME)
         continue
-    for chiave in CHIAVI:
+    # Con le tre della home anche quella della tray (src/tray.rs).
+    for chiave in CHIAVI + ("remotek_una_sessione",):
         valori = re.findall(r'\("%s",\s*"([^"]*)"\)' % chiave, testo)
         pieni = [v for v in valori if v.strip()]
         if len(valori) != 1 or not pieni:
@@ -1592,7 +1594,7 @@ print("\n".join(guai))
 PY
 ) || esito_frase="${esito_frase:-}"$'\n'"controllo della frase della home non eseguito: python3 terminato con errore"
 if [ -z "$esito_frase" ]; then
-  ok "la frase della home segue i tre casi di approve_mode(), le tre chiavi ci sono in italiano e in inglese e allow-logon-screen-password non e' accesa di fabbrica"
+  ok "la frase della home segue i tre casi di approve_mode(), le quattro chiavi remotek_* ci sono in italiano e in inglese e allow-logon-screen-password non e' accesa di fabbrica"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"

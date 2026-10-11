@@ -56,20 +56,53 @@ else
     'RS_PUB_KEY e'"'"' una chiave di 32 byte in base64'
   non_contiene "$CFG" "RS_PUB_KEY: &str = \"$CHIAVE_UPSTREAM\"" \
     'RS_PUB_KEY non e'"'"' la chiave del server pubblico di RustDesk'
-  contiene "$CFG" 'static ref DEFAULT_SETTINGS.*OPTION_API_SERVER\.to_owned\(\), "https://[^"]+"' \
-    'API server di default impostato e in https (senza, il client ripiega su admin.rustdesk.com)'
   # OVERWRITE_SETTINGS si cerca dall'inizio della definizione e senza commenti:
   # a un merge, una nostra riga commentata accanto a quella upstream non basta.
   # Una sola definizione: la nostra dentro /* */ su righe proprie, o sotto un
   # #[cfg] che la esclude, lascerebbe compilare solo quella upstream.
   OVR='^[[:space:]]*pub static ref OVERWRITE_SETTINGS:'
-  non_contiene "$CFG" "$OVR"'.*(//|/\*)' \
-    'OVERWRITE_SETTINGS senza commenti nella riga della definizione'
+  # Le stringhe si tolgono prima: il "//" di https:// (api-server) non e' un
+  # commento.
+  riga_ovr=$(grep -E -- "$OVR" "$CFG" | sed -E 's/"([^"\\]|\\.)*"//g')
+  if printf '%s\n' "$riga_ovr" | grep -Eq -- '//|/\*'; then
+    errore "OVERWRITE_SETTINGS senza commenti nella riga della definizione  [$CFG]"
+  else
+    ok 'OVERWRITE_SETTINGS senza commenti nella riga della definizione'
+  fi
   n_ovr=$(grep -Ec -- "$OVR" "$CFG")
   if [ "$n_ovr" = 1 ]; then
     ok 'OVERWRITE_SETTINGS definito una sola volta'
   else
     errore "OVERWRITE_SETTINGS definito $n_ovr volte, atteso 1 (una riga dentro /* */ o sotto #[cfg]?)  [$CFG]"
+  fi
+  # Una chiave ripetuta nella riga: HashMap::from tiene l'ultima coppia, quindi
+  # i controlli qui sopra e sotto, che trovano la prima con il valore giusto,
+  # passerebbero anche con una seconda, piu' avanti, che la smentisce. La
+  # chiave si confronta per valore: keys::OPTION_* diventa la stringa della sua
+  # costante, perche' la stessa chiave si puo' scrivere anche come stringa
+  # (come "2fa"), e con .to_owned() o .to_string().
+  esito_rip=$(CFG="$CFG" python3 - <<'PY'
+import os, re
+testo = open(os.environ["CFG"], encoding="utf-8").read()
+costanti = dict(re.findall(r'pub const (OPTION_[A-Z0-9_]+): &str = "([^"]*)";', testo))
+righe = [r for r in testo.splitlines() if re.match(r"\s*pub static ref OVERWRITE_SETTINGS:", r)]
+chiavi = []
+for r in righe:
+    for nome, letterale in re.findall(r'\(\s*(?:keys::(OPTION_[A-Z0-9_]+)|"([^"]*)")\s*\.to_(?:owned|string)\(\)\s*,', r):
+        if nome and nome not in costanti:
+            print("costante %s senza valore in config.rs: la chiave ripetuta non e' controllata" % nome)
+        chiavi.append(costanti.get(nome, nome) if nome else letterale)
+ripetute = sorted({c for c in chiavi if chiavi.count(c) > 1})
+if ripetute:
+    print("chiavi ripetute in OVERWRITE_SETTINGS (vale l'ultima): %s" % ", ".join(ripetute))
+PY
+) || esito_rip="${esito_rip:-}"$'\n'"controllo delle chiavi ripetute non eseguito: python3 terminato con errore"
+  if [ -z "$esito_rip" ]; then
+    ok 'nessuna chiave ripetuta in OVERWRITE_SETTINGS (confronto per valore)'
+  else
+    while IFS= read -r r; do
+      [ -n "$r" ] && errore "$r  [$CFG]"
+    done <<<"$esito_rip"
   fi
   contiene "$CFG" "$OVR"'.*OPTION_ALLOW_AUTO_UPDATE\.to_owned\(\), "N"' \
     'auto-update upstream spento in OVERWRITE_SETTINGS'
@@ -109,6 +142,25 @@ else
   # per questa chiave non significherebbe niente.
   contiene "$CFG" "$OVR"'.*OPTION_ACCESS_MODE\.to_owned\(\), ""\.to_owned\(\)' \
     'access-mode bloccata a vuota (con "full" il preset riaccende tre dei quattro default)'
+  # Server, chiave e API bloccati da remotek-1.4.9-3 (osservazione 7 del
+  # collaudo del -1): fino al -2 erano vuoti o solo un default, e Impostazioni >
+  # Rete, --option, --config o una strategia li scavalcavano. I valori vengono
+  # dalle costanti gia' controllate qui sopra, non da una seconda copia; il
+  # relay resta vuoto perche' lo indica hbbs. allow-insecure-tls-fallback a "N"
+  # (per il prefisso allow- option2bool accende solo "Y"): accesa, il nuovo
+  # tentativo HTTPS verso l'API accetterebbe un certificato qualunque.
+  contiene "$CFG" "$OVR"'.*OPTION_API_SERVER\.to_owned\(\), "https://[^"]+"\.to_owned\(\)' \
+    'API server bloccato e in https (senza, il client ripiega su admin.rustdesk.com e chiunque lo cambia)'
+  contiene "$CFG" "$OVR"'.*OPTION_CUSTOM_RENDEZVOUS_SERVER\.to_owned\(\), RENDEZVOUS_SERVERS\[0\]\.to_owned\(\)' \
+    'server ID bloccato sul server Remotek (Impostazioni > Rete non lo cambia)'
+  contiene "$CFG" "$OVR"'.*OPTION_KEY\.to_owned\(\), RS_PUB_KEY\.to_owned\(\)' \
+    'chiave del server bloccata su RS_PUB_KEY'
+  contiene "$CFG" "$OVR"'.*OPTION_RELAY_SERVER\.to_owned\(\), ""\.to_owned\(\)' \
+    'server relay bloccato a vuoto (lo indica hbbs)'
+  contiene "$CFG" "$OVR"'.*OPTION_ALLOW_INSECURE_TLS_FALLBACK\.to_owned\(\), "N"\.to_owned\(\)' \
+    'ripiego HTTPS con certificato non valido spento e bloccato (REM-2026-005)'
+  non_contiene "$CFG" 'static ref DEFAULT_SETTINGS.*OPTION_(API_SERVER|CUSTOM_RENDEZVOUS_SERVER|KEY|RELAY_SERVER)\b' \
+    'server, chiave e API non sono solo un default (si scavalcherebbero)'
 
   server=$(sed -nE 's/.*static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new\("([^"]*)".*/\1/p' "$CFG")
   elenco=$(sed -nE 's/^pub const RENDEZVOUS_SERVERS: &\[&str\] = &\["([^"]*)"\];.*/\1/p' "$CFG")
@@ -1105,10 +1157,14 @@ fi
 # del submodule compaia da qualche parte: bastava una riga aggiornata e le altre
 # restavano scadute con il controllo verde, che e' il difetto che questa sezione
 # deve impedire. Si pretende quindi che OGNI sha citato come ``hbb_common `...` ``
-# sia un prefisso del gitlink, e che ce ne sia almeno uno. La convenzione ("e'
-# sempre il commit del submodule, non quello che introdusse il cambiamento") e'
-# scritta in testa al changelog: se un giorno si vuole citare anche il commit di
-# origine, prima si cambia quella e poi questa sezione.
+# nella sezione "Non rilasciato" sia un prefisso del gitlink, e che il gitlink
+# sia citato almeno una volta. Le sezioni delle versioni rilasciate citano
+# l'hbb_common che quell'exe porta con se' e non si riscrivono: dal primo bump
+# dopo un rilascio (remotek-1.4.9-3) non coincidono piu' col gitlink. La
+# convenzione ("e' il commit del submodule dell'exe di quella versione, non
+# quello che introdusse il cambiamento") e' scritta in testa al changelog: se un
+# giorno si vuole citare anche il commit di origine, prima si cambia quella e
+# poi questa sezione.
 SUB=libs/hbb_common
 sha_sub=$(git ls-tree HEAD "$SUB" | awk '$2 == "commit" { print $3 }')
 if [ -z "$sha_sub" ]; then
@@ -1128,21 +1184,25 @@ except OSError as e:
 
 # "hbb_common `2b42505`" e non "`libs/hbb_common` dal fork": dopo il nome ci
 # vuole almeno uno spazio, poi lo sha fra apici inversi.
-citazioni = re.findall(r"hbb_common\s+`([0-9a-fA-F]{7,40})`", testo)
-if not citazioni:
-    print("%s non cita nessuno sha di hbb_common (atteso %s): manca il puntatore "
+cita = re.compile(r"hbb_common\s+`([0-9a-fA-F]{7,40})`")
+citazioni = cita.findall(testo)
+if not any(sha.startswith(c.lower()) for c in citazioni):
+    print("%s non cita lo sha di hbb_common del submodule (%s): manca il puntatore "
           "con cui si lega l'eseguibile consegnato ai sorgenti dei suoi valori "
           "di fabbrica" % (percorso, sha[:7]))
-    raise SystemExit
 
-scadute = sorted({c for c in citazioni if not sha.startswith(c.lower())})
+m = re.search(r"^## \[Non rilasciato\]\s*$(.*?)(?=^## \[|\Z)", testo, re.M | re.S)
+if not m:
+    print("%s: manca la sezione \"## [Non rilasciato]\"" % percorso)
+    raise SystemExit
+scadute = sorted({c for c in cita.findall(m.group(1)) if not sha.startswith(c.lower())})
 if scadute:
-    print("%s cita %d sha di hbb_common che non sono quello del submodule (%s): %s"
+    print("%s cita in \"Non rilasciato\" %d sha di hbb_common che non sono quello del submodule (%s): %s"
           % (percorso, len(scadute), sha[:7], ", ".join(scadute)))
 PY
 ) || esito_sha="${esito_sha:-}"$'\n'"controllo del puntatore a hbb_common non eseguito: python3 terminato con errore"
   if [ -z "$esito_sha" ]; then
-    ok "CHANGELOG-REMOTEK.md cita l'hbb_common del submodule (${sha_sub:0:7}) e nessun altro"
+    ok "CHANGELOG-REMOTEK.md cita l'hbb_common del submodule (${sha_sub:0:7}) e in \"Non rilasciato\" nessun altro"
   else
     while IFS= read -r r; do
       [ -n "$r" ] && errore "$r: chi lega l'exe consegnato ai sorgenti dei default leggerebbe uno sha scaduto  [CHANGELOG-REMOTEK.md]"

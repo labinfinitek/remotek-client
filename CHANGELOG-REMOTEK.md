@@ -3,10 +3,11 @@
 Formato: Keep a Changelog 1.1.0, in italiano. Versioni: `remotek-<upstream>-<n>`.
 Una riga per cambiamento visibile a chi usa o installa il client; la sezione
 "Sicurezza" e' obbligatoria per ogni correzione di sicurezza.
-Gli sha `hbb_common` fra parentesi sono sempre lo stesso: il commit del
-submodule che l'eseguibile di questa versione porta con se', non quello che
-introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 li tiene
-allineati tutti al gitlink di `libs/hbb_common`.
+Gli sha `hbb_common` fra parentesi, in ogni versione, sono il commit del
+submodule che l'eseguibile di quella versione porta con se', non quello che
+introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 tiene quelli di
+"Non rilasciato" allineati al gitlink di `libs/hbb_common`; le versioni
+rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
@@ -66,6 +67,18 @@ allineati tutti al gitlink di `libs/hbb_common`.
   dell'account e il resto della richiesta, e poteva rispondere
   all'heartbeat con una strategia. Col server Remotek quel ripiego non
   riusciva mai, quindi non si perde niente.
+- Server ID, chiave del server, server API e relay non si cambiano piu' sul
+  PC. Fino a remotek-1.4.9-2 i campi di Impostazioni > Rete > "Server
+  ID/Relay" erano vuoti (il client usava i valori di Remotek), ma chi li
+  riempiva, o li cambiava con `--option`, `--config` o una strategia della
+  console, mandava il PC su un altro server con un'altra chiave. Ora la
+  finestra mostra i valori di Remotek e cio' che vi si scrive non viene
+  salvato; il relay resta vuoto perche' lo indica il server. Spenta e
+  bloccata anche l'opzione che, se una connessione HTTPS (per esempio
+  verso l'API) falliva per il certificato, riprovava accettandone uno
+  qualunque. Il comportamento dei PC non cambia: sono i valori che usavano
+  gia'. Per puntare un PC a un server di prova serve un `custom.txt`
+  firmato da Infinitek (hbb_common `df5cf4f`).
 
 ## [remotek-1.4.9-2] - 2026-10-01
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

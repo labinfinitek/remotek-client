@@ -44,9 +44,17 @@ rilasciate non si riscrivono.
   delle connessioni in entrata, accanto alla scheda di una sessione
   terminale, si apre da solo il pannello con quello che la shell scrive,
   dalla prima riga, in sola lettura; il pulsante "Disconnetti" chiude la
-  sessione e la shell sul PC.
+  sessione e la shell sul PC. Il pulsante che apre e chiude il pannello ha
+  l'icona dei file, non quella della chat.
 
 ### Modificato
+- Impostazioni > Rete > Server ID/Relay mostra i valori di Remotek in sola
+  lettura: non c'e' piu' "OK" ne' l'import dagli appunti, che prima
+  dicevano "riuscito" senza cambiare niente e sloggavano il tecnico.
+- Il link "sorgenti" del dialogo Informazioni porta ai sorgenti del tag da cui
+  e' stato costruito l'exe (per esempio
+  `https://github.com/labinfinitek/remotek-client/tree/remotek-1.4.9-3`); un
+  exe costruito fuori da un tag porta al repo.
 - **Per i tecnici**: una sessione terminale non resta piu' aperta dopo la
   disconnessione, nemmeno se lo si chiede dalla finestra del terminale
   ("persistente"): chiusa la connessione, la shell sul PC del cliente

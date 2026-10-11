@@ -2482,10 +2482,14 @@ class _AboutState extends State<_About> {
                   ).marginSymmetric(vertical: 4.0)),
               // Remotek: attribuzione AGPL-3.0. Testo letterale: translate()
               // sostituirebbe "RustDesk" con il nome dell'app (src/lang.rs).
+              // REMOTEK_TAG lo passa build.py solo nel build di un tag: i
+              // sorgenti di questo exe; senza tag, il repo.
               InkWell(
                   onTap: () {
-                    launchUrlString(
-                        'https://github.com/labinfinitek/remotek-client');
+                    const tag = String.fromEnvironment('REMOTEK_TAG');
+                    launchUrlString(tag.isEmpty
+                        ? 'https://github.com/labinfinitek/remotek-client'
+                        : 'https://github.com/labinfinitek/remotek-client/tree/$tag');
                   },
                   child: Text(
                     'Basato su RustDesk, AGPL-3.0 - sorgenti',

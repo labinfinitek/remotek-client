@@ -5,4 +5,5 @@ pub mod cli;
 pub mod firma;
 pub mod token_terminale;
 pub mod trascrizione;
+pub mod uscita_terminale;
 pub mod vista_cm;

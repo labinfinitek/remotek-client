@@ -15,6 +15,10 @@ rilasciate non si riscrivono.
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
   diceva "1 sessioni": ora dice "1 sessione" (in inglese "1 session"; le
   altre lingue, che non hanno la frase, la mostrano in inglese).
+- **Per i tecnici e l'agente AI**: sui PC Windows installati, la shell che
+  finisce (`exit 3`) chiude subito il terminale col suo codice: il CLI esce
+  con 3. Prima la sessione restava aperta finche' non la chiudeva il
+  controllante, e il codice arrivava come 0.
 
 ### Sicurezza
 - Il terminale sui PC Windows installati non gira piu' come amministratore

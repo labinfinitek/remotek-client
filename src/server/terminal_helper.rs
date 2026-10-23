@@ -890,7 +890,7 @@ pub fn run_terminal_helper(args: &[String]) -> Result<()> {
 
     // Thread: Read from input pipe, parse messages, write data to PTY or handle control commands
     let exiting_clone = exiting.clone();
-    let pty_master_clone = pty_master.clone();
+    let pty_master_clone = Arc::downgrade(&pty_master);
     let input_thread = thread::spawn(move || {
         let mut input_pipe = input_pipe;
         let mut header_buf = [0u8; MSG_HEADER_SIZE];
@@ -966,7 +966,9 @@ pub fn run_terminal_helper(args: &[String]) -> Result<()> {
                         let rows = u16::from_le_bytes([payload_buf[0], payload_buf[1]]);
                         let cols = u16::from_le_bytes([payload_buf[2], payload_buf[3]]);
                         log::debug!("Resize: {}x{}", cols, rows);
-                        if let Ok(master) = pty_master_clone.lock() {
+                        if let Some(Ok(master)) =
+                            pty_master_clone.upgrade().as_ref().map(|m| m.lock())
+                        {
                             let _ = master.resize(PtySize {
                                 rows,
                                 cols,
@@ -1026,17 +1028,22 @@ pub fn run_terminal_helper(args: &[String]) -> Result<()> {
     let exit_status = child.wait();
     log::info!("Shell exited: {:?}", exit_status);
 
+    // Remotek: l'helper esce col codice della shell senza aspettare il thread
+    // dell'input, fermo sulla pipe finche' il servizio non la chiude. Chiudere
+    // la ConPTY (qui l'unico riferimento forte) ne fa uscire l'ultimo output,
+    // che il thread dell'output manda prima dell'EOF; l'attesa e' limitata.
+    thread::spawn(move || drop(pty_master));
+    if !crate::remotek::uscita_terminale::attendi(&output_thread, Duration::from_secs(2)) {
+        log::warn!("Output thread still running, exiting anyway");
+    }
+    drop(input_thread);
     exiting.store(true, Ordering::SeqCst);
 
-    // Wait for threads
-    let _ = input_thread.join();
-    let _ = output_thread.join();
-
-    // pty_master will be dropped here, releasing PTY resources
-    drop(pty_master);
-
     log::info!("Terminal helper exiting");
-    Ok(())
+    log::logger().flush();
+    std::process::exit(crate::remotek::uscita_terminale::codice_helper(
+        exit_status.ok().map(|s| s.exit_code()),
+    ))
 }
 
 /// Read exactly `buf.len()` bytes from reader.

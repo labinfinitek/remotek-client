@@ -3,5 +3,6 @@
 #[cfg(target_os = "linux")]
 pub mod cli;
 pub mod firma;
+pub mod token_terminale;
 pub mod trascrizione;
 pub mod vista_cm;

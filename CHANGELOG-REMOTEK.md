@@ -20,9 +20,16 @@ rilasciate non si riscrivono.
   quel solo PC, entro 60 secondi (piu' 30 di tolleranza degli orologi), una
   volta sola. Nel registro delle connessioni dell'API la sessione risulta
   "agente verificato", e per ogni terminale il PC dice se la shell gira come
-  amministratore. Il lasciapassare non cambia ancora ne' i permessi ne' la
-  finestra del cliente: con un lasciapassare valido o senza, il terminale resta
-  quello da utente, col clic del cliente.
+  amministratore.
+- **Per i clienti**: quando l'agente AI chiede i permessi di amministratore
+  con un lasciapassare valido, su un PC Windows con il client installato, la
+  finestra di accettazione lo dice in chiaro ("<agente>, agente AI di
+  <tecnico>, chiede i permessi di amministratore", coi nomi verificati
+  dall'API) e offre tre scelte: "Accetta come amministratore" (la shell gira
+  come amministratore di sistema), "Accetta come utente" (la shell da utente
+  di sempre), "Rifiuta". Senza lasciapassare valido, fuori da Windows o col
+  client non installato la finestra resta quella di prima. Nel registro delle
+  connessioni il terminale accettato come amministratore risulta tale.
 
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione

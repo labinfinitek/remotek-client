@@ -2203,6 +2203,12 @@ pub fn cm_login_res(conn_id: i32, res: bool) {
     }
 }
 
+// Remotek (ADR-0028, caso 2): "Accetta come amministratore", prima di cm_login_res.
+pub fn cm_scelta_amministratore(conn_id: i32) {
+    #[cfg(not(any(target_os = "ios")))]
+    crate::ui_cm_interface::scelta_amministratore(conn_id);
+}
+
 pub fn cm_close_connection(conn_id: i32) {
     #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::close(conn_id);

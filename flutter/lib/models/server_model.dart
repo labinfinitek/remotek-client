@@ -832,6 +832,8 @@ class Client {
   bool fromSwitch = false;
   bool inVoiceCall = false;
   bool incomingVoiceCall = false;
+  // Remotek (ADR-0028, caso 2): src/remotek/scelta_terminale.rs, `Finestra`.
+  dynamic remotek;
 
   RxInt unreadChatMessageCount = 0.obs;
 
@@ -861,6 +863,7 @@ class Client {
     fromSwitch = json['from_switch'];
     inVoiceCall = json['in_voice_call'];
     incomingVoiceCall = json['incoming_voice_call'];
+    remotek = json['remotek'];
   }
 
   Map<String, dynamic> toJson() {
@@ -886,6 +889,7 @@ class Client {
     data['from_switch'] = fromSwitch;
     data['in_voice_call'] = inVoiceCall;
     data['incoming_voice_call'] = incomingVoiceCall;
+    data['remotek'] = remotek;
     return data;
   }
 

@@ -21,6 +21,7 @@ import '../../common/widgets/chat_page.dart';
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
+import 'remotek_scelta_cm.dart';
 import 'remotek_terminale_cm.dart';
 
 class DesktopServerPage extends StatefulWidget {
@@ -1064,6 +1065,33 @@ class _CmControlPanel extends StatelessWidget {
   }
 
   buildUnAuthorized(BuildContext context) {
+    // Remotek (ADR-0028, caso 2): l'agente AI chiede l'amministratore.
+    final remotek = RemotekScelta.daJson(client.remotek);
+    if (remotek != null) {
+      return remotekSceltaCm(
+        scelta: remotek,
+        pulsante: (
+                {required color,
+                required onClick,
+                required text,
+                required textColor,
+                border}) =>
+            buildButton(context,
+                color: color,
+                onClick: onClick,
+                text: text,
+                textColor: textColor,
+                border: border),
+        coloreAccetta: MyTheme.accent,
+        sceltaAmministratore: () =>
+            bind.cmSceltaAmministratore(connId: client.id),
+        accetta: () {
+          handleAccept(context);
+          windowManager.minimize();
+        },
+        rifiuta: handleDisconnect,
+      ).marginOnly(bottom: buttonBottomMargin);
+    }
     final bool canElevate = bind.cmCanElevate();
     final model = Provider.of<ServerModel>(context);
     final showElevation = canElevate &&

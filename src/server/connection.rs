@@ -408,6 +408,8 @@ pub struct Connection {
     trascrizione: Option<crate::remotek::trascrizione::Trascrizione>,
     // Remotek (ADR-0028): il lasciapassare valido dell'agente (src/remotek/lasciapassare.rs).
     lasciapassare: Option<crate::remotek::lasciapassare::Valido>,
+    // Remotek (ADR-0028, caso 2): il cliente ha scelto "Accetta come amministratore".
+    amministratore_scelto: bool,
 }
 
 impl ConnInner {
@@ -595,6 +597,7 @@ impl Connection {
             terminal_generic_service: None,
             trascrizione: None,
             lasciapassare: None,
+            amministratore_scelto: false,
             conn_audit_primary_auth: ConnAuditPrimaryAuth::None,
             conn_audit_two_factor: ConnAuditTwoFactor::None,
         };
@@ -688,6 +691,15 @@ impl Connection {
                             if conn.port_forward_socket.is_some() {
                                 break;
                             }
+                        }
+                        ipc::Data::RemotekSceltaAmministratore => {
+                            conn.amministratore_scelto = crate::remotek::scelta_terminale::scelta(
+                                conn.lasciapassare.is_some(),
+                                conn.terminal,
+                                crate::remotek::scelta_terminale::windows_installato(),
+                                conn.authorized,
+                                &conn.lr.my_id,
+                            );
                         }
                         ipc::Data::Close => {
                             conn.chat_unanswered = false; // seen
@@ -1706,6 +1718,11 @@ impl Connection {
             self.lasciapassare.as_ref(),
             self.terminal,
             &self.lr.os_login.username,
+            crate::remotek::scelta_terminale::come_sistema(
+                self.lasciapassare.is_some(),
+                crate::remotek::scelta_terminale::windows_installato(),
+                self.amministratore_scelto,
+            ),
         );
         self.post_conn_audit(audit);
         #[allow(unused_mut)]
@@ -2133,6 +2150,11 @@ impl Connection {
             block_input: self.block_input,
             privacy_mode: self.privacy_mode,
             from_switch: self.from_switch,
+            remotek_amministratore: crate::remotek::scelta_terminale::richiesta(
+                self.lasciapassare.as_ref(),
+                self.terminal,
+                crate::remotek::scelta_terminale::windows_installato(),
+            ),
         });
     }
 
@@ -2562,6 +2584,7 @@ impl Connection {
             self.reset_session_scope_for_login();
             // Remotek (ADR-0028): il lasciapassare vale solo per il login che lo porta.
             self.lasciapassare = None;
+            self.amministratore_scelto = false;
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(
@@ -2850,6 +2873,7 @@ impl Connection {
                 // Remotek (ADR-0028): lo scambio dei lati non eredita il lasciapassare
                 // di un login precedente sulla stessa connessione.
                 self.lasciapassare = None;
+                self.amministratore_scelto = false;
                 SWITCH_SIDES_UUID
                     .lock()
                     .unwrap()
@@ -3748,6 +3772,15 @@ impl Connection {
         }
 
         if crate::platform::is_installed() {
+            // Remotek (ADR-0028, caso 2): SYSTEM solo per la scelta del cliente col lasciapassare.
+            if crate::remotek::scelta_terminale::come_sistema(
+                self.lasciapassare.is_some(),
+                true,
+                self.amministratore_scelto,
+            ) {
+                self.terminal_user_token = Some(TerminalUserToken::SelfUser);
+                return None;
+            }
             return self.handle_installed_user();
         }
 

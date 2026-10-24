@@ -2112,5 +2112,53 @@ else
   done <<<"$esito_os_login"
 fi
 
+# --- 26. SYSTEM solo col lasciapassare e la scelta del cliente -------------
+# ADR-0028, caso 2: su un PC installato il terminale senza os_login gira come
+# SYSTEM (TerminalUserToken::SelfUser nel ramo di is_installed di
+# fill_terminal_user_token) solo se scelta_terminale::come_sistema e' vero:
+# lasciapassare valido e `amministratore_scelto`. Quel campo diventa vero
+# solo nel ramo `ipc::Data::RemotekSceltaAmministratore`, col valore di
+# scelta_terminale::scelta (lasciapassare valido, terminale, Windows
+# installato), e torna falso a ogni login e scambio dei lati. Le due funzioni
+# restano l'AND delle loro condizioni. Un merge che da' SYSTEM per un'altra
+# strada, o senza lasciapassare, si ferma qui. Se python3 fallisce il
+# controllo non e' eseguito ed e' un errore.
+esito_sistema=$(python3 - <<'PY'
+import re
+guai = []
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+C = "src/server/connection.rs"
+c = codice(C)
+riempi = re.findall(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
+installato = re.search(r"if crate::platform::is_installed\(\) \{(.*?)return self\.handle_installed_user\(\);", riempi[0], re.S) if len(riempi) == 1 else None
+if not installato or not re.fullmatch(r"\s*if crate::remotek::scelta_terminale::come_sistema\(\s*self\.lasciapassare\.is_some\(\),\s*true,\s*self\.amministratore_scelto,?\s*\)\s*\{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}\s*", installato.group(1)):
+    guai.append("%s: nel ramo installato di fill_terminal_user_token SelfUser (SYSTEM) non e' legato solo a scelta_terminale::come_sistema(lasciapassare, scelta)" % C)
+assegnazioni = [" ".join(a.split()) for a in re.findall(r"amministratore_scelto = ([^;]+);", c)]
+# Nell'inizializzazione della struttura, non la dichiarazione del campo.
+assegnazioni += [a for a in re.findall(r"^\s*amministratore_scelto: (\w+),$", c, re.M) if a != "bool"]
+falsi = [a for a in assegnazioni if a == "false"]
+scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),", c)
+if len(scelte) != 1 or len(assegnazioni) != len(falsi) + 1:
+    guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore e scelta_terminale::scelta (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
+if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*SWITCH_SIDES_UUID", c):
+    guai.append("%s: la scelta dell'amministratore non si azzera a ogni login e scambio dei lati" % C)
+S = "src/remotek/scelta_terminale.rs"
+t = codice(S)
+if not re.search(r"pub fn come_sistema\([^)]*\) -> bool \{\s*lasciapassare_valido && installato && scelta_amministratore\s*\}", t):
+    guai.append("%s: come_sistema non e' piu' lasciapassare valido && installato && scelta" % S)
+if not re.search(r"let ammessa = lasciapassare_valido && terminale && windows_installato;", t):
+    guai.append("%s: scelta non e' piu' lasciapassare valido && terminale && Windows installato" % S)
+print("\n".join(guai))
+PY
+) || esito_sistema="${esito_sistema:-}"$'\n'"controllo di SYSTEM non eseguito: python3 terminato con errore"
+if [ -z "$esito_sistema" ]; then
+  ok "SYSTEM solo col lasciapassare valido e la scelta esplicita del cliente (ADR-0028, caso 2)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_sistema"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

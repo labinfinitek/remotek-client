@@ -239,8 +239,16 @@ fn rubrica_ha_password(ab: &Ab, token: &str, id: &str) -> bool {
             .any(|e| e.peers.iter().any(|p| p.id == id && !p.hash.is_empty()))
 }
 
-/// Apre il terminale del PC `id` e restituisce il codice d'uscita.
-pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Result<i32, String> {
+/// Apre il terminale del PC `id` e restituisce il codice d'uscita. Il
+/// lasciapassare (`--amministratore`) va solo nel login (src/client.rs,
+/// `handle_hash`).
+pub(super) fn terminale(
+    id: &str,
+    attesa: u64,
+    righe: u32,
+    colonne: u32,
+    lasciapassare: Option<String>,
+) -> Result<i32, String> {
     let (tx, rx) = channel();
     let session = sessione(
         id,
@@ -248,6 +256,13 @@ pub(super) fn terminale(id: &str, attesa: u64, righe: u32, colonne: u32) -> Resu
             eventi: Some(tx.clone()),
         },
     )?;
+    if let Some(l) = lasciapassare {
+        session
+            .lc
+            .write()
+            .map_err(|_| "sessione non disponibile".to_owned())?
+            .remotek_lasciapassare = l;
+    }
     // L'ID come lo usa il client (initialize toglie `/r` e simili).
     let id = session
         .lc
@@ -654,10 +669,10 @@ mod tests {
 
     /// Il login che il CLI manda davvero: `handle_hash` come in io_loop.rs,
     /// con la password della sessione (vuota), verso un socket locale.
-    #[test]
-    fn login_senza_password_e_senza_os_login() {
+    fn login_mandato(lasciapassare: &str) -> hbb_common::message_proto::LoginRequest {
         let _ambiente = AMBIENTE.lock().unwrap();
         let session = sessione("remotek-cli-test-login", Gestore::default()).unwrap();
+        session.lc.write().unwrap().remotek_lasciapassare = lasciapassare.to_owned();
         let rt = hbb_common::tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -681,10 +696,27 @@ mod tests {
             let dati = server.next().await.unwrap().unwrap();
             <Message as hbb_common::protobuf::Message>::parse_from_bytes(&dati).unwrap()
         });
-        let lr = login.login_request();
+        login.login_request().clone()
+    }
+
+    #[test]
+    fn login_senza_password_e_senza_os_login() {
+        let lr = login_mandato("");
         assert!(lr.password.is_empty());
         let os = lr.os_login.as_ref();
         assert!(os.map_or(true, |o| o.username.is_empty() && o.password.is_empty()));
+        assert!(lr.has_terminal());
+    }
+
+    #[test]
+    fn login_col_lasciapassare_solo_in_os_login_password() {
+        let lr = login_mandato("pay.firma");
+        assert!(lr.password.is_empty());
+        let os = lr.os_login.as_ref().unwrap();
+        assert_eq!(
+            (os.username.as_str(), os.password.as_str()),
+            ("", "pay.firma")
+        );
         assert!(lr.has_terminal());
     }
 }

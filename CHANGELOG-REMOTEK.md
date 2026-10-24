@@ -11,6 +11,13 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Aggiunto
+- **Per l'agente AI**: `remotek-cli terminal <ID> --amministratore` chiede
+  all'API un lasciapassare per quel PC e lo manda nel login del terminale
+  (ADR-0028). Se l'API lo rifiuta (PC fuori dalla rubrica del tecnico,
+  funzione spenta) il CLI scrive il motivo ed esce con 1, senza collegarsi.
+  Il PC non lo usa ancora: lo verifichera' la prossima versione.
+
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
   diceva "1 sessioni": ora dice "1 sessione" (in inglese "1 session"; le

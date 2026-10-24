@@ -1796,6 +1796,8 @@ pub struct LoginConfigHandler {
     pub enable_trusted_devices: bool,
     pub record_state: bool,
     pub record_permission: bool,
+    // Remotek (ADR-0028): il lasciapassare di remotek-cli, vuoto per gli altri.
+    pub remotek_lasciapassare: String,
 }
 
 impl Deref for LoginConfigHandler {
@@ -3606,7 +3608,8 @@ pub async fn handle_hash(
 
     let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
     let (os_username, os_password) = if is_terminal {
-        ("".to_owned(), "".to_owned())
+        // Remotek (ADR-0028): per il terminale solo il lasciapassare di remotek-cli.
+        ("".to_owned(), lc.read().unwrap().remotek_lasciapassare.clone())
     } else {
         (
             lc.read().unwrap().get_option("os-username"),

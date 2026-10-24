@@ -306,6 +306,38 @@ async fn controlla(api: &str, token: &str, tecnico: &str) -> Result<(), Rifiuto>
     esito_tecnico(&agente, tecnico)
 }
 
+fn corpo_lasciapassare(id: &str) -> Value {
+    json!({ "id": id })
+}
+
+/// La risposta di `POST /api/agente/lasciapassare`: la stringa, o il motivo
+/// che l'API scrive in `error` (PC fuori dalla rubrica, funzione spenta, ...).
+fn esito_lasciapassare(r: &Risposta) -> Result<String, String> {
+    if r.status_code != 200 {
+        return Err(errore_api("lasciapassare rifiutato", r));
+    }
+    serde_json::from_str::<Value>(&r.body)
+        .ok()
+        .and_then(|v| v.get("lasciapassare")?.as_str().map(str::to_owned))
+        .filter(|l| !l.is_empty())
+        .ok_or_else(|| "lasciapassare: risposta senza lasciapassare".to_owned())
+}
+
+/// Il lasciapassare dell'API per il PC `id` (ADR-0028). Va solo nel login del
+/// terminale: mai su stdout, nel log o in un file.
+pub(super) async fn lasciapassare(id: &str) -> Result<String, String> {
+    let api = api()?;
+    let token = LocalConfig::get_option("access_token");
+    let r = richiesta(
+        format!("{api}/api/agente/lasciapassare"),
+        Method::POST,
+        Some(corpo_lasciapassare(id).to_string()),
+        Some(&token),
+    )
+    .await?;
+    esito_lasciapassare(&r)
+}
+
 pub(super) async fn logout() -> Result<String, String> {
     let token = LocalConfig::get_option("access_token");
     if token.is_empty() {
@@ -449,6 +481,28 @@ mod tests {
             esito_tecnico(&risposta(401, ""), "Mario"),
             Err(Rifiuto::Scaduto)
         );
+    }
+
+    #[test]
+    fn richiesta_e_risposta_del_lasciapassare() {
+        assert_eq!(corpo_lasciapassare("123456789"), json!({"id": "123456789"}));
+        assert_eq!(
+            esito_lasciapassare(&risposta(200, r#"{"lasciapassare":"pay.firma"}"#)),
+            Ok("pay.firma".to_owned())
+        );
+        assert_eq!(
+            esito_lasciapassare(&risposta(
+                400,
+                r#"{"error":"PC non nella rubrica del tecnico"}"#
+            )),
+            Err("lasciapassare rifiutato: HTTP 400 PC non nella rubrica del tecnico".to_owned())
+        );
+        for rotta in [r#"{"lasciapassare":""}"#, "{}", "<html>"] {
+            assert!(
+                esito_lasciapassare(&risposta(200, rotta)).is_err(),
+                "{rotta}"
+            );
+        }
     }
 
     /// Un'API finta su 127.0.0.1: per ogni rotta lo stato e il corpo dati, e

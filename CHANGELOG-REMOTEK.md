@@ -16,7 +16,6 @@ rilasciate non si riscrivono.
   all'API un lasciapassare per quel PC e lo manda nel login del terminale
   (ADR-0028). Se l'API lo rifiuta (PC fuori dalla rubrica del tecnico,
   funzione spenta) il CLI scrive il motivo ed esce con 1, senza collegarsi.
-  Il PC non lo usa ancora: lo verifichera' la prossima versione.
 - Il PC verifica il lasciapassare dell'agente AI: firma dell'API Remotek,
   quel solo PC, entro 60 secondi (piu' 30 di tolleranza degli orologi), una
   volta sola. Nel registro delle connessioni dell'API la sessione risulta
@@ -33,6 +32,11 @@ rilasciate non si riscrivono.
   finisce (`exit 3`) chiude subito il terminale col suo codice: il CLI esce
   con 3. Prima la sessione restava aperta finche' non la chiudeva il
   controllante, e il codice arrivava come 0.
+- **Per l'agente AI**: `remotek-cli terminal <ID> --amministratore` con
+  l'accesso scaduto o revocato al momento del lasciapassare toglie le
+  credenziali e chiede di rifare `remotek-cli login`, come gli altri
+  controlli; e chiede il lasciapassare solo dopo i controlli sul PC salvato
+  (password, rubrica), cosi' un rifiuto locale non ne lascia uno mai usato.
 
 ### Sicurezza
 - Il terminale sui PC Windows installati non gira piu' come amministratore
@@ -48,6 +52,14 @@ rilasciate non si riscrivono.
   token revocato apriva comunque il terminale col nome salvato. Con
   l'accesso scaduto o revocato il CLI toglie le credenziali e chiede di
   rifare `remotek-cli login`; con l'API non raggiungibile non parte.
+- Il lasciapassare dell'agente AI vale solo per il login del terminale che
+  lo porta. Prima, se sulla stessa connessione a un login di terminale con
+  un lasciapassare valido ne seguiva uno di desktop, l'audit del desktop
+  riportava il lasciapassare del terminale.
+- Il client non installato (portatile), avviato con "Esegui come
+  amministratore", non apre piu' un terminale da amministratore senza che
+  nessuno l'abbia chiesto: il terminale non parte e il controllante vede il
+  motivo.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

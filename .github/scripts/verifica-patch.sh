@@ -15,7 +15,8 @@
 # home che segue i tre casi di approve_mode() invece di promettere una
 # password; lo STUN solo sul server Infinitek; le richieste del PC all'API
 # firmate con la sua chiave; il dialogo del server bloccato senza l'import;
-# il terminale da utente col token abbassato.
+# il terminale da utente col token abbassato; il lasciapassare dell'agente;
+# il login del terminale senza le credenziali di Windows.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1968,6 +1969,9 @@ fi
 # token che abbassa ha dato (UserToken::new(t)). Il token dell'utente si
 # costruisce solo li' (una sola CurrentLogonUser(UserToken::new(..)) nel file,
 # dopo la chiamata): un merge che lo salva altrove, o di ripiego, si ferma qui.
+# In src/remotek/token_terminale.rs `ristretto` chiama CreateRestrictedToken
+# con FLAG_RISTRETTO, e FLAG_RISTRETTO e' LUA_TOKEN | DISABLE_MAX_PRIVILEGE:
+# i test provano il valore della costante, non che la chiamata la usi.
 # Se python3 fallisce il controllo non e' eseguito ed e' un errore.
 esito_token=$(python3 - <<'PY'
 import re
@@ -1996,11 +2000,19 @@ else:
         guai.append("%s: handle_installed_user non rifiuta il terminale se il token non si abbassa" % F)
 if len(costruzioni) != 1:
     guai.append("%s: il token dell'utente del terminale si costruisce in %d punti, atteso 1 (dopo token_terminale::abbassa)" % (F, len(costruzioni)))
+T = "src/remotek/token_terminale.rs"
+t = codice(T)
+if not re.search(r"^pub const FLAG_RISTRETTO: u32 = LUA_TOKEN \| DISABLE_MAX_PRIVILEGE;$", t, re.M):
+    guai.append("%s: FLAG_RISTRETTO non e' piu' LUA_TOKEN | DISABLE_MAX_PRIVILEGE" % T)
+ristretti = re.findall(r"^    fn ristretto\(token: HANDLE\) -> ResultType<HANDLE> \{\n(.*?)^    \}$", t, re.M | re.S)
+chiamate = re.findall(r"CreateRestrictedToken\(", t)
+if len(ristretti) != 1 or len(chiamate) != 1 or not re.search(r"CreateRestrictedToken\(\s*token,\s*CREATE_RESTRICTED_TOKEN_FLAGS\(FLAG_RISTRETTO\),", ristretti[0]):
+    guai.append("%s: ristretto non chiama piu' CreateRestrictedToken(token, CREATE_RESTRICTED_TOKEN_FLAGS(FLAG_RISTRETTO), ...), o la chiamata e' altrove" % T)
 print("\n".join(guai))
 PY
 ) || esito_token="${esito_token:-}"$'\n'"controllo del token del terminale non eseguito: python3 terminato con errore"
 if [ -z "$esito_token" ]; then
-  ok "il terminale da utente usa il token abbassato, o si rifiuta (ADR-0028)"
+  ok "il terminale da utente usa il token abbassato con FLAG_RISTRETTO, o si rifiuta (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
@@ -2015,8 +2027,11 @@ fi
 # lasciapassare esce dal login (`lasciapassare::togli(&mut lr)`) prima di
 # `handle_login_request_without_validation`, cosi' non resta in `self.lr` ne'
 # arriva a `try_start_desktop`, e l'audit ne porta il nonce
-# (`lasciapassare::audit`). Se python3 fallisce il controllo non e' eseguito
-# ed e' un errore.
+# (`lasciapassare::audit`). Il campo `lasciapassare` si azzera a ogni
+# LoginRequest, subito dopo `reset_session_scope_for_login()`: senza, un login
+# di terminale valido seguito da uno desktop sulla stessa connessione
+# porterebbe il nonce nell'audit del desktop. Se python3 fallisce il controllo
+# non e' eseguito ed e' un errore.
 CHIAVE_LASCIAPASSARE='Dv+D4Cwob7srUHd6Is+MZToqnKbrMt5vVFPqHEaB7sg='
 esito_lasciapassare=$(python3 - "$CHIAVE_LASCIAPASSARE" <<'PY'
 import re, sys
@@ -2032,17 +2047,52 @@ togli = c.find("crate::remotek::lasciapassare::togli(&mut lr)")
 login = c.find("self.handle_login_request_without_validation(&lr)")
 if togli < 0 or login < 0 or togli > login:
     guai.append("%s: il lasciapassare non esce dal login prima di handle_login_request_without_validation" % C)
+if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 1 or not re.search(r"self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
+    guai.append("%s: il lasciapassare non si azzera a ogni login (self.lasciapassare = None dopo reset_session_scope_for_login)" % C)
 if "crate::remotek::lasciapassare::audit(" not in c:
     guai.append("%s: l'audit della connessione non porta il lasciapassare" % C)
 print("\n".join(guai))
 PY
 ) || esito_lasciapassare="${esito_lasciapassare:-}"$'\n'"controllo del lasciapassare non eseguito: python3 terminato con errore"
 if [ -z "$esito_lasciapassare" ]; then
-  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, nonce nell'audit (ADR-0028)"
+  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, azzerato a ogni login, nonce nell'audit (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_lasciapassare"
+fi
+
+# --- 25. Il login del terminale non usa le credenziali di Windows -----------
+# ADR-0021 e ADR-0028: in handle_hash (src/client.rs), per ConnType::TERMINAL,
+# os_login.username e' sempre vuoto e os_login.password e' solo il
+# lasciapassare di remotek-cli (`remotek_lasciapassare`, vuoto per il client
+# Flutter). Uno username non vuoto e' il modo amministratore di upstream con
+# le credenziali di Windows: sul PC la shell girerebbe come SYSTEM senza
+# lasciapassare. Se python3 fallisce il controllo non e' eseguito ed e' un
+# errore.
+esito_os_login=$(python3 - <<'PY'
+import re
+guai = []
+F = "src/client.rs"
+c = "\n".join(r.split("//", 1)[0] for r in open(F, encoding="utf-8"))
+corpi = re.findall(r"^pub async fn handle_hash\((.*?)^\}$", c, re.M | re.S)
+if len(corpi) != 1:
+    guai.append("%s: le definizioni di handle_hash sono %d, attesa 1" % (F, len(corpi)))
+else:
+    corpo = corpi[0]
+    if not re.search(r"let is_terminal = lc\.read\(\)\.unwrap\(\)\.conn_type\.eq\(&ConnType::TERMINAL\);", corpo):
+        guai.append("%s: handle_hash non distingue piu' il terminale (is_terminal)" % F)
+    if not re.search(r"let \(os_username, os_password\) = if is_terminal \{\s*\(\s*\"\"\.to_owned\(\),\s*lc\.read\(\)\.unwrap\(\)\.remotek_lasciapassare\.clone\(\)\s*\)\s*\} else", corpo):
+        guai.append("%s: handle_hash, per il terminale, non manda piu' os_login.username vuoto e il solo lasciapassare" % F)
+print("\n".join(guai))
+PY
+) || esito_os_login="${esito_os_login:-}"$'\n'"controllo del login del terminale non eseguito: python3 terminato con errore"
+if [ -z "$esito_os_login" ]; then
+  ok "il login del terminale manda os_login.username vuoto e solo il lasciapassare (ADR-0028)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_os_login"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

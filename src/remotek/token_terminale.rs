@@ -18,6 +18,10 @@ use hbb_common::{bail, ResultType};
 pub const RIFIUTO: &str =
     "Terminale rifiutato: non si possono togliere alla shell i permessi di amministratore.";
 
+/// Il messaggio al controllante quando il client non installato gira come
+/// amministratore.
+pub const RIFIUTO_PORTATILE: &str = "Terminale rifiutato: il client non installato gira come amministratore. Riavvialo senza \"Esegui come amministratore\".";
+
 // winnt.h. Nel crate `windows` stanno in Win32_System_SystemServices, una
 // feature che il client non abilita.
 #[cfg(any(target_os = "windows", test))]
@@ -73,6 +77,18 @@ pub fn scegli(
 pub fn controlla_abbassato(amministratori: ResultType<bool>) -> ResultType<()> {
     if amministratori? {
         bail!("il token abbassato ha ancora BUILTIN\\Administrators attivo");
+    }
+    Ok(())
+}
+
+/// Client portatile non installato: la shell gira col token del processo
+/// (`TerminalUserToken::SelfUser`). Se il processo e' elevato la shell
+/// sarebbe da amministratore senza che nessuno l'abbia chiesto: si rifiuta,
+/// come quando il token non si abbassa. Un errore nella lettura vale come
+/// elevato.
+pub fn portatile(elevato: ResultType<bool>) -> ResultType<()> {
+    if elevato? {
+        bail!("il client non installato gira come amministratore");
     }
     Ok(())
 }
@@ -344,6 +360,13 @@ mod tests {
         );
         // Niente token "restricted" o inerte: l'helper e le pipe restano quelli di oggi.
         assert_eq!(FLAG_RISTRETTO & (SANDBOX_INERT | WRITE_RESTRICTED), 0);
+    }
+
+    #[test]
+    fn il_portatile_elevato_si_rifiuta() {
+        assert!(portatile(Ok(false)).is_ok());
+        assert!(portatile(Ok(true)).is_err());
+        assert!(portatile(Err(anyhow!("OpenProcessToken"))).is_err());
     }
 
     #[test]

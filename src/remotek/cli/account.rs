@@ -278,8 +278,13 @@ async fn verifica_accesso_su(api: &str) -> Result<(), String> {
     let tecnico = salvati(&LocalConfig::get_option("user_info"))
         .map(|(_, tecnico)| tecnico)
         .ok_or_else(|| "user_info non leggibile: remotek-cli login <utente>".to_owned())?;
-    match controlla(api, &token, &tecnico).await {
-        Ok(()) => Ok(()),
+    togli_se_scaduto(controlla(api, &token, &tecnico).await)
+}
+
+/// Un 401 dell'API toglie `access_token` e `user_info`.
+fn togli_se_scaduto<T>(esito: Result<T, Rifiuto>) -> Result<T, String> {
+    match esito {
+        Ok(v) => Ok(v),
         Err(Rifiuto::Errore(e)) => Err(e),
         Err(Rifiuto::Scaduto) => {
             match salva("access_token", "").and_then(|()| salva("user_info", "")) {
@@ -312,21 +317,27 @@ fn corpo_lasciapassare(id: &str) -> Value {
 
 /// La risposta di `POST /api/agente/lasciapassare`: la stringa, o il motivo
 /// che l'API scrive in `error` (PC fuori dalla rubrica, funzione spenta, ...).
-fn esito_lasciapassare(r: &Risposta) -> Result<String, String> {
-    if r.status_code != 200 {
-        return Err(errore_api("lasciapassare rifiutato", r));
+/// Un 401 e' l'accesso scaduto o revocato, come in [`verifica_accesso`].
+fn esito_lasciapassare(r: &Risposta) -> Result<String, Rifiuto> {
+    match r.status_code {
+        200 => {}
+        401 => return Err(Rifiuto::Scaduto),
+        _ => return Err(Rifiuto::Errore(errore_api("lasciapassare rifiutato", r))),
     }
     serde_json::from_str::<Value>(&r.body)
         .ok()
         .and_then(|v| v.get("lasciapassare")?.as_str().map(str::to_owned))
         .filter(|l| !l.is_empty())
-        .ok_or_else(|| "lasciapassare: risposta senza lasciapassare".to_owned())
+        .ok_or_else(|| Rifiuto::Errore("lasciapassare: risposta senza lasciapassare".to_owned()))
 }
 
 /// Il lasciapassare dell'API per il PC `id` (ADR-0028). Va solo nel login del
 /// terminale: mai su stdout, nel log o in un file.
 pub(super) async fn lasciapassare(id: &str) -> Result<String, String> {
-    let api = api()?;
+    lasciapassare_su(&api()?, id).await
+}
+
+async fn lasciapassare_su(api: &str, id: &str) -> Result<String, String> {
     let token = LocalConfig::get_option("access_token");
     let r = richiesta(
         format!("{api}/api/agente/lasciapassare"),
@@ -335,7 +346,7 @@ pub(super) async fn lasciapassare(id: &str) -> Result<String, String> {
         Some(&token),
     )
     .await?;
-    esito_lasciapassare(&r)
+    togli_se_scaduto(esito_lasciapassare(&r))
 }
 
 pub(super) async fn logout() -> Result<String, String> {
@@ -495,7 +506,13 @@ mod tests {
                 400,
                 r#"{"error":"PC non nella rubrica del tecnico"}"#
             )),
-            Err("lasciapassare rifiutato: HTTP 400 PC non nella rubrica del tecnico".to_owned())
+            Err(Rifiuto::Errore(
+                "lasciapassare rifiutato: HTTP 400 PC non nella rubrica del tecnico".to_owned()
+            ))
+        );
+        assert_eq!(
+            esito_lasciapassare(&risposta(401, r#"{"error":"Invalid token"}"#)),
+            Err(Rifiuto::Scaduto)
         );
         for rotta in [r#"{"lasciapassare":""}"#, "{}", "<html>"] {
             assert!(
@@ -556,8 +573,12 @@ mod tests {
         (url, chieste)
     }
 
-    #[test]
-    fn accesso_scaduto_toglie_le_credenziali() {
+    /// `chiedi` contro l'API finta con le credenziali di un agente salvate:
+    /// l'esito, le rotte chieste e le credenziali rimaste.
+    fn con_credenziali<F: std::future::Future<Output = Result<String, String>>>(
+        risposte: &'static [(&'static str, u16, &'static str)],
+        chiedi: impl FnOnce(String) -> F,
+    ) -> (Result<String, String>, Vec<String>, (String, String)) {
         let _ambiente = super::super::AMBIENTE.lock().unwrap();
         let opzione = |k: &str| LocalConfig::get_option(k);
         let prima = (opzione("access_token"), opzione("user_info"));
@@ -569,17 +590,55 @@ mod tests {
             .build()
             .unwrap();
         let (esito, chieste) = rt.block_on(async {
-            let (url, chieste) =
-                api_finta(&[("/api/currentUser", 401, r#"{"error":"Invalid token"}"#)]).await;
-            (verifica_accesso_su(&url).await, chieste)
+            let (url, chieste) = api_finta(risposte).await;
+            (chiedi(url).await, chieste)
         });
         let dopo = (opzione("access_token"), opzione("user_info"));
         LocalConfig::set_option("access_token".into(), prima.0);
         LocalConfig::set_option("user_info".into(), prima.1);
+        let chieste = chieste.lock().unwrap().clone();
+        (esito, chieste, dopo)
+    }
+
+    #[test]
+    fn accesso_scaduto_toglie_le_credenziali() {
+        let (esito, chieste, dopo) = con_credenziali(
+            &[("/api/currentUser", 401, r#"{"error":"Invalid token"}"#)],
+            |url| async move { verifica_accesso_su(&url).await.map(|()| String::new()) },
+        );
         assert_eq!(esito, Err(ACCESSO_SCADUTO.to_owned()));
         // Niente /api/agente dopo il 401, e le credenziali locali sono tolte.
-        assert_eq!(*chieste.lock().unwrap(), ["/api/currentUser"]);
+        assert_eq!(chieste, ["/api/currentUser"]);
         assert_eq!(dopo, (String::new(), String::new()));
+    }
+
+    #[test]
+    fn lasciapassare_con_accesso_scaduto_toglie_le_credenziali() {
+        let (esito, chieste, dopo) = con_credenziali(
+            &[(
+                "/api/agente/lasciapassare",
+                401,
+                r#"{"error":"Invalid token"}"#,
+            )],
+            |url| async move { lasciapassare_su(&url, "123456789").await },
+        );
+        assert_eq!(esito, Err(ACCESSO_SCADUTO.to_owned()));
+        assert_eq!(chieste, ["/api/agente/lasciapassare"]);
+        assert_eq!(dopo, (String::new(), String::new()));
+        // Un 400 lascia le credenziali dove sono.
+        let (esito, _, dopo) = con_credenziali(
+            &[(
+                "/api/agente/lasciapassare",
+                400,
+                r#"{"error":"funzione spenta"}"#,
+            )],
+            |url| async move { lasciapassare_su(&url, "123456789").await },
+        );
+        assert_eq!(
+            esito,
+            Err("lasciapassare rifiutato: HTTP 400 funzione spenta".to_owned())
+        );
+        assert_eq!(dopo.0, "t");
     }
 
     #[test]

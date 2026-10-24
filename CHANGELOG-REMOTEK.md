@@ -33,6 +33,11 @@ rilasciate non si riscrivono.
   finisce (`exit 3`) chiude subito il terminale col suo codice: il CLI esce
   con 3. Prima la sessione restava aperta finche' non la chiudeva il
   controllante, e il codice arrivava come 0.
+- **Per l'agente AI**: `remotek-cli terminal <ID> --amministratore` con
+  l'accesso scaduto o revocato al momento del lasciapassare toglie le
+  credenziali e chiede di rifare `remotek-cli login`, come gli altri
+  controlli; e chiede il lasciapassare solo dopo i controlli sul PC salvato
+  (password, rubrica), cosi' un rifiuto locale non ne lascia uno mai usato.
 
 ### Sicurezza
 - Il terminale sui PC Windows installati non gira piu' come amministratore

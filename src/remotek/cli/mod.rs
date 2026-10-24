@@ -144,9 +144,12 @@ pub fn main() -> i32 {
             let esito = avvia_terminale(
                 // Il cliente deve vedere "Agente AI per <tecnico>", non l'utente Linux.
                 || account::whoami().and_then(|_| nel_runtime(account::verifica_accesso())),
-                // Per ultimo: vale 60 secondi.
-                amministratore.then_some(|| nel_runtime(account::lasciapassare(&id))),
-                |lasciapassare| terminale::terminale(&id, attesa, righe, colonne, lasciapassare),
+                || {
+                    // Dopo i controlli locali del terminale: vale 60 secondi.
+                    let chiedi =
+                        amministratore.then_some(|| nel_runtime(account::lasciapassare(&id)));
+                    terminale::terminale(&id, attesa, righe, colonne, chiedi)
+                },
             );
             return match esito {
                 Ok(codice) => codice,
@@ -177,16 +180,15 @@ pub fn main() -> i32 {
     }
 }
 
-/// Il terminale si apre solo dopo che l'accesso e' verificato e, se chiesto,
-/// il lasciapassare e' arrivato.
+/// Il terminale si apre solo dopo che l'accesso e' verificato; il
+/// lasciapassare lo chiede `collega` (src/remotek/cli/terminale.rs,
+/// `prepara`).
 fn avvia_terminale(
     verifica: impl FnOnce() -> Result<(), String>,
-    chiedi: Option<impl FnOnce() -> Result<String, String>>,
-    collega: impl FnOnce(Option<String>) -> Result<i32, String>,
+    collega: impl FnOnce() -> Result<i32, String>,
 ) -> Result<i32, String> {
     verifica()?;
-    let lasciapassare = chiedi.map(|c| c()).transpose()?;
-    collega(lasciapassare)
+    collega()
 }
 
 /// I test che toccano l'ambiente o le opzioni locali non girano in parallelo:
@@ -253,29 +255,13 @@ mod tests {
     }
 
     #[test]
-    fn senza_accesso_o_lasciapassare_nessuna_connessione() {
-        let collega = |_: Option<String>| -> Result<i32, String> { panic!("collegato") };
-        let mai = None::<fn() -> Result<String, String>>;
+    fn senza_accesso_nessuna_connessione() {
+        let collega = || -> Result<i32, String> { panic!("collegato") };
         assert_eq!(
-            avvia_terminale(|| Err("scaduto".into()), Some(|| Ok("l".into())), collega),
+            avvia_terminale(|| Err("scaduto".into()), collega),
             Err("scaduto".into())
         );
-        assert_eq!(
-            avvia_terminale(|| Ok(()), Some(|| Err("400".into())), collega),
-            Err("400".into())
-        );
-        assert_eq!(
-            avvia_terminale(|| Ok(()), mai, |l| Ok(l.map_or(0, |_| 1))),
-            Ok(0)
-        );
-        assert_eq!(
-            avvia_terminale(
-                || Ok(()),
-                Some(|| Ok("l".into())),
-                |l| Ok(l.map_or(0, |_| 1))
-            ),
-            Ok(1)
-        );
+        assert_eq!(avvia_terminale(|| Ok(()), || Ok(3)), Ok(3));
     }
 
     #[test]

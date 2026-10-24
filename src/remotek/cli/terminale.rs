@@ -1,7 +1,9 @@
 //! `terminal <ID>`: il terminale di un PC, come la sessione terminale del
 //! client Flutter (src/flutter.rs, `session_add` e `session_start_`), ma senza
 //! interfaccia. Si entra solo se il cliente accetta la finestra (ADR-0021,
-//! regola 2): nessuna password del PC; mai come amministratore (regola 3).
+//! regola 2): nessuna password del PC; mai col modo amministratore di
+//! upstream (regola 3). L'amministratore si chiede solo col lasciapassare
+//! dell'API (`--amministratore`, ADR-0028), e decide il PC.
 
 use crate::client::{Data, Interface, QualityStatus};
 use crate::ui_session_interface::{io_loop, InvokeUiSession, Session};
@@ -239,22 +241,39 @@ fn rubrica_ha_password(ab: &Ab, token: &str, id: &str) -> bool {
             .any(|e| e.peers.iter().any(|p| p.id == id && !p.hash.is_empty()))
 }
 
+/// Prima i controlli locali di [`sessione`], poi il lasciapassare: un
+/// rifiuto locale non lascia nell'API un lasciapassare mai usato, e quello
+/// chiesto (vale 60 secondi) arriva subito prima di collegarsi.
+fn prepara<S>(
+    locali: impl FnOnce() -> Result<S, String>,
+    chiedi: Option<impl FnOnce() -> Result<String, String>>,
+) -> Result<(S, Option<String>), String> {
+    let session = locali()?;
+    let lasciapassare = chiedi.map(|c| c()).transpose()?;
+    Ok((session, lasciapassare))
+}
+
 /// Apre il terminale del PC `id` e restituisce il codice d'uscita. Il
-/// lasciapassare (`--amministratore`) va solo nel login (src/client.rs,
-/// `handle_hash`).
+/// lasciapassare (`--amministratore`, chiesto con `chiedi`) va solo nel login
+/// (src/client.rs, `handle_hash`).
 pub(super) fn terminale(
     id: &str,
     attesa: u64,
     righe: u32,
     colonne: u32,
-    lasciapassare: Option<String>,
+    chiedi: Option<impl FnOnce() -> Result<String, String>>,
 ) -> Result<i32, String> {
     let (tx, rx) = channel();
-    let session = sessione(
-        id,
-        Gestore {
-            eventi: Some(tx.clone()),
+    let (session, lasciapassare) = prepara(
+        || {
+            sessione(
+                id,
+                Gestore {
+                    eventi: Some(tx.clone()),
+                },
+            )
         },
+        chiedi,
     )?;
     if let Some(l) = lasciapassare {
         session
@@ -697,6 +716,27 @@ mod tests {
             <Message as hbb_common::protobuf::Message>::parse_from_bytes(&dati).unwrap()
         });
         login.login_request().clone()
+    }
+
+    #[test]
+    fn il_lasciapassare_si_chiede_dopo_i_controlli_locali() {
+        let mai = || -> Result<String, String> { panic!("lasciapassare chiesto") };
+        assert_eq!(
+            prepara(|| Err::<(), _>("password salvata".into()), Some(mai)),
+            Err("password salvata".into())
+        );
+        assert_eq!(
+            prepara(|| Ok(1), Some(|| Err("400".into()))),
+            Err("400".into())
+        );
+        assert_eq!(
+            prepara(|| Ok(1), Some(|| Ok("l".into()))),
+            Ok((1, Some("l".into())))
+        );
+        assert_eq!(
+            prepara(|| Ok(1), None::<fn() -> Result<String, String>>),
+            Ok((1, None))
+        );
     }
 
     #[test]

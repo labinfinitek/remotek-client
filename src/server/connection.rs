@@ -2847,6 +2847,9 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Some(lr) = _s.lr.clone().take() {
                 self.handle_login_request_without_validation(&lr).await;
+                // Remotek (ADR-0028): lo scambio dei lati non eredita il lasciapassare
+                // di un login precedente sulla stessa connessione.
+                self.lasciapassare = None;
                 SWITCH_SIDES_UUID
                     .lock()
                     .unwrap()

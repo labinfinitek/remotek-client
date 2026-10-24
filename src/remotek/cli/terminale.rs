@@ -403,11 +403,8 @@ fn leggi_stdin(session: Session<Gestore>, tx: Sender<Evento>) {
 mod tests {
     use super::*;
     use hbb_common::tokio::sync::mpsc::unbounded_channel;
-    use std::sync::Mutex;
 
-    /// I test che toccano IS_TERMINAL_ADMIN o costruiscono una sessione non
-    /// girano in parallelo: `initialize` legge l'ambiente.
-    static AMBIENTE: Mutex<()> = Mutex::new(());
+    use super::super::AMBIENTE;
 
     fn risposta(union: Union) -> TerminalResponse {
         TerminalResponse {

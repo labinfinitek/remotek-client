@@ -13,6 +13,8 @@ const USO: &str = "uso:
   remotek-cli whoami
   remotek-cli terminal <ID> [--attesa <secondi>] [--righe <n>] [--colonne <n>]
                                stdin va al terminale del PC, il terminale su stdout;
+                               prima controlla l'accesso sull'API: scaduto o revocato, toglie
+                               le credenziali (rifare login);
                                si entra solo se il cliente accetta (attesa di default 120 s);
                                righe e colonne da 1 a 65535 (default 24 e 80);
                                esce col codice del terminale (fuori da 0-255: 255); 0 anche
@@ -87,9 +89,9 @@ fn leggi_argomenti(args: &[String]) -> Result<Comando, String> {
 
 /// L'unico runtime del CLI, per le richieste all'API. Il terminale non lo usa:
 /// `io_loop` gira nel suo thread come in src/flutter.rs (`session_start_`).
-fn nel_runtime<F: std::future::Future<Output = Result<String, String>>>(
+fn nel_runtime<T, F: std::future::Future<Output = Result<T, String>>>(
     futuro: F,
-) -> Result<String, String> {
+) -> Result<T, String> {
     hbb_common::tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -125,9 +127,11 @@ pub fn main() -> i32 {
             righe,
             colonne,
         }) => {
-            // Il cliente deve vedere "Agente AI per <tecnico>", non l'utente Linux.
-            let esito =
-                account::whoami().and_then(|_| terminale::terminale(&id, attesa, righe, colonne));
+            let esito = avvia_terminale(
+                // Il cliente deve vedere "Agente AI per <tecnico>", non l'utente Linux.
+                || account::whoami().and_then(|_| nel_runtime(account::verifica_accesso())),
+                || terminale::terminale(&id, attesa, righe, colonne),
+            );
             return match esito {
                 Ok(codice) => codice,
                 Err(e) => {
@@ -156,6 +160,20 @@ pub fn main() -> i32 {
         }
     }
 }
+
+/// Il terminale si apre solo dopo che l'accesso e' verificato.
+fn avvia_terminale(
+    verifica: impl FnOnce() -> Result<(), String>,
+    collega: impl FnOnce() -> Result<i32, String>,
+) -> Result<i32, String> {
+    verifica()?;
+    collega()
+}
+
+/// I test che toccano l'ambiente o le opzioni locali non girano in parallelo:
+/// `initialize` legge IS_TERMINAL_ADMIN, il CLI token e `user_info`.
+#[cfg(test)]
+static AMBIENTE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -196,6 +214,16 @@ mod tests {
             leggi(&["terminal", "123456789", "--righe", "65535"]),
             Ok(t(120, 65535, 80))
         );
+    }
+
+    #[test]
+    fn senza_accesso_nessuna_connessione() {
+        let collega = || -> Result<i32, String> { panic!("collegato") };
+        assert_eq!(
+            avvia_terminale(|| Err("scaduto".into()), collega),
+            Err("scaduto".into())
+        );
+        assert_eq!(avvia_terminale(|| Ok(()), || Ok(3)), Ok(3));
     }
 
     #[test]

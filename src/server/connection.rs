@@ -3748,6 +3748,13 @@ impl Connection {
             return self.handle_installed_user();
         }
 
+        // Remotek (ADR-0028): il client portatile elevato non da' una shell da amministratore.
+        if let Err(e) =
+            crate::remotek::token_terminale::portatile(crate::platform::is_elevated(None))
+        {
+            log::error!("terminale rifiutato: {}", e);
+            return Some(crate::remotek::token_terminale::RIFIUTO_PORTATILE);
+        }
         self.terminal_user_token = Some(TerminalUserToken::SelfUser);
         None
     }

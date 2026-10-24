@@ -52,6 +52,10 @@ rilasciate non si riscrivono.
   lo porta. Prima, se sulla stessa connessione a un login di terminale con
   un lasciapassare valido ne seguiva uno di desktop, l'audit del desktop
   riportava il lasciapassare del terminale.
+- Il client non installato (portatile), avviato con "Esegui come
+  amministratore", non apre piu' un terminale da amministratore senza che
+  nessuno l'abbia chiesto: il terminale non parte e il controllante vede il
+  motivo.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

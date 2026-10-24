@@ -1972,6 +1972,11 @@ fi
 # In src/remotek/token_terminale.rs `ristretto` chiama CreateRestrictedToken
 # con FLAG_RISTRETTO, e FLAG_RISTRETTO e' LUA_TOKEN | DISABLE_MAX_PRIVILEGE:
 # i test provano il valore della costante, non che la chiamata la usi.
+# In `fill_terminal_user_token` (Windows) il client non installato arriva a
+# `TerminalUserToken::SelfUser`, il token del processo, solo dopo
+# `token_terminale::portatile(crate::platform::is_elevated(None))`, che se il
+# processo e' elevato rifiuta con RIFIUTO_PORTATILE: e' codice Windows che la
+# CI delle MR non compila e nessun test prova.
 # Se python3 fallisce il controllo non e' eseguito ed e' un errore.
 esito_token=$(python3 - <<'PY'
 import re
@@ -2000,6 +2005,9 @@ else:
         guai.append("%s: handle_installed_user non rifiuta il terminale se il token non si abbassa" % F)
 if len(costruzioni) != 1:
     guai.append("%s: il token dell'utente del terminale si costruisce in %d punti, atteso 1 (dopo token_terminale::abbassa)" % (F, len(costruzioni)))
+riempi = re.findall(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
+if len(riempi) != 1 or not re.search(r"crate::remotek::token_terminale::portatile\(crate::platform::is_elevated\(None\)\)\s*\{.*?return Some\(crate::remotek::token_terminale::RIFIUTO_PORTATILE\);\s*\}\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*None\s*$", riempi[0], re.S):
+    guai.append("%s: fill_terminal_user_token (Windows) non rifiuta piu' il client non installato elevato (token_terminale::portatile e RIFIUTO_PORTATILE) prima di SelfUser" % F)
 T = "src/remotek/token_terminale.rs"
 t = codice(T)
 if not re.search(r"^pub const FLAG_RISTRETTO: u32 = LUA_TOKEN \| DISABLE_MAX_PRIVILEGE;$", t, re.M):
@@ -2012,7 +2020,7 @@ print("\n".join(guai))
 PY
 ) || esito_token="${esito_token:-}"$'\n'"controllo del token del terminale non eseguito: python3 terminato con errore"
 if [ -z "$esito_token" ]; then
-  ok "il terminale da utente usa il token abbassato con FLAG_RISTRETTO, o si rifiuta (ADR-0028)"
+  ok "il terminale da utente usa il token abbassato con FLAG_RISTRETTO, o si rifiuta; il portatile elevato si rifiuta (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"

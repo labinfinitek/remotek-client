@@ -406,6 +406,8 @@ pub struct Connection {
     terminal_generic_service: Option<Box<GenericService>>,
     // Remotek: trascrizione della sessione terminale (src/remotek/trascrizione.rs).
     trascrizione: Option<crate::remotek::trascrizione::Trascrizione>,
+    // Remotek (ADR-0028): il lasciapassare valido dell'agente (src/remotek/lasciapassare.rs).
+    lasciapassare: Option<crate::remotek::lasciapassare::Valido>,
 }
 
 impl ConnInner {
@@ -592,6 +594,7 @@ impl Connection {
             terminal_user_token: None,
             terminal_generic_service: None,
             trascrizione: None,
+            lasciapassare: None,
             conn_audit_primary_auth: ConnAuditPrimaryAuth::None,
             conn_audit_two_factor: ConnAuditTwoFactor::None,
         };
@@ -1696,6 +1699,14 @@ impl Connection {
         if self.conn_audit_two_factor != ConnAuditTwoFactor::None {
             audit["two_factor"] = json!(self.conn_audit_two_factor.as_i64());
         }
+        // Remotek (ADR-0028): il nonce del lasciapassare e, per il terminale,
+        // se la shell gira da amministratore.
+        crate::remotek::lasciapassare::audit(
+            &mut audit,
+            self.lasciapassare.as_ref(),
+            self.terminal,
+            &self.lr.os_login.username,
+        );
         self.post_conn_audit(audit);
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();
@@ -2541,7 +2552,9 @@ impl Connection {
             }
         }
         // After handling CloseReason messages, proceed to process other message types
-        if let Some(message::Union::LoginRequest(lr)) = msg.union {
+        if let Some(message::Union::LoginRequest(mut lr)) = msg.union {
+            // Remotek (ADR-0028): il lasciapassare esce dal login prima di ogni altro uso.
+            let lasciapassare = crate::remotek::lasciapassare::togli(&mut lr);
             self.handle_login_request_without_validation(&lr).await;
             if self.authorized {
                 return true;
@@ -2584,6 +2597,9 @@ impl Connection {
                     }
 
                     self.terminal = true;
+                    self.lasciapassare = lasciapassare.and_then(|l| {
+                        crate::remotek::lasciapassare::verifica_login(&l, &self.lr.my_id)
+                    });
                     // Remotek: la shell non sopravvive alla connessione, qualunque
                     // cosa chieda il controllante (trascrizione e chiusura del cliente).
                     // if let Some(o) = self.options_in_login.as_ref() {

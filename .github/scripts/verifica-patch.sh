@@ -14,7 +14,8 @@
 # (scheda 2FA, "Visualizza telecamera") che non si mostrano; la frase della
 # home che segue i tre casi di approve_mode() invece di promettere una
 # password; lo STUN solo sul server Infinitek; le richieste del PC all'API
-# firmate con la sua chiave; il dialogo del server bloccato senza l'import.
+# firmate con la sua chiave; il dialogo del server bloccato senza l'import;
+# il terminale da utente col token abbassato.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -1952,6 +1953,54 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_dialogo"
+fi
+
+# --- 23. Il terminale da utente non gira elevato -----------------------------
+# ADR-0028, caso 1: handle_installed_user (src/server/connection.rs) prende il
+# token di explorer.exe della console, che con l'Administrator predefinito o
+# con UAC spento e' a integrita' alta. Prima di salvarlo in
+# terminal_user_token passa da crate::remotek::token_terminale::abbassa, e se
+# non si abbassa il terminale si rifiuta con RIFIUTO; il ramo Ok salva il
+# token che abbassa ha dato (UserToken::new(t)). Il token dell'utente si
+# costruisce solo li' (una sola CurrentLogonUser(UserToken::new(..)) nel file,
+# dopo la chiamata): un merge che lo salva altrove, o di ripiego, si ferma qui.
+# Se python3 fallisce il controllo non e' eseguito ed e' un errore.
+esito_token=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+F = "src/server/connection.rs"
+c = codice(F)
+corpi = re.findall(r"^    fn handle_installed_user\(&mut self\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
+costruzioni = re.findall(r"CurrentLogonUser\(\s*crate::terminal_service::UserToken::new\(", c)
+if len(corpi) != 1:
+    guai.append("%s: le definizioni di handle_installed_user sono %d, attesa 1" % (F, len(corpi)))
+else:
+    corpo = corpi[0]
+    chiamata = corpo.find("crate::remotek::token_terminale::abbassa(")
+    salvato = corpo.find("CurrentLogonUser(")
+    if chiamata < 0:
+        guai.append("%s: handle_installed_user non abbassa piu' il token dell'utente (token_terminale::abbassa)" % F)
+    elif salvato < chiamata:
+        guai.append("%s: handle_installed_user salva il token dell'utente prima di abbassarlo" % F)
+    else:
+        ok = re.search(r"token_terminale::abbassa\([^)]*\)\s*\{\s*Ok\((\w+)\)\s*=>(.*?)\bErr\(", corpo, re.S)
+        if not ok or not re.search(r"CurrentLogonUser\(\s*crate::terminal_service::UserToken::new\(%s\)" % ok.group(1), ok.group(2)):
+            guai.append("%s: handle_installed_user, nel ramo Ok di token_terminale::abbassa, non salva il token abbassato (UserToken::new(t))" % F)
+    if "Some(crate::remotek::token_terminale::RIFIUTO)" not in corpo:
+        guai.append("%s: handle_installed_user non rifiuta il terminale se il token non si abbassa" % F)
+if len(costruzioni) != 1:
+    guai.append("%s: il token dell'utente del terminale si costruisce in %d punti, atteso 1 (dopo token_terminale::abbassa)" % (F, len(costruzioni)))
+print("\n".join(guai))
+PY
+) || esito_token="${esito_token:-}"$'\n'"controllo del token del terminale non eseguito: python3 terminato con errore"
+if [ -z "$esito_token" ]; then
+  ok "il terminale da utente usa il token abbassato, o si rifiuta (ADR-0028)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_token"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

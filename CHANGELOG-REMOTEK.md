@@ -15,6 +15,20 @@ rilasciate non si riscrivono.
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
   diceva "1 sessioni": ora dice "1 sessione" (in inglese "1 session"; le
   altre lingue, che non hanno la frase, la mostrano in inglese).
+- **Per i tecnici e l'agente AI**: sui PC Windows installati, la shell che
+  finisce (`exit 3`) chiude subito il terminale col suo codice: il CLI esce
+  con 3. Prima la sessione restava aperta finche' non la chiudeva il
+  controllante, e il codice arrivava come 0.
+
+### Sicurezza
+- Il terminale sui PC Windows installati non gira piu' come amministratore
+  senza che nessuno l'abbia chiesto. Con l'account Administrator
+  predefinito, o con un amministratore e il controllo dell'account utente
+  (UAC) spento, la shell aveva i permessi di amministratore (collaudo 20(d)):
+  ora gira con quelli di un utente normale, per l'agente AI come per i
+  tecnici. Se Windows non permette di toglierli, il terminale non parte e il
+  controllante vede il motivo. Il terminale "da amministratore" con nome e
+  password di un amministratore Windows resta com'era.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

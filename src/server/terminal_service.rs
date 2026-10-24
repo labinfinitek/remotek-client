@@ -36,6 +36,9 @@ const COMPRESS_THRESHOLD: usize = 512; // Compress terminal data larger than thi
                                        // Default max bytes for reconnection buffer replay.
 const DEFAULT_RECONNECT_BUFFER_BYTES: usize = 8 * 1024;
 const MAX_SIGWINCH_PHASE_ATTEMPTS: u8 = 3; // Max attempts per SIGWINCH phase before giving up
+// Remotek: quanto si aspetta il codice dell'helper quando il suo output e' finito.
+#[cfg(target_os = "windows")]
+const HELPER_EXIT_WAIT_MS: u32 = 1000;
 
 /// Two-phase SIGWINCH trigger for TUI app redraw on reconnection.
 ///
@@ -1712,6 +1715,13 @@ impl TerminalServiceProxy {
             } else {
                 0
             };
+            // Remotek: nel modo helper il codice e' quello dell'helper, se e' uscito.
+            #[cfg(target_os = "windows")]
+            let exit_code = crate::remotek::uscita_terminale::con_helper(
+                exit_code,
+                session.helper_process_handle.as_ref().map(|h| h.as_raw()),
+                0,
+            );
 
             let mut closed = TerminalClosed::new();
             closed.terminal_id = close.terminal_id;
@@ -2034,6 +2044,15 @@ impl TerminalServiceProxy {
                             }
                             add_to_reaper(child);
                         }
+                        // Remotek: nel modo helper il codice e' quello dell'helper.
+                        #[cfg(target_os = "windows")]
+                        {
+                            exit_code = crate::remotek::uscita_terminale::con_helper(
+                                exit_code,
+                                session.helper_process_handle.as_ref().map(|h| h.as_raw()),
+                                HELPER_EXIT_WAIT_MS,
+                            );
+                        }
                     }
                 } else {
                     // For persistent sessions, clear the child reference and remove the session
@@ -2046,6 +2065,15 @@ impl TerminalServiceProxy {
                                 exit_code = status.exit_code() as i32;
                             }
                             add_to_reaper(child);
+                        }
+                        // Remotek: nel modo helper il codice e' quello dell'helper.
+                        #[cfg(target_os = "windows")]
+                        {
+                            exit_code = crate::remotek::uscita_terminale::con_helper(
+                                exit_code,
+                                session.helper_process_handle.as_ref().map(|h| h.as_raw()),
+                                HELPER_EXIT_WAIT_MS,
+                            );
                         }
                         if session.closed_message_sent {
                             // Shell has exited, remove the dead session

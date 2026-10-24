@@ -16,7 +16,6 @@ rilasciate non si riscrivono.
   all'API un lasciapassare per quel PC e lo manda nel login del terminale
   (ADR-0028). Se l'API lo rifiuta (PC fuori dalla rubrica del tecnico,
   funzione spenta) il CLI scrive il motivo ed esce con 1, senza collegarsi.
-  Il PC non lo usa ancora: lo verifichera' la prossima versione.
 - Il PC verifica il lasciapassare dell'agente AI: firma dell'API Remotek,
   quel solo PC, entro 60 secondi (piu' 30 di tolleranza degli orologi), una
   volta sola. Nel registro delle connessioni dell'API la sessione risulta

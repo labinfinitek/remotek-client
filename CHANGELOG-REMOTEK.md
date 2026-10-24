@@ -48,6 +48,10 @@ rilasciate non si riscrivono.
   token revocato apriva comunque il terminale col nome salvato. Con
   l'accesso scaduto o revocato il CLI toglie le credenziali e chiede di
   rifare `remotek-cli login`; con l'API non raggiungibile non parte.
+- Il lasciapassare dell'agente AI vale solo per il login del terminale che
+  lo porta. Prima, se sulla stessa connessione a un login di terminale con
+  un lasciapassare valido ne seguiva uno di desktop, l'audit del desktop
+  riportava il lasciapassare del terminale.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

@@ -2015,8 +2015,11 @@ fi
 # lasciapassare esce dal login (`lasciapassare::togli(&mut lr)`) prima di
 # `handle_login_request_without_validation`, cosi' non resta in `self.lr` ne'
 # arriva a `try_start_desktop`, e l'audit ne porta il nonce
-# (`lasciapassare::audit`). Se python3 fallisce il controllo non e' eseguito
-# ed e' un errore.
+# (`lasciapassare::audit`). Il campo `lasciapassare` si azzera a ogni
+# LoginRequest, subito dopo `reset_session_scope_for_login()`: senza, un login
+# di terminale valido seguito da uno desktop sulla stessa connessione
+# porterebbe il nonce nell'audit del desktop. Se python3 fallisce il controllo
+# non e' eseguito ed e' un errore.
 CHIAVE_LASCIAPASSARE='Dv+D4Cwob7srUHd6Is+MZToqnKbrMt5vVFPqHEaB7sg='
 esito_lasciapassare=$(python3 - "$CHIAVE_LASCIAPASSARE" <<'PY'
 import re, sys
@@ -2032,13 +2035,15 @@ togli = c.find("crate::remotek::lasciapassare::togli(&mut lr)")
 login = c.find("self.handle_login_request_without_validation(&lr)")
 if togli < 0 or login < 0 or togli > login:
     guai.append("%s: il lasciapassare non esce dal login prima di handle_login_request_without_validation" % C)
+if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 1 or not re.search(r"self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
+    guai.append("%s: il lasciapassare non si azzera a ogni login (self.lasciapassare = None dopo reset_session_scope_for_login)" % C)
 if "crate::remotek::lasciapassare::audit(" not in c:
     guai.append("%s: l'audit della connessione non porta il lasciapassare" % C)
 print("\n".join(guai))
 PY
 ) || esito_lasciapassare="${esito_lasciapassare:-}"$'\n'"controllo del lasciapassare non eseguito: python3 terminato con errore"
 if [ -z "$esito_lasciapassare" ]; then
-  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, nonce nell'audit (ADR-0028)"
+  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, azzerato a ogni login, nonce nell'audit (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"

@@ -2560,6 +2560,8 @@ impl Connection {
                 return true;
             }
             self.reset_session_scope_for_login();
+            // Remotek (ADR-0028): il lasciapassare vale solo per il login che lo porta.
+            self.lasciapassare = None;
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(

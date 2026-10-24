@@ -1724,6 +1724,10 @@ import glob, re
 # Il percorso, non la chiamata: `use std::env::var;` o `use std::env::var as x;`
 # seguiti da var(..) o x(..) non hanno piu' "env::" accanto alla chiamata.
 VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|\benv\s*::\s*vars?(_os)?\b|\benv\s+as\b|set_var\(|--pass|password_preset|shared_password")
+# Codice del PC, non del CLI: il lasciapassare (ADR-0028) arriva in os_login e
+# si toglie da li' (sez. 24). Il resto di VIETATI vale anche qui.
+OS_LOGIN_DEL_PC = {"src/remotek/lasciapassare.rs"}
+SENZA_OS_LOGIN = re.compile(VIETATI.pattern.replace("os_login|OSLogin|", "", 1))
 # Un `use std::env::{..., var, ...};`, anche su piu' righe.
 IMPORTA_VAR = re.compile(r"\benv\s*::\s*\{[^}]*\bvars?(_os)?\b")
 STRINGA_GREZZA = re.compile(r'b?r(#*)"')
@@ -1804,7 +1808,7 @@ for f in FILE:
                 continue
         codice = codice[inizio:]
         vive.append(codice)
-        if VIETATI.search(codice):
+        if (SENZA_OS_LOGIN if f in OS_LOGIN_DEL_PC else VIETATI).search(codice):
             guai.append("%s:%d: %s" % (f, n, codice.strip()))
         if "IS_TERMINAL_ADMIN" in codice:
             if 'remove_var("IS_TERMINAL_ADMIN")' in codice:
@@ -2001,6 +2005,44 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_token"
+fi
+
+# --- 24. Il lasciapassare dell'agente -----------------------------------------
+# ADR-0028: il PC accetta il lasciapassare solo se la firma e' della chiave
+# pubblica dell'API Remotek (setup-lab, 111), cablata in
+# src/remotek/lasciapassare.rs come CHIAVE: un'altra chiave, o una costante
+# vuota (funzione spenta), si ferma qui. In src/server/connection.rs il
+# lasciapassare esce dal login (`lasciapassare::togli(&mut lr)`) prima di
+# `handle_login_request_without_validation`, cosi' non resta in `self.lr` ne'
+# arriva a `try_start_desktop`, e l'audit ne porta il nonce
+# (`lasciapassare::audit`). Se python3 fallisce il controllo non e' eseguito
+# ed e' un errore.
+CHIAVE_LASCIAPASSARE='Dv+D4Cwob7srUHd6Is+MZToqnKbrMt5vVFPqHEaB7sg='
+esito_lasciapassare=$(python3 - "$CHIAVE_LASCIAPASSARE" <<'PY'
+import re, sys
+attesa = sys.argv[1]
+guai = []
+F = "src/remotek/lasciapassare.rs"
+chiavi = re.findall(r'^pub const CHIAVE: &str = "([^"]*)";$', open(F, encoding="utf-8").read(), re.M)
+if chiavi != [attesa]:
+    guai.append("%s: la chiave del lasciapassare non e' quella dell'API Remotek: %s" % (F, ", ".join(repr(k) for k in chiavi) or "nessuna costante CHIAVE"))
+C = "src/server/connection.rs"
+c = "\n".join(r.split("//", 1)[0] for r in open(C, encoding="utf-8"))
+togli = c.find("crate::remotek::lasciapassare::togli(&mut lr)")
+login = c.find("self.handle_login_request_without_validation(&lr)")
+if togli < 0 or login < 0 or togli > login:
+    guai.append("%s: il lasciapassare non esce dal login prima di handle_login_request_without_validation" % C)
+if "crate::remotek::lasciapassare::audit(" not in c:
+    guai.append("%s: l'audit della connessione non porta il lasciapassare" % C)
+print("\n".join(guai))
+PY
+) || esito_lasciapassare="${esito_lasciapassare:-}"$'\n'"controllo del lasciapassare non eseguito: python3 terminato con errore"
+if [ -z "$esito_lasciapassare" ]; then
+  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, nonce nell'audit (ADR-0028)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_lasciapassare"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

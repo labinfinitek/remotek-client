@@ -17,6 +17,13 @@ rilasciate non si riscrivono.
   (ADR-0028). Se l'API lo rifiuta (PC fuori dalla rubrica del tecnico,
   funzione spenta) il CLI scrive il motivo ed esce con 1, senza collegarsi.
   Il PC non lo usa ancora: lo verifichera' la prossima versione.
+- Il PC verifica il lasciapassare dell'agente AI: firma dell'API Remotek,
+  quel solo PC, entro 60 secondi (piu' 30 di tolleranza degli orologi), una
+  volta sola. Nel registro delle connessioni dell'API la sessione risulta
+  "agente verificato", e per ogni terminale il PC dice se la shell gira come
+  amministratore. Il lasciapassare non cambia ancora ne' i permessi ne' la
+  finestra del cliente: con un lasciapassare valido o senza, il terminale resta
+  quello da utente, col clic del cliente.
 
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione

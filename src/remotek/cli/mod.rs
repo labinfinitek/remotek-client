@@ -11,8 +11,11 @@ const USO: &str = "uso:
   remotek-cli login <utente>   la password dell'account dell'agente si legge da stdin, una riga
   remotek-cli logout
   remotek-cli whoami
-  remotek-cli terminal <ID> [--attesa <secondi>] [--righe <n>] [--colonne <n>]
+  remotek-cli terminal <ID> [--amministratore] [--attesa <secondi>] [--righe <n>] [--colonne <n>]
                                stdin va al terminale del PC, il terminale su stdout;
+                               prima controlla l'accesso sull'API: scaduto o revocato, toglie
+                               le credenziali (rifare login); --amministratore chiede all'API
+                               un lasciapassare per quel PC (ADR-0028) e lo manda al PC;
                                si entra solo se il cliente accetta (attesa di default 120 s);
                                righe e colonne da 1 a 65535 (default 24 e 80);
                                esce col codice del terminale (fuori da 0-255: 255); 0 anche
@@ -35,11 +38,13 @@ enum Comando {
         attesa: u64,
         righe: u32,
         colonne: u32,
+        amministratore: bool,
     },
     Aiuto,
 }
 
-/// `terminal <ID>` con le sole tre opzioni numeriche; nessuna porta una password.
+/// `terminal <ID>` con le tre opzioni numeriche e `--amministratore`; nessuna
+/// porta una password.
 fn leggi_terminale(id: &str, opzioni: &[&str]) -> Result<Comando, String> {
     // Solo l'ID: niente `/r`, `@server` o altro che il client interpreta.
     let valido = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
@@ -47,15 +52,23 @@ fn leggi_terminale(id: &str, opzioni: &[&str]) -> Result<Comando, String> {
         return Err("ID del PC non valido".to_owned());
     }
     let (mut attesa, mut righe, mut colonne) = (120, 24, 80);
-    let mut resto = opzioni.chunks(2);
-    while let Some(coppia) = resto.next() {
-        let valore = |v: Option<&&str>| v.and_then(|v| v.parse::<u32>().ok()).filter(|n| *n > 0);
+    let mut amministratore = false;
+    let mut resto = opzioni.iter();
+    while let Some(opzione) = resto.next() {
+        if *opzione == "--amministratore" {
+            amministratore = true;
+            continue;
+        }
+        let valore = resto
+            .next()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| *n > 0);
         // Il PC converte righe e colonne in u16 (src/server/terminal_service.rs).
         let dimensione = |n: u32| n <= u32::from(u16::MAX);
-        match (coppia.first(), valore(coppia.get(1))) {
-            (Some(&"--attesa"), Some(n)) => attesa = n,
-            (Some(&"--righe"), Some(n)) if dimensione(n) => righe = n,
-            (Some(&"--colonne"), Some(n)) if dimensione(n) => colonne = n,
+        match (*opzione, valore) {
+            ("--attesa", Some(n)) => attesa = n,
+            ("--righe", Some(n)) if dimensione(n) => righe = n,
+            ("--colonne", Some(n)) if dimensione(n) => colonne = n,
             _ => return Err("argomenti non validi".to_owned()),
         }
     }
@@ -64,6 +77,7 @@ fn leggi_terminale(id: &str, opzioni: &[&str]) -> Result<Comando, String> {
         attesa: attesa.into(),
         righe,
         colonne,
+        amministratore,
     })
 }
 
@@ -87,9 +101,9 @@ fn leggi_argomenti(args: &[String]) -> Result<Comando, String> {
 
 /// L'unico runtime del CLI, per le richieste all'API. Il terminale non lo usa:
 /// `io_loop` gira nel suo thread come in src/flutter.rs (`session_start_`).
-fn nel_runtime<F: std::future::Future<Output = Result<String, String>>>(
+fn nel_runtime<T, F: std::future::Future<Output = Result<T, String>>>(
     futuro: F,
-) -> Result<String, String> {
+) -> Result<T, String> {
     hbb_common::tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -99,7 +113,8 @@ fn nel_runtime<F: std::future::Future<Output = Result<String, String>>>(
 
 /// Punto d'ingresso del binario: restituisce il codice d'uscita.
 pub fn main() -> i32 {
-    // ADR-0021, regola 3: mai il terminale come amministratore.
+    // ADR-0021, regola 3: mai il modo amministratore di upstream; da ADR-0028
+    // l'amministratore si chiede solo col lasciapassare.
     std::env::remove_var("IS_TERMINAL_ADMIN");
     // `args()` andrebbe in panic, stampandolo, su un argomento non UTF-8.
     let args: Result<Vec<String>, _> = std::env::args_os()
@@ -124,10 +139,15 @@ pub fn main() -> i32 {
             attesa,
             righe,
             colonne,
+            amministratore,
         }) => {
-            // Il cliente deve vedere "Agente AI per <tecnico>", non l'utente Linux.
-            let esito =
-                account::whoami().and_then(|_| terminale::terminale(&id, attesa, righe, colonne));
+            let esito = avvia_terminale(
+                // Il cliente deve vedere "Agente AI per <tecnico>", non l'utente Linux.
+                || account::whoami().and_then(|_| nel_runtime(account::verifica_accesso())),
+                // Per ultimo: vale 60 secondi.
+                amministratore.then_some(|| nel_runtime(account::lasciapassare(&id))),
+                |lasciapassare| terminale::terminale(&id, attesa, righe, colonne, lasciapassare),
+            );
             return match esito {
                 Ok(codice) => codice,
                 Err(e) => {
@@ -157,6 +177,23 @@ pub fn main() -> i32 {
     }
 }
 
+/// Il terminale si apre solo dopo che l'accesso e' verificato e, se chiesto,
+/// il lasciapassare e' arrivato.
+fn avvia_terminale(
+    verifica: impl FnOnce() -> Result<(), String>,
+    chiedi: Option<impl FnOnce() -> Result<String, String>>,
+    collega: impl FnOnce(Option<String>) -> Result<i32, String>,
+) -> Result<i32, String> {
+    verifica()?;
+    let lasciapassare = chiedi.map(|c| c()).transpose()?;
+    collega(lasciapassare)
+}
+
+/// I test che toccano l'ambiente o le opzioni locali non girano in parallelo:
+/// `initialize` legge IS_TERMINAL_ADMIN, il CLI token e `user_info`.
+#[cfg(test)]
+static AMBIENTE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +216,7 @@ mod tests {
             attesa,
             righe,
             colonne,
+            amministratore: false,
         };
         assert_eq!(leggi(&["terminal", "123456789"]), Ok(t(120, 24, 80)));
         assert_eq!(
@@ -195,6 +233,48 @@ mod tests {
         assert_eq!(
             leggi(&["terminal", "123456789", "--righe", "65535"]),
             Ok(t(120, 65535, 80))
+        );
+        assert_eq!(
+            leggi(&[
+                "terminal",
+                "123456789",
+                "--amministratore",
+                "--attesa",
+                "30"
+            ]),
+            Ok(Comando::Terminale {
+                id: "123456789".into(),
+                attesa: 30,
+                righe: 24,
+                colonne: 80,
+                amministratore: true,
+            })
+        );
+    }
+
+    #[test]
+    fn senza_accesso_o_lasciapassare_nessuna_connessione() {
+        let collega = |_: Option<String>| -> Result<i32, String> { panic!("collegato") };
+        let mai = None::<fn() -> Result<String, String>>;
+        assert_eq!(
+            avvia_terminale(|| Err("scaduto".into()), Some(|| Ok("l".into())), collega),
+            Err("scaduto".into())
+        );
+        assert_eq!(
+            avvia_terminale(|| Ok(()), Some(|| Err("400".into())), collega),
+            Err("400".into())
+        );
+        assert_eq!(
+            avvia_terminale(|| Ok(()), mai, |l| Ok(l.map_or(0, |_| 1))),
+            Ok(0)
+        );
+        assert_eq!(
+            avvia_terminale(
+                || Ok(()),
+                Some(|| Ok("l".into())),
+                |l| Ok(l.map_or(0, |_| 1))
+            ),
+            Ok(1)
         );
     }
 
@@ -215,6 +295,8 @@ mod tests {
             &["terminal", "123456789", "--attesa", "-1"],
             &["terminal", "123456789", "--righe", "65536"],
             &["terminal", "123456789", "--colonne", "4294967295"],
+            &["terminal", "123456789", "--amministratore", "segreta"],
+            &["terminal", "123456789", "--amministratore=segreta"],
             &["terminal", "123456789/r"],
             &["terminal", "123456789@server"],
             &[],

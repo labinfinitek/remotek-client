@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 const PREFISSO_NOME: &str = "Agente AI per ";
+const ACCESSO_SCADUTO: &str = "accesso scaduto o revocato: rifai `remotek-cli login`";
 
 /// Stato e corpo di una risposta dell'API.
 struct Risposta {
@@ -127,6 +128,46 @@ fn esito_agente(r: &Risposta) -> Result<String, String> {
     }
 }
 
+/// Perche' il token salvato non basta per aprire un terminale.
+#[derive(Debug, PartialEq)]
+enum Rifiuto {
+    /// 401: token scaduto o revocato.
+    Scaduto,
+    Errore(String),
+}
+
+/// `POST /api/currentUser`: il token vale ancora.
+fn esito_utente(r: &Risposta) -> Result<(), Rifiuto> {
+    match r.status_code {
+        401 => Err(Rifiuto::Scaduto),
+        200 => match serde_json::from_str::<Value>(&r.body) {
+            Ok(v) if v.get("error").is_none() => Ok(()),
+            _ => Err(Rifiuto::Errore(errore_api(
+                "verifica dell'accesso: risposta non valida",
+                r,
+            ))),
+        },
+        _ => Err(Rifiuto::Errore(errore_api(
+            "verifica dell'accesso non riuscita",
+            r,
+        ))),
+    }
+}
+
+/// `GET /api/agente`: ancora un agente, dello stesso tecnico del login.
+fn esito_tecnico(r: &Risposta, salvato: &str) -> Result<(), Rifiuto> {
+    if r.status_code == 401 {
+        return Err(Rifiuto::Scaduto);
+    }
+    let tecnico = esito_agente(r).map_err(Rifiuto::Errore)?;
+    if tecnico != salvato {
+        return Err(Rifiuto::Errore(format!(
+            "l'agente ora risponde a {tecnico}, non a {salvato}: rifai `remotek-cli login`"
+        )));
+    }
+    Ok(())
+}
+
 fn user_info_agente(mut utente: Value, tecnico: &str) -> Value {
     if !utente.is_object() {
         utente = json!({});
@@ -135,12 +176,16 @@ fn user_info_agente(mut utente: Value, tecnico: &str) -> Value {
     utente
 }
 
+/// Il corpo di `/api/logout` e `/api/currentUser` del client Flutter.
+fn corpo_dispositivo() -> String {
+    json!({ "id": Config::get_id(), "uuid": crate::encode64(hbb_common::get_uuid()) }).to_string()
+}
+
 async fn logout_api(api: &str, token: &str) -> Result<(), String> {
-    let corpo = json!({ "id": Config::get_id(), "uuid": crate::encode64(hbb_common::get_uuid()) });
     let r = richiesta(
         format!("{api}/api/logout"),
         Method::POST,
-        Some(corpo.to_string()),
+        Some(corpo_dispositivo()),
         Some(token),
     )
     .await?;
@@ -221,6 +266,78 @@ fn salva(chiave: &str, valore: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Prima di ogni `terminal`: il token salvato vale ancora ed e' di un agente
+/// dello stesso tecnico. Un errore di rete o dell'API ferma il terminale; un
+/// 401 toglie anche le credenziali locali.
+pub(super) async fn verifica_accesso() -> Result<(), String> {
+    verifica_accesso_su(&api()?).await
+}
+
+async fn verifica_accesso_su(api: &str) -> Result<(), String> {
+    let token = LocalConfig::get_option("access_token");
+    let tecnico = salvati(&LocalConfig::get_option("user_info"))
+        .map(|(_, tecnico)| tecnico)
+        .ok_or_else(|| "user_info non leggibile: remotek-cli login <utente>".to_owned())?;
+    match controlla(api, &token, &tecnico).await {
+        Ok(()) => Ok(()),
+        Err(Rifiuto::Errore(e)) => Err(e),
+        Err(Rifiuto::Scaduto) => {
+            match salva("access_token", "").and_then(|()| salva("user_info", "")) {
+                Ok(()) => Err(ACCESSO_SCADUTO.to_owned()),
+                Err(e) => Err(format!("{ACCESSO_SCADUTO}; {e}")),
+            }
+        }
+    }
+}
+
+async fn controlla(api: &str, token: &str, tecnico: &str) -> Result<(), Rifiuto> {
+    let utente = richiesta(
+        format!("{api}/api/currentUser"),
+        Method::POST,
+        Some(corpo_dispositivo()),
+        Some(token),
+    )
+    .await
+    .map_err(Rifiuto::Errore)?;
+    esito_utente(&utente)?;
+    let agente = richiesta(format!("{api}/api/agente"), Method::GET, None, Some(token))
+        .await
+        .map_err(Rifiuto::Errore)?;
+    esito_tecnico(&agente, tecnico)
+}
+
+fn corpo_lasciapassare(id: &str) -> Value {
+    json!({ "id": id })
+}
+
+/// La risposta di `POST /api/agente/lasciapassare`: la stringa, o il motivo
+/// che l'API scrive in `error` (PC fuori dalla rubrica, funzione spenta, ...).
+fn esito_lasciapassare(r: &Risposta) -> Result<String, String> {
+    if r.status_code != 200 {
+        return Err(errore_api("lasciapassare rifiutato", r));
+    }
+    serde_json::from_str::<Value>(&r.body)
+        .ok()
+        .and_then(|v| v.get("lasciapassare")?.as_str().map(str::to_owned))
+        .filter(|l| !l.is_empty())
+        .ok_or_else(|| "lasciapassare: risposta senza lasciapassare".to_owned())
+}
+
+/// Il lasciapassare dell'API per il PC `id` (ADR-0028). Va solo nel login del
+/// terminale: mai su stdout, nel log o in un file.
+pub(super) async fn lasciapassare(id: &str) -> Result<String, String> {
+    let api = api()?;
+    let token = LocalConfig::get_option("access_token");
+    let r = richiesta(
+        format!("{api}/api/agente/lasciapassare"),
+        Method::POST,
+        Some(corpo_lasciapassare(id).to_string()),
+        Some(&token),
+    )
+    .await?;
+    esito_lasciapassare(&r)
+}
+
 pub(super) async fn logout() -> Result<String, String> {
     let token = LocalConfig::get_option("access_token");
     if token.is_empty() {
@@ -246,16 +363,23 @@ pub(super) fn whoami() -> Result<String, String> {
 }
 
 fn descrivi(id: &str, user_info: &str) -> Result<String, String> {
-    let info: Value = serde_json::from_str(user_info).unwrap_or_default();
+    salvati(user_info)
+        .map(|(utente, tecnico)| format!("ID: {id}\nutente: {utente}\ntecnico: {tecnico}"))
+        .ok_or_else(|| "user_info non leggibile: remotek-cli login <utente>".to_owned())
+}
+
+/// Utente e tecnico salvati al login in `user_info`.
+fn salvati(user_info: &str) -> Option<(String, String)> {
+    let info: Value = serde_json::from_str(user_info).ok()?;
     let campo = |k: &str| info.get(k).and_then(Value::as_str).unwrap_or_default();
     match (
         campo("name"),
         campo("display_name").strip_prefix(PREFISSO_NOME),
     ) {
         (utente, Some(tecnico)) if !utente.is_empty() && !tecnico.is_empty() => {
-            Ok(format!("ID: {id}\nutente: {utente}\ntecnico: {tecnico}"))
+            Some((utente.to_owned(), tecnico.to_owned()))
         }
-        _ => Err("user_info non leggibile: remotek-cli login <utente>".to_owned()),
+        _ => None,
     }
 }
 
@@ -330,6 +454,132 @@ mod tests {
             user_info_agente(Value::Null, "M")["display_name"],
             "Agente AI per M"
         );
+    }
+
+    #[test]
+    fn accesso_utente_e_tecnico() {
+        assert_eq!(
+            esito_utente(&risposta(200, r#"{"name":"agente1"}"#)),
+            Ok(())
+        );
+        assert_eq!(esito_utente(&risposta(401, "")), Err(Rifiuto::Scaduto));
+        for rotta in [risposta(500, "<html>"), risposta(200, r#"{"error":"x"}"#)] {
+            assert!(matches!(esito_utente(&rotta), Err(Rifiuto::Errore(_))));
+        }
+        let agente = |c: &str| esito_tecnico(&risposta(200, c), "Mario");
+        assert_eq!(agente(r#"{"agente":true,"tecnico":"Mario"}"#), Ok(()));
+        for rifiutato in [
+            r#"{"agente":false,"tecnico":""}"#,
+            r#"{"agente":true,"tecnico":"Luca"}"#,
+        ] {
+            assert!(
+                matches!(agente(rifiutato), Err(Rifiuto::Errore(_))),
+                "{rifiutato}"
+            );
+        }
+        assert_eq!(
+            esito_tecnico(&risposta(401, ""), "Mario"),
+            Err(Rifiuto::Scaduto)
+        );
+    }
+
+    #[test]
+    fn richiesta_e_risposta_del_lasciapassare() {
+        assert_eq!(corpo_lasciapassare("123456789"), json!({"id": "123456789"}));
+        assert_eq!(
+            esito_lasciapassare(&risposta(200, r#"{"lasciapassare":"pay.firma"}"#)),
+            Ok("pay.firma".to_owned())
+        );
+        assert_eq!(
+            esito_lasciapassare(&risposta(
+                400,
+                r#"{"error":"PC non nella rubrica del tecnico"}"#
+            )),
+            Err("lasciapassare rifiutato: HTTP 400 PC non nella rubrica del tecnico".to_owned())
+        );
+        for rotta in [r#"{"lasciapassare":""}"#, "{}", "<html>"] {
+            assert!(
+                esito_lasciapassare(&risposta(200, rotta)).is_err(),
+                "{rotta}"
+            );
+        }
+    }
+
+    /// Un'API finta su 127.0.0.1: per ogni rotta lo stato e il corpo dati, e
+    /// l'elenco delle rotte chieste.
+    async fn api_finta(
+        risposte: &'static [(&'static str, u16, &'static str)],
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use hbb_common::tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let ascolto = hbb_common::tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let url = format!("http://{}", ascolto.local_addr().unwrap());
+        let chieste = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let segnate = chieste.clone();
+        hbb_common::tokio::spawn(async move {
+            while let Ok((mut s, _)) = ascolto.accept().await {
+                // Tutta la richiesta, intestazioni e corpo, prima di rispondere.
+                let mut letta = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let testo = String::from_utf8_lossy(&letta).to_lowercase();
+                    if let Some(fine) = testo.find("\r\n\r\n") {
+                        let lunghezza = testo
+                            .lines()
+                            .find_map(|r| r.strip_prefix("content-length:"))
+                            .and_then(|n| n.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if letta.len() >= fine + 4 + lunghezza {
+                            break;
+                        }
+                    }
+                    match s.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => letta.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let testo = String::from_utf8_lossy(&letta).into_owned();
+                let rotta = testo.split_whitespace().nth(1).unwrap_or("").to_owned();
+                let (stato, corpo) = risposte
+                    .iter()
+                    .find(|(r, _, _)| *r == rotta)
+                    .map_or((404, ""), |(_, s, c)| (*s, *c));
+                segnate.lock().unwrap().push(rotta);
+                let r = format!(
+                    "HTTP/1.1 {stato} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{corpo}",
+                    corpo.len()
+                );
+                s.write_all(r.as_bytes()).await.unwrap();
+            }
+        });
+        (url, chieste)
+    }
+
+    #[test]
+    fn accesso_scaduto_toglie_le_credenziali() {
+        let _ambiente = super::super::AMBIENTE.lock().unwrap();
+        let opzione = |k: &str| LocalConfig::get_option(k);
+        let prima = (opzione("access_token"), opzione("user_info"));
+        LocalConfig::set_option("access_token".into(), "t".into());
+        let info = r#"{"name":"agente1","display_name":"Agente AI per Mario"}"#;
+        LocalConfig::set_option("user_info".into(), info.into());
+        let rt = hbb_common::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (esito, chieste) = rt.block_on(async {
+            let (url, chieste) =
+                api_finta(&[("/api/currentUser", 401, r#"{"error":"Invalid token"}"#)]).await;
+            (verifica_accesso_su(&url).await, chieste)
+        });
+        let dopo = (opzione("access_token"), opzione("user_info"));
+        LocalConfig::set_option("access_token".into(), prima.0);
+        LocalConfig::set_option("user_info".into(), prima.1);
+        assert_eq!(esito, Err(ACCESSO_SCADUTO.to_owned()));
+        // Niente /api/agente dopo il 401, e le credenziali locali sono tolte.
+        assert_eq!(*chieste.lock().unwrap(), ["/api/currentUser"]);
+        assert_eq!(dopo, (String::new(), String::new()));
     }
 
     #[test]

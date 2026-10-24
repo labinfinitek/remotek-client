@@ -11,6 +11,13 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Aggiunto
+- **Per l'agente AI**: `remotek-cli terminal <ID> --amministratore` chiede
+  all'API un lasciapassare per quel PC e lo manda nel login del terminale
+  (ADR-0028). Se l'API lo rifiuta (PC fuori dalla rubrica del tecnico,
+  funzione spenta) il CLI scrive il motivo ed esce con 1, senza collegarsi.
+  Il PC non lo usa ancora: lo verifichera' la prossima versione.
+
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
   diceva "1 sessioni": ora dice "1 sessione" (in inglese "1 session"; le
@@ -29,6 +36,11 @@ rilasciate non si riscrivono.
   tecnici. Se Windows non permette di toglierli, il terminale non parte e il
   controllante vede il motivo. Il terminale "da amministratore" con nome e
   password di un amministratore Windows resta com'era.
+- `remotek-cli terminal` controlla sull'API, prima di collegarsi, che
+  l'accesso dell'agente valga ancora e sia dello stesso tecnico. Prima un
+  token revocato apriva comunque il terminale col nome salvato. Con
+  l'accesso scaduto o revocato il CLI toglie le credenziali e chiede di
+  rifare `remotek-cli login`; con l'API non raggiungibile non parte.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

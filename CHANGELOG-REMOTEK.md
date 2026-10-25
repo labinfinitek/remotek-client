@@ -11,6 +11,25 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-4] - 2026-10-25
+Base upstream: RustDesk 1.4.9, piu' due correzioni di RustDesk 1.5.0 prese
+una per una (REM-2026-008). Exe Windows x86_64 **non firmato**, sorgenti al
+tag `remotek-1.4.9-4` di remotek-client e remotek-hbb-common (hbb_common
+`df5cf4f`, lo stesso di `remotek-1.4.9-3`). Con l'exe c'e' `remotek-cli` per
+Linux, per l'agente AI di Infinitek: quello del -3 non controlla l'accesso
+dell'agente e non chiede il lasciapassare, e va sostituito.
+**Per chi installa**: per il lasciapassare dell'agente AI serve l'API
+`api-v0.8.0` o seguente con la chiave dei lasciapassare accesa
+(`agente.lasciapassare-chiave`). Senza, il PC funziona e l'agente lavora
+solo da utente, col clic del cliente. L'orologio del PC dev'essere giusto:
+entro 5 minuti per la firma delle richieste, entro 30 secondi perche' il
+lasciapassare dell'agente valga. Si installa sopra la
+versione precedente. Un server accetta l'agente senza clic solo con un
+`custom.txt` firmato da Infinitek che lo abilita (`remotek-agente` =
+`non-presidiato`), server per server.
+**Per i tecnici**: il terminale non gira mai da amministratore senza che lo
+chieda qualcuno; la shell che finisce chiude la sessione col suo codice.
+
 ### Aggiunto
 - **Per l'agente AI**: `remotek-cli terminal <ID> --amministratore` chiede
   all'API un lasciapassare per quel PC e lo manda nel login del terminale
@@ -104,13 +123,14 @@ rilasciate non si riscrivono.
 - Lo scambio dei lati non porta piu' nel desktop il terminale "da
   amministratore" chiesto prima sulla stessa connessione con le credenziali
   di Windows.
-- Sui server non presidiati (caso 3), un terminale che l'agente AI apre alla
-  schermata di accesso (nessuno alla console) non manda piu' il suo output al
-  connection manager: la trascrizione nasce senza la vista del CM. Prima
-  l'output della shell SYSTEM si sarebbe accumulato senza tetto nella memoria
-  del servizio, e chi avesse poi effettuato l'accesso alla console avrebbe
-  ricevuto nel CM tutto l'arretrato delle sessioni dell'agente, anche da un
-  utente non amministratore. La trascrizione su file e l'audit restano.
+- Un terminale aperto alla schermata di accesso, con nessuno alla console
+  (l'agente AI su un server non presidiato, o un terminale con nome e
+  password di Windows), non manda piu' il suo output alla finestra di
+  Remotek, che li' non c'e': la trascrizione nasce senza quella vista. Prima
+  l'output della shell restava nella memoria del servizio, senza tetto, e chi
+  effettuava poi l'accesso alla console lo riceveva tutto, anche da utente
+  non amministratore. Ora chi accede vede la connessione, senza output, e la
+  puo' chiudere. La trascrizione su file e l'audit restano.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

@@ -2039,11 +2039,13 @@ fi
 # LoginRequest, subito dopo `reset_session_scope_for_login()`: senza, un login
 # di terminale valido seguito da uno desktop sulla stessa connessione
 # porterebbe il nonce nell'audit. Nello scambio dei lati (`SwitchSidesResponse`)
-# si azzera il solo lasciapassare, subito dopo il login e prima del controllo
-# dell'uuid; l'ambito della sessione li' non si tocca (un reset prima
-# dell'uuid farebbe di una richiesta di terminale, con un uuid qualunque, un
-# desktop da autorizzare col clic). Se python3 fallisce il controllo non e'
-# eseguito ed e' un errore.
+# prima del controllo dell'uuid non si tocca niente (ne' il login ne'
+# l'ambito: un reset prima dell'uuid farebbe di una richiesta di terminale,
+# con un uuid qualunque, un desktop da autorizzare col clic); dopo, come in
+# upstream 1.5.0 (rustdesk/rustdesk@96e2a33, sez. 27), un login che non e' di
+# desktop si rifiuta, poi il reset, il login e subito l'azzeramento del
+# lasciapassare. Se python3 fallisce il controllo non e' eseguito ed e' un
+# errore.
 CHIAVE_LASCIAPASSARE='Dv+D4Cwob7srUHd6Is+MZToqnKbrMt5vVFPqHEaB7sg='
 esito_lasciapassare=$(python3 - "$CHIAVE_LASCIAPASSARE" <<'PY'
 import re, sys
@@ -2059,20 +2061,20 @@ togli = c.find("crate::remotek::lasciapassare::togli(&mut lr)")
 login = c.find("self.handle_login_request_without_validation(&lr)")
 if togli < 0 or login < 0 or togli > login:
     guai.append("%s: il lasciapassare non esce dal login prima di handle_login_request_without_validation" % C)
-if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 1 or not re.search(r"self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
+if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 2 or not re.search(r"\{\s*return true;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
     guai.append("%s: il lasciapassare non si azzera a ogni login (self.lasciapassare = None dopo reset_session_scope_for_login)" % C)
-scambio = re.search(r"Some\(message::Union::SwitchSidesResponse\(_s\)\) = msg\.union \{(.*?)if uuid == uuid_old \{", c, re.S)
-if not scambio or not re.search(r"self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;", scambio.group(1)):
-    guai.append("%s: lo scambio dei lati (SwitchSidesResponse) non azzera il lasciapassare subito dopo il login, prima del controllo dell'uuid" % C)
-elif "reset_session_scope_for_login" in scambio.group(1):
-    guai.append("%s: lo scambio dei lati cambia l'ambito della sessione (reset_session_scope_for_login) prima del controllo dell'uuid" % C)
+scambio = re.search(r"Some\(message::Union::SwitchSidesResponse\(_s\)\) = msg\.union \{(.*?)if uuid == uuid_old \{(.*?)self\.from_switch = true;", c, re.S)
+if not scambio or not re.fullmatch(r"\s*if lr\.union\.is_some\(\) \{.*?return false;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*", scambio.group(2), re.S):
+    guai.append("%s: lo scambio dei lati (SwitchSidesResponse), con l'uuid giusto, non rifiuta piu' un login non desktop o non azzera il lasciapassare subito dopo il login" % C)
+elif "reset_session_scope_for_login" in scambio.group(1) or "handle_login_request_without_validation" in scambio.group(1):
+    guai.append("%s: lo scambio dei lati applica il login o cambia l'ambito della sessione prima del controllo dell'uuid" % C)
 if "crate::remotek::lasciapassare::audit(" not in c:
     guai.append("%s: l'audit della connessione non porta il lasciapassare" % C)
 print("\n".join(guai))
 PY
 ) || esito_lasciapassare="${esito_lasciapassare:-}"$'\n'"controllo del lasciapassare non eseguito: python3 terminato con errore"
 if [ -z "$esito_lasciapassare" ]; then
-  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, azzerato a ogni login e nello scambio dei lati prima dell'uuid, nonce nell'audit (ADR-0028)"
+  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, azzerato a ogni login e nello scambio dei lati subito dopo il login, che arriva solo dopo l'uuid, nonce nell'audit (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
@@ -2141,7 +2143,7 @@ falsi = [a for a in assegnazioni if a == "false"]
 scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),", c)
 if len(scelte) != 1 or len(assegnazioni) != len(falsi) + 1:
     guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore e scelta_terminale::scelta (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
-if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*SWITCH_SIDES_UUID", c):
+if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*self\.from_switch = true;", c):
     guai.append("%s: la scelta dell'amministratore non si azzera a ogni login e scambio dei lati" % C)
 S = "src/remotek/scelta_terminale.rs"
 t = codice(S)
@@ -2158,6 +2160,79 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_sistema"
+fi
+
+# --- 27. Un login ripetuto non cambia l'ambito della sessione ---------------
+# REM-2026-008, cherry-pick di rustdesk/rustdesk@594e638 (RustDesk 1.5.0):
+# prima del clic la connessione accetta altri LoginRequest, ma il connection
+# manager resta sulla finestra del primo. Il primo login fissa `login_scope`
+# (digest di ID del controllante, tipo e bersaglio della sessione) e
+# `check_login_scope` rifiuta un login ripetuto con un ambito diverso, prima di
+# `handle_login_request_without_validation`; `login_scope` si scrive solo li'.
+# Lo scambio dei lati vale solo per il desktop (rustdesk/rustdesk@96e2a33,
+# RustDesk 1.5.0: con l'uuid giusto un login non desktop si rifiuta; nel
+# registro una SwitchSidesRequest ha il suo nome e fuori dal desktop e' fuori
+# ambito). Il lasciapassare dell'agente vale solo nel primo login
+# (`lasciapassare::solo_al_primo_login`, col valore di `login_scope` letto
+# prima del controllo) e a ogni login non autorizzato si azzera anche il
+# token del terminale (`azzera_token_terminale`, che chiude l'handle come il
+# Drop): token, lasciapassare e audit vengono dallo stesso login. La sezione
+# resta finche' non arriva il merge della 1.5.0, poi si confronta col codice
+# di upstream. Se python3 fallisce il controllo non e' eseguito ed e' un
+# errore.
+esito_ambito=$(python3 - <<'PY'
+import re
+guai = []
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+C = "src/server/connection.rs"
+c = codice(C)
+if not re.search(r"^\s*login_scope: Option<\[u8; 32\]>,$", c, re.M) or not re.search(r"^\s*login_scope: None,$", c, re.M):
+    guai.append("%s: manca il campo login_scope, o non parte vuoto" % C)
+digest = re.search(r"fn login_scope_digest\(lr: &LoginRequest\) -> \[u8; 32\] \{(.*?)\n    \}\n", c, re.S)
+if not digest:
+    guai.append("%s: manca login_scope_digest" % C)
+else:
+    d = digest.group(1)
+    attesi = ["push(lr.my_id.as_bytes());", "Some(login_request::Union::FileTransfer(ft))", "Some(login_request::Union::ViewCamera(vc))", "Some(login_request::Union::Terminal(t))", "Some(login_request::Union::PortForward(pf))", "push(service_id.as_bytes());", "push(host.as_bytes());", "push(dir.as_bytes());"]
+    mancano = [a for a in attesi if a not in d]
+    if mancano or not re.search(r"None \| Some\(_\) => push\(b\"remote\"\)", d):
+        guai.append("%s: login_scope_digest non copre piu' ID del controllante, tipo e bersaglio della sessione (%s)" % (C, ", ".join(mancano) or "ripiego remote"))
+controllo = re.search(r"async fn check_login_scope\(&mut self, lr: &LoginRequest\) -> bool \{(.*?)\n    \}\n", c, re.S)
+if not controllo or not re.search(r"Some\(initial\) if initial != requested => \{.*?self\.send_login_error\([^)]*\)\.await;\s*false\s*\}", controllo.group(1), re.S) or not re.search(r"None => \{\s*self\.login_scope = Some\(requested\);\s*true\s*\}", controllo.group(1)):
+    guai.append("%s: check_login_scope non rifiuta piu' un ambito diverso dal primo, o non lo fissa al primo login" % C)
+ramo = re.search(r"if let Some\(message::Union::LoginRequest\(mut lr\)\) = msg\.union \{(.*?)self\.handle_login_request_without_validation\(&lr\)\.await;", c, re.S)
+if not ramo or not re.fullmatch(r"\s*let lasciapassare = crate::remotek::lasciapassare::togli\(&mut lr\);\s*let primo_login = self\.login_scope\.is_none\(\);\s*if !self\.check_login_scope\(&lr\)\.await \{\s*return false;\s*\}\s*let lasciapassare = crate::remotek::lasciapassare::solo_al_primo_login\(\s*lasciapassare,\s*primo_login,\s*&lr\.my_id,?\s*\);\s*", ramo.group(1)):
+    guai.append("%s: nel ramo LoginRequest, prima di handle_login_request_without_validation, non ci sono piu' solo togli, check_login_scope e solo_al_primo_login" % C)
+assegna = re.findall(r"self\.login_scope =", c)
+if len(assegna) != 1 or not controllo or "self.login_scope =" not in controllo.group(1):
+    guai.append("%s: login_scope si scrive fuori da check_login_scope (%d assegnazioni)" % (C, len(assegna)))
+azzera = re.search(r"fn azzera_token_terminale\(&mut self\) \{(.*?)\n    \}\n", c, re.S)
+if not azzera or not re.fullmatch(r"\s*#\[cfg\(target_os = \"windows\"\)\]\s*if let Some\(TerminalUserToken::CurrentLogonUser\(token\)\) = self\.terminal_user_token\.take\(\) \{.*?CloseHandle\(HANDLE\(token\.as_raw\(\) as _\)\).*?\}\s*self\.terminal_user_token = None;\s*", azzera.group(1), re.S):
+    guai.append("%s: azzera_token_terminale non toglie piu' il token (take, CloseHandle, None)" % C)
+if not re.search(r"\{\s*return true;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c):
+    guai.append("%s: un login non autorizzato non azzera piu' il token del terminale (azzera_token_terminale prima di match lr.union)" % C)
+if 'Some(misc::Union::SwitchSidesRequest(_)) => "misc.switch_sides_request",' not in c:
+    guai.append("%s: SwitchSidesRequest non ha piu' il suo nome nell'ambito della sessione (rustdesk/rustdesk@96e2a33)" % C)
+if "fn login_scope_latches_session_scope_across_login_retries()" not in c:
+    guai.append("%s: manca il test di upstream login_scope_latches_session_scope_across_login_retries" % C)
+L = "src/remotek/lasciapassare.rs"
+if not re.search(r"pub fn solo_al_primo_login\([^)]*\) -> Option<String> \{\s*if lasciapassare\.is_some\(\) && !primo_login \{.*?return None;\s*\}\s*lasciapassare\s*\}", codice(L), re.S):
+    guai.append("%s: solo_al_primo_login non scarta piu' il lasciapassare di un login ripetuto" % L)
+W = ".github/workflows/remotek-cli.yml"
+w = open(W, encoding="utf-8").read()
+for t in ("server::connection::test::login_scope", "server::connection::test::session_scope"):
+    if t not in w:
+        guai.append("%s: la CI Linux non fa piu' girare %s" % (W, t))
+print("\n".join(guai))
+PY
+) || esito_ambito="${esito_ambito:-}"$'\n'"controllo dell'ambito del login non eseguito: python3 terminato con errore"
+if [ -z "$esito_ambito" ]; then
+  ok "un login ripetuto non cambia l'ambito della sessione ne' porta lasciapassare o token di prima; scambio dei lati solo desktop (REM-2026-008, rustdesk/rustdesk@594e638 e @96e2a33)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_ambito"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

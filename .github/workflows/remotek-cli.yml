@@ -95,8 +95,10 @@ jobs:
           NO_PKG_CONFIG_libyuv: "1"
         run: |
           set -euo pipefail
-          cargo test --locked --lib --features linux-pkg-config server::terminal_service | tee "$RUNNER_TEMP/test.log"
+          cargo test --locked --lib --features linux-pkg-config -- server::terminal_service server::connection::test::login_scope server::connection::test::session_scope | tee "$RUNNER_TEMP/test.log"
           grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/test.log"
+          grep -q 'login_scope_latches_session_scope_across_login_retries \.\.\. ok$' "$RUNNER_TEMP/test.log"
+          grep -q 'session_scope_allows_only_messages_for_authenticated_session_type \.\.\. ok$' "$RUNNER_TEMP/test.log"
 
       - name: Build e test di remotek-cli
         env:

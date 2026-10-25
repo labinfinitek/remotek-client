@@ -71,6 +71,19 @@ rilasciate non si riscrivono.
   spento) non apre piu' un terminale da amministratore senza che nessuno
   l'abbia chiesto: il terminale non parte e il controllante vede il motivo
   (installare il client, o aprirlo da un utente senza quei permessi).
+- Prima del clic del cliente una richiesta di connessione non cambia piu'
+  tipo (REM-2026-008, correzione portata da RustDesk 1.5.0). Prima un client
+  modificato poteva chiedere un terminale e, con la finestra "Terminale"
+  ancora aperta, rimandare la richiesta come desktop: il clic su "Accetta"
+  autorizzava un desktop remoto completo. Ora una richiesta ripetuta con un
+  altro tipo, un altro bersaglio o un altro ID si rifiuta. Il lasciapassare
+  dell'agente AI vale solo nella prima richiesta della connessione, e ogni
+  richiesta ripetuta riparte senza il terminale "da amministratore" chiesto
+  da quella prima: nel registro delle connessioni la shell risulta sempre
+  com'e' davvero.
+- Lo scambio dei lati con un tecnico vale solo per il desktop remoto
+  (correzione portata da RustDesk 1.5.0). Prima, con lo scambio, una
+  sessione di terminale o un tunnel si aprivano senza il clic del cliente.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

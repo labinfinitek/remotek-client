@@ -98,6 +98,26 @@ pub fn togli(lr: &mut LoginRequest) -> Option<String> {
     Some(std::mem::take(&mut os.password))
 }
 
+/// Il lasciapassare vale solo nel primo login della connessione. Upstream
+/// (rustdesk/rustdesk@594e638) lascia ripetere il login con lo stesso ambito,
+/// ma il connection manager mostra la finestra del primo `Data::Login`: un
+/// lasciapassare arrivato dopo non sarebbe quello che il cliente vede (i nomi
+/// dell'agente). Si scarta, con una riga di warn.
+pub fn solo_al_primo_login(
+    lasciapassare: Option<String>,
+    primo_login: bool,
+    controllante: &str,
+) -> Option<String> {
+    if lasciapassare.is_some() && !primo_login {
+        log::warn!(
+            "lasciapassare in un login ripetuto: scartato (controllante {})",
+            controllante
+        );
+        return None;
+    }
+    lasciapassare
+}
+
 /// Verifica `stringa` per il PC `pc` all'ora `adesso` (secondi unix) con la
 /// chiave `chiave` (base64). `visti` sono i nonce gia' accettati, con l'ora
 /// fino a cui tenerli.
@@ -397,5 +417,14 @@ mod tests {
             assert_eq!(togli(&mut lr), None);
             assert_eq!(lr.os_login.password, p);
         }
+    }
+
+    #[test]
+    fn il_lasciapassare_vale_solo_al_primo_login() {
+        let l = || Some(VETTORE.to_owned());
+        assert_eq!(solo_al_primo_login(l(), true, "1"), l());
+        assert_eq!(solo_al_primo_login(l(), false, "1"), None);
+        assert_eq!(solo_al_primo_login(None, true, "1"), None);
+        assert_eq!(solo_al_primo_login(None, false, "1"), None);
     }
 }

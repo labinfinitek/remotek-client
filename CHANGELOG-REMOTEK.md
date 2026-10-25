@@ -20,9 +20,16 @@ rilasciate non si riscrivono.
   quel solo PC, entro 60 secondi (piu' 30 di tolleranza degli orologi), una
   volta sola. Nel registro delle connessioni dell'API la sessione risulta
   "agente verificato", e per ogni terminale il PC dice se la shell gira come
-  amministratore. Il lasciapassare non cambia ancora ne' i permessi ne' la
-  finestra del cliente: con un lasciapassare valido o senza, il terminale resta
-  quello da utente, col clic del cliente.
+  amministratore.
+- **Per i clienti**: quando l'agente AI chiede i permessi di amministratore
+  con un lasciapassare valido, su un PC Windows con il client installato, la
+  finestra di accettazione lo dice in chiaro ("<agente>, agente AI di
+  <tecnico>, chiede i permessi di amministratore", coi nomi verificati
+  dall'API) e offre tre scelte: "Accetta come amministratore" (la shell gira
+  come amministratore di sistema), "Accetta come utente" (la shell da utente
+  di sempre), "Rifiuta". Senza lasciapassare valido, fuori da Windows o col
+  client non installato la finestra resta quella di prima. Nel registro delle
+  connessioni il terminale accettato come amministratore risulta tale.
 
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
@@ -56,10 +63,14 @@ rilasciate non si riscrivono.
   lo porta. Prima, se sulla stessa connessione a un login di terminale con
   un lasciapassare valido ne seguiva uno di desktop, l'audit del desktop
   riportava il lasciapassare del terminale.
-- Il client non installato (portatile), avviato con "Esegui come
-  amministratore", non apre piu' un terminale da amministratore senza che
-  nessuno l'abbia chiesto: il terminale non parte e il controllante vede il
-  motivo.
+- Lo scambio dei lati con un tecnico non eredita piu' il lasciapassare
+  dell'agente AI di una richiesta precedente sulla stessa connessione.
+- Il client non installato (portatile) che gira con i permessi di
+  amministratore (avviato con "Esegui come amministratore", o aperto
+  dall'account Administrator predefinito o da un amministratore con UAC
+  spento) non apre piu' un terminale da amministratore senza che nessuno
+  l'abbia chiesto: il terminale non parte e il controllante vede il motivo
+  (installare il client, o aprirlo da un utente senza quei permessi).
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

@@ -191,20 +191,27 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
 /// I due campi facoltativi dell'audit della connessione (README dell'API,
 /// "Collegamento alla connessione"): `lasciapassare`, il nonce del
 /// lasciapassare valido; per il terminale `amministratore`, se la shell gira
-/// con i permessi di amministratore.
-pub fn audit(audit: &mut Value, valido: Option<&Valido>, terminale: bool, os_username: &str) {
+/// con i permessi di amministratore. `sistema`: SYSTEM per la scelta del
+/// cliente col lasciapassare (src/remotek/scelta_terminale.rs, `come_sistema`).
+pub fn audit(
+    audit: &mut Value,
+    valido: Option<&Valido>,
+    terminale: bool,
+    os_username: &str,
+    sistema: bool,
+) {
     if let Some(v) = valido {
         audit["lasciapassare"] = json!(v.nonce);
     }
     if terminale {
-        audit["amministratore"] = json!(amministratore(os_username));
+        audit["amministratore"] = json!(sistema || amministratore(os_username));
     }
 }
 
-/// Oggi la shell gira da amministratore solo nel modo `os_login` di upstream
-/// (nome e password di un amministratore di Windows) su un PC installato: gira
-/// come il servizio. Senza, la shell da utente non e' mai elevata
-/// (src/remotek/token_terminale.rs), e il lasciapassare non cambia i permessi.
+/// Senza la scelta del cliente, la shell gira da amministratore solo nel modo
+/// `os_login` di upstream (nome e password di un amministratore di Windows) su
+/// un PC installato: gira come il servizio. Altrimenti la shell da utente non
+/// e' mai elevata (src/remotek/token_terminale.rs).
 fn amministratore(os_username: &str) -> bool {
     #[cfg(target_os = "windows")]
     return !os_username.trim().is_empty() && crate::platform::is_installed();
@@ -344,13 +351,17 @@ mod tests {
     fn campi_dell_audit() {
         let valido = prova(VETTORE, CHIAVE_PROVA, PC, EMESSO).ok();
         let mut a = json!({"type": 0});
-        audit(&mut a, valido.as_ref(), true, "");
+        audit(&mut a, valido.as_ref(), true, "", false);
         assert_eq!(
             a,
             json!({"type": 0, "lasciapassare": "AAECAwQFBgcICQoLDA0ODw", "amministratore": false})
         );
+        // "Accetta come amministratore": la shell e' SYSTEM.
         let mut a = json!({"type": 0});
-        audit(&mut a, None, false, "");
+        audit(&mut a, valido.as_ref(), true, "", true);
+        assert_eq!(a["amministratore"], json!(true));
+        let mut a = json!({"type": 0});
+        audit(&mut a, None, false, "", false);
         assert_eq!(a, json!({"type": 0}));
     }
 

@@ -315,6 +315,9 @@ pub enum Data {
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
+        // Remotek (ADR-0028, caso 2): l'agente AI chiede l'amministratore.
+        #[serde(default)]
+        remotek_amministratore: Option<crate::remotek::scelta_terminale::Richiesta>,
     },
     ChatMessage {
         text: String,
@@ -328,6 +331,8 @@ pub enum Data {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     MouseMoveTime(i64),
     Authorize,
+    // Remotek (ADR-0028, caso 2): "Accetta come amministratore", prima di Authorize.
+    RemotekSceltaAmministratore,
     Close,
     #[cfg(windows)]
     SAS,

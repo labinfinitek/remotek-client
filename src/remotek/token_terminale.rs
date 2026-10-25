@@ -20,7 +20,7 @@ pub const RIFIUTO: &str =
 
 /// Il messaggio al controllante quando il client non installato gira come
 /// amministratore.
-pub const RIFIUTO_PORTATILE: &str = "Terminale rifiutato: il client non installato gira come amministratore. Riavvialo senza \"Esegui come amministratore\".";
+pub const RIFIUTO_PORTATILE: &str = "Terminale rifiutato: il client non installato gira con i permessi di amministratore. Installa il client, o aprilo da un utente senza permessi di amministratore.";
 
 // winnt.h. Nel crate `windows` stanno in Win32_System_SystemServices, una
 // feature che il client non abilita.

@@ -1972,6 +1972,11 @@ fi
 # In src/remotek/token_terminale.rs `ristretto` chiama CreateRestrictedToken
 # con FLAG_RISTRETTO, e FLAG_RISTRETTO e' LUA_TOKEN | DISABLE_MAX_PRIVILEGE:
 # i test provano il valore della costante, non che la chiamata la usi.
+# In `fill_terminal_user_token` (Windows) il client non installato arriva a
+# `TerminalUserToken::SelfUser`, il token del processo, solo dopo
+# `token_terminale::portatile(crate::platform::is_elevated(None))`, che se il
+# processo e' elevato rifiuta con RIFIUTO_PORTATILE: e' codice Windows che la
+# CI delle MR non compila e nessun test prova.
 # Se python3 fallisce il controllo non e' eseguito ed e' un errore.
 esito_token=$(python3 - <<'PY'
 import re
@@ -2000,6 +2005,9 @@ else:
         guai.append("%s: handle_installed_user non rifiuta il terminale se il token non si abbassa" % F)
 if len(costruzioni) != 1:
     guai.append("%s: il token dell'utente del terminale si costruisce in %d punti, atteso 1 (dopo token_terminale::abbassa)" % (F, len(costruzioni)))
+riempi = re.findall(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
+if len(riempi) != 1 or not re.search(r"crate::remotek::token_terminale::portatile\(crate::platform::is_elevated\(None\)\)\s*\{.*?return Some\(crate::remotek::token_terminale::RIFIUTO_PORTATILE\);\s*\}\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*None\s*$", riempi[0], re.S):
+    guai.append("%s: fill_terminal_user_token (Windows) non rifiuta piu' il client non installato elevato (token_terminale::portatile e RIFIUTO_PORTATILE) prima di SelfUser" % F)
 T = "src/remotek/token_terminale.rs"
 t = codice(T)
 if not re.search(r"^pub const FLAG_RISTRETTO: u32 = LUA_TOKEN \| DISABLE_MAX_PRIVILEGE;$", t, re.M):
@@ -2012,7 +2020,7 @@ print("\n".join(guai))
 PY
 ) || esito_token="${esito_token:-}"$'\n'"controllo del token del terminale non eseguito: python3 terminato con errore"
 if [ -z "$esito_token" ]; then
-  ok "il terminale da utente usa il token abbassato con FLAG_RISTRETTO, o si rifiuta (ADR-0028)"
+  ok "il terminale da utente usa il token abbassato con FLAG_RISTRETTO, o si rifiuta; il portatile elevato si rifiuta (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
@@ -2030,8 +2038,12 @@ fi
 # (`lasciapassare::audit`). Il campo `lasciapassare` si azzera a ogni
 # LoginRequest, subito dopo `reset_session_scope_for_login()`: senza, un login
 # di terminale valido seguito da uno desktop sulla stessa connessione
-# porterebbe il nonce nell'audit del desktop. Se python3 fallisce il controllo
-# non e' eseguito ed e' un errore.
+# porterebbe il nonce nell'audit. Nello scambio dei lati (`SwitchSidesResponse`)
+# si azzera il solo lasciapassare, subito dopo il login e prima del controllo
+# dell'uuid; l'ambito della sessione li' non si tocca (un reset prima
+# dell'uuid farebbe di una richiesta di terminale, con un uuid qualunque, un
+# desktop da autorizzare col clic). Se python3 fallisce il controllo non e'
+# eseguito ed e' un errore.
 CHIAVE_LASCIAPASSARE='Dv+D4Cwob7srUHd6Is+MZToqnKbrMt5vVFPqHEaB7sg='
 esito_lasciapassare=$(python3 - "$CHIAVE_LASCIAPASSARE" <<'PY'
 import re, sys
@@ -2049,13 +2061,18 @@ if togli < 0 or login < 0 or togli > login:
     guai.append("%s: il lasciapassare non esce dal login prima di handle_login_request_without_validation" % C)
 if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 1 or not re.search(r"self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
     guai.append("%s: il lasciapassare non si azzera a ogni login (self.lasciapassare = None dopo reset_session_scope_for_login)" % C)
+scambio = re.search(r"Some\(message::Union::SwitchSidesResponse\(_s\)\) = msg\.union \{(.*?)if uuid == uuid_old \{", c, re.S)
+if not scambio or not re.search(r"self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;", scambio.group(1)):
+    guai.append("%s: lo scambio dei lati (SwitchSidesResponse) non azzera il lasciapassare subito dopo il login, prima del controllo dell'uuid" % C)
+elif "reset_session_scope_for_login" in scambio.group(1):
+    guai.append("%s: lo scambio dei lati cambia l'ambito della sessione (reset_session_scope_for_login) prima del controllo dell'uuid" % C)
 if "crate::remotek::lasciapassare::audit(" not in c:
     guai.append("%s: l'audit della connessione non porta il lasciapassare" % C)
 print("\n".join(guai))
 PY
 ) || esito_lasciapassare="${esito_lasciapassare:-}"$'\n'"controllo del lasciapassare non eseguito: python3 terminato con errore"
 if [ -z "$esito_lasciapassare" ]; then
-  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, azzerato a ogni login, nonce nell'audit (ADR-0028)"
+  ok "lasciapassare: chiave dell'API Remotek, tolto dal login prima di ogni uso, azzerato a ogni login e nello scambio dei lati prima dell'uuid, nonce nell'audit (ADR-0028)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
@@ -2093,6 +2110,54 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_os_login"
+fi
+
+# --- 26. SYSTEM solo col lasciapassare e la scelta del cliente -------------
+# ADR-0028, caso 2: su un PC installato il terminale senza os_login gira come
+# SYSTEM (TerminalUserToken::SelfUser nel ramo di is_installed di
+# fill_terminal_user_token) solo se scelta_terminale::come_sistema e' vero:
+# lasciapassare valido e `amministratore_scelto`. Quel campo diventa vero
+# solo nel ramo `ipc::Data::RemotekSceltaAmministratore`, col valore di
+# scelta_terminale::scelta (lasciapassare valido, terminale, Windows
+# installato), e torna falso a ogni login e scambio dei lati. Le due funzioni
+# restano l'AND delle loro condizioni. Un merge che da' SYSTEM per un'altra
+# strada, o senza lasciapassare, si ferma qui. Se python3 fallisce il
+# controllo non e' eseguito ed e' un errore.
+esito_sistema=$(python3 - <<'PY'
+import re
+guai = []
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+C = "src/server/connection.rs"
+c = codice(C)
+riempi = re.findall(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
+installato = re.search(r"if crate::platform::is_installed\(\) \{(.*?)return self\.handle_installed_user\(\);", riempi[0], re.S) if len(riempi) == 1 else None
+if not installato or not re.fullmatch(r"\s*if crate::remotek::scelta_terminale::come_sistema\(\s*self\.lasciapassare\.is_some\(\),\s*true,\s*self\.amministratore_scelto,?\s*\)\s*\{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}\s*", installato.group(1)):
+    guai.append("%s: nel ramo installato di fill_terminal_user_token SelfUser (SYSTEM) non e' legato solo a scelta_terminale::come_sistema(lasciapassare, scelta)" % C)
+assegnazioni = [" ".join(a.split()) for a in re.findall(r"amministratore_scelto = ([^;]+);", c)]
+# Nell'inizializzazione della struttura, non la dichiarazione del campo.
+assegnazioni += [a for a in re.findall(r"^\s*amministratore_scelto: (\w+),$", c, re.M) if a != "bool"]
+falsi = [a for a in assegnazioni if a == "false"]
+scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),", c)
+if len(scelte) != 1 or len(assegnazioni) != len(falsi) + 1:
+    guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore e scelta_terminale::scelta (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
+if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*SWITCH_SIDES_UUID", c):
+    guai.append("%s: la scelta dell'amministratore non si azzera a ogni login e scambio dei lati" % C)
+S = "src/remotek/scelta_terminale.rs"
+t = codice(S)
+if not re.search(r"pub fn come_sistema\([^)]*\) -> bool \{\s*lasciapassare_valido && installato && scelta_amministratore\s*\}", t):
+    guai.append("%s: come_sistema non e' piu' lasciapassare valido && installato && scelta" % S)
+if not re.search(r"let ammessa = lasciapassare_valido && terminale && windows_installato;", t):
+    guai.append("%s: scelta non e' piu' lasciapassare valido && terminale && Windows installato" % S)
+print("\n".join(guai))
+PY
+) || esito_sistema="${esito_sistema:-}"$'\n'"controllo di SYSTEM non eseguito: python3 terminato con errore"
+if [ -z "$esito_sistema" ]; then
+  ok "SYSTEM solo col lasciapassare valido e la scelta esplicita del cliente (ADR-0028, caso 2)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_sistema"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

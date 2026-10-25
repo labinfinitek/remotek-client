@@ -3007,6 +3007,8 @@ impl Connection {
                             // di un login precedente sulla stessa connessione.
                             self.lasciapassare = None;
                             self.amministratore_scelto = false;
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            self.azzera_token_terminale();
                             self.from_switch = true;
                             self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::SwitchSides);
                             if !self.send_logon_response_and_keep_alive().await {

@@ -2064,8 +2064,8 @@ if togli < 0 or login < 0 or togli > login:
 if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 2 or not re.search(r"\{\s*return true;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
     guai.append("%s: il lasciapassare non si azzera a ogni login (self.lasciapassare = None dopo reset_session_scope_for_login)" % C)
 scambio = re.search(r"Some\(message::Union::SwitchSidesResponse\(_s\)\) = msg\.union \{(.*?)if uuid == uuid_old \{(.*?)self\.from_switch = true;", c, re.S)
-if not scambio or not re.fullmatch(r"\s*if lr\.union\.is_some\(\) \{.*?return false;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*", scambio.group(2), re.S):
-    guai.append("%s: lo scambio dei lati (SwitchSidesResponse), con l'uuid giusto, non rifiuta piu' un login non desktop o non azzera il lasciapassare subito dopo il login" % C)
+if not scambio or not re.fullmatch(r"\s*if lr\.union\.is_some\(\) \{.*?return false;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*", scambio.group(2), re.S):
+    guai.append("%s: lo scambio dei lati (SwitchSidesResponse), con l'uuid giusto, non rifiuta piu' un login non desktop o non azzera lasciapassare, scelta e token del terminale subito dopo il login" % C)
 elif "reset_session_scope_for_login" in scambio.group(1) or "handle_login_request_without_validation" in scambio.group(1):
     guai.append("%s: lo scambio dei lati applica il login o cambia l'ambito della sessione prima del controllo dell'uuid" % C)
 if "crate::remotek::lasciapassare::audit(" not in c:
@@ -2140,10 +2140,10 @@ assegnazioni = [" ".join(a.split()) for a in re.findall(r"amministratore_scelto 
 # Nell'inizializzazione della struttura, non la dichiarazione del campo.
 assegnazioni += [a for a in re.findall(r"^\s*amministratore_scelto: (\w+),$", c, re.M) if a != "bool"]
 falsi = [a for a in assegnazioni if a == "false"]
-scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),", c)
+scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),\s*conn\.authorized,", c)
 if len(scelte) != 1 or len(assegnazioni) != len(falsi) + 1:
-    guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore e scelta_terminale::scelta (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
-if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*self\.from_switch = true;", c):
+    guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore (scelta_terminale::scelta con conn.authorized) (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
+if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*self\.from_switch = true;", c):
     guai.append("%s: la scelta dell'amministratore non si azzera a ogni login e scambio dei lati" % C)
 S = "src/remotek/scelta_terminale.rs"
 t = codice(S)

@@ -30,7 +30,6 @@ rilasciate non si riscrivono.
   di sempre), "Rifiuta". Senza lasciapassare valido, fuori da Windows o col
   client non installato la finestra resta quella di prima. Nel registro delle
   connessioni il terminale accettato come amministratore risulta tale.
-
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
   diceva "1 sessioni": ora dice "1 sessione" (in inglese "1 session"; le
@@ -90,6 +89,9 @@ rilasciate non si riscrivono.
   memoria e, entro 90 secondi da un riavvio, uno intercettato si poteva usare
   una seconda volta. Se il file non si legge o non si scrive, il
   lasciapassare si rifiuta.
+- Lo scambio dei lati non porta piu' nel desktop il terminale "da
+  amministratore" chiesto prima sulla stessa connessione con le credenziali
+  di Windows.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

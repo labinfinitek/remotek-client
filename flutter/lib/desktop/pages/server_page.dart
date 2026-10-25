@@ -1065,9 +1065,11 @@ class _CmControlPanel extends StatelessWidget {
   }
 
   buildUnAuthorized(BuildContext context) {
-    // Remotek (ADR-0028, caso 2): l'agente AI chiede l'amministratore.
+    // Remotek (ADR-0028, caso 2): l'agente AI chiede l'amministratore. Con
+    // approve-mode `password` niente "Accetta", come la finestra di upstream.
     final remotek = RemotekScelta.daJson(client.remotek);
-    if (remotek != null) {
+    if (remotek != null &&
+        Provider.of<ServerModel>(context).approveMode != 'password') {
       return remotekSceltaCm(
         scelta: remotek,
         pulsante: (

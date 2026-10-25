@@ -4,6 +4,7 @@
 pub mod cli;
 pub mod firma;
 pub mod lasciapassare;
+pub mod non_presidiato;
 pub mod scelta_terminale;
 pub mod token_terminale;
 pub mod trascrizione;

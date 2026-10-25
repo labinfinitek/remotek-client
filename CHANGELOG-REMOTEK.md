@@ -30,6 +30,17 @@ rilasciate non si riscrivono.
   di sempre), "Rifiuta". Senza lasciapassare valido, fuori da Windows o col
   client non installato la finestra resta quella di prima. Nel registro delle
   connessioni il terminale accettato come amministratore risulta tale.
+- **Per i server non presidiati**: su un server Windows col client
+  installato e abilitato dal `custom.txt` firmato (`remotek-agente` =
+  `non-presidiato`), l'agente AI con un lasciapassare valido apre il
+  terminale come amministratore senza che nessuno accetti, anche se nessuno
+  e' collegato al server, nemmeno alla schermata di accesso. Chi e' davanti
+  al server vede la connessione nella
+  finestra di Remotek e la puo' chiudere; nel registro delle connessioni il
+  terminale risulta "agente verificato" e da amministratore, e il registro
+  del servizio ha una riga "agente non presidiato" con agente, tecnico e ID
+  di chi si collega. Senza l'abilitazione nel `custom.txt` resta la scelta
+  del cliente.
 
 ### Corretto
 - Il suggerimento dell'icona nell'area di notifica con una sola sessione
@@ -84,6 +95,22 @@ rilasciate non si riscrivono.
 - Lo scambio dei lati con un tecnico vale solo per il desktop remoto
   (correzione portata da RustDesk 1.5.0). Prima, con lo scambio, una
   sessione di terminale o un tunnel si aprivano senza il clic del cliente.
+- Un lasciapassare dell'agente AI gia' usato resta rifiutato anche dopo un
+  riavvio del servizio: i lasciapassare visti si scrivono su un file che
+  possono leggere solo il sistema e gli amministratori. Prima stavano in
+  memoria e, entro 90 secondi da un riavvio, uno intercettato si poteva usare
+  una seconda volta. Se il file non si legge o non si scrive, il
+  lasciapassare si rifiuta.
+- Lo scambio dei lati non porta piu' nel desktop il terminale "da
+  amministratore" chiesto prima sulla stessa connessione con le credenziali
+  di Windows.
+- Sui server non presidiati (caso 3), un terminale che l'agente AI apre alla
+  schermata di accesso (nessuno alla console) non manda piu' il suo output al
+  connection manager: la trascrizione nasce senza la vista del CM. Prima
+  l'output della shell SYSTEM si sarebbe accumulato senza tetto nella memoria
+  del servizio, e chi avesse poi effettuato l'accesso alla console avrebbe
+  ricevuto nel CM tutto l'arretrato delle sessioni dell'agente, anche da un
+  utente non amministratore. La trascrizione su file e l'audit restano.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

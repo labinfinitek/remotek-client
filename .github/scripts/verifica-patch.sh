@@ -2064,8 +2064,8 @@ if togli < 0 or login < 0 or togli > login:
 if len(re.findall(r"self\.reset_session_scope_for_login\(\);", c)) != 2 or not re.search(r"\{\s*return true;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.lasciapassare = None;", c):
     guai.append("%s: il lasciapassare non si azzera a ogni login (self.lasciapassare = None dopo reset_session_scope_for_login)" % C)
 scambio = re.search(r"Some\(message::Union::SwitchSidesResponse\(_s\)\) = msg\.union \{(.*?)if uuid == uuid_old \{(.*?)self\.from_switch = true;", c, re.S)
-if not scambio or not re.fullmatch(r"\s*if lr\.union\.is_some\(\) \{.*?return false;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*", scambio.group(2), re.S):
-    guai.append("%s: lo scambio dei lati (SwitchSidesResponse), con l'uuid giusto, non rifiuta piu' un login non desktop o non azzera il lasciapassare subito dopo il login" % C)
+if not scambio or not re.fullmatch(r"\s*if lr\.union\.is_some\(\) \{.*?return false;\s*\}\s*self\.reset_session_scope_for_login\(\);\s*self\.handle_login_request_without_validation\(&lr\)\.await;\s*self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*", scambio.group(2), re.S):
+    guai.append("%s: lo scambio dei lati (SwitchSidesResponse), con l'uuid giusto, non rifiuta piu' un login non desktop o non azzera lasciapassare, scelta e token del terminale subito dopo il login" % C)
 elif "reset_session_scope_for_login" in scambio.group(1) or "handle_login_request_without_validation" in scambio.group(1):
     guai.append("%s: lo scambio dei lati applica il login o cambia l'ambito della sessione prima del controllo dell'uuid" % C)
 if "crate::remotek::lasciapassare::audit(" not in c:
@@ -2140,10 +2140,12 @@ assegnazioni = [" ".join(a.split()) for a in re.findall(r"amministratore_scelto 
 # Nell'inizializzazione della struttura, non la dichiarazione del campo.
 assegnazioni += [a for a in re.findall(r"^\s*amministratore_scelto: (\w+),$", c, re.M) if a != "bool"]
 falsi = [a for a in assegnazioni if a == "false"]
-scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),", c)
-if len(scelte) != 1 or len(assegnazioni) != len(falsi) + 1:
-    guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore e scelta_terminale::scelta (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
-if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*self\.from_switch = true;", c):
+scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),\s*conn\.authorized,", c)
+# Caso 3: l'unico altro vero, solo dentro il ramo non presidiato del login.
+non_presidiati = re.findall(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.amministratore_scelto = true;", c)
+if len(scelte) != 1 or len(non_presidiati) != 1 or len(assegnazioni) != len(falsi) + 2:
+    guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore (scelta_terminale::scelta con conn.authorized) e dal ramo non presidiato (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
+if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*self\.from_switch = true;", c):
     guai.append("%s: la scelta dell'amministratore non si azzera a ogni login e scambio dei lati" % C)
 S = "src/remotek/scelta_terminale.rs"
 t = codice(S)
@@ -2233,6 +2235,103 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_ambito"
+fi
+
+# --- 28. L'agente sui server non presidiati abilitati ------------------------
+# ADR-0028, caso 3: il terminale si autorizza senza clic (e gira come SYSTEM)
+# solo con la chiave `remotek-agente` = `non-presidiato` del custom.txt
+# firmato, letta solo da HARD_SETTINGS (non_presidiato::abilitato), un
+# lasciapassare valido, un terminale e Windows col client installato
+# (non_presidiato::senza_clic, l'AND delle quattro). Il ramo in
+# connection.rs mette l'amministratore scelto, autorizza, registra la riga
+# INFO a token pronto, dice al CM che la connessione e' gia' autorizzata e sta
+# prima della scelta del modo di accettazione. I due rifiuti da is_prelogin non
+# valgono per il caso 3, e solo per quello: nel login via rifiuta_prelogin con
+# la stessa senza_clic, in fill_terminal_user_token col SelfUser del caso 3
+# prima del rifiuto. In prelogin l'output del terminale non va al CM (in
+# `ingresso` la vista si attacca solo se `vista_al_cm(is_prelogin())`), cosi'
+# non si accumula verso un CM che non legge. La chiave non compare altrove nel
+# codice: nessuna opzione locale la accende. I nonce del
+# lasciapassare stanno su file (verifica_con_registro), protetto, e un errore
+# del file vale come nonce gia' visto. Se python3 fallisce il controllo non e'
+# eseguito ed e' un errore.
+esito_non_presidiato=$(python3 - <<'PY'
+import os, re
+guai = []
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+N = "src/remotek/non_presidiato.rs"
+n = codice(N)
+if 'pub const CHIAVE: &str = "remotek-agente";' not in n or 'pub const VALORE: &str = "non-presidiato";' not in n:
+    guai.append("%s: la chiave non e' piu' remotek-agente = non-presidiato" % N)
+abil = re.search(r"pub fn abilitato\(\) -> bool \{(.*?)\n\}\n", n, re.S)
+if not abil or not re.fullmatch(r"\s*match HARD_SETTINGS\.read\(\) \{\s*Ok\(fisse\) => abilitato_da\(&fisse\),\s*Err\(_\) => false,\s*\}\s*", abil.group(1)):
+    guai.append("%s: abilitato non legge piu' solo HARD_SETTINGS (spento se il lock non si prende)" % N)
+if not re.search(r"pub fn abilitato_da\(fisse: &HashMap<String, String>\) -> bool \{\s*fisse\.get\(CHIAVE\)\.map_or\(false, \|v\| v == VALORE\)\s*\}", n):
+    guai.append("%s: abilitato_da non confronta piu' la chiave col solo valore non-presidiato" % N)
+if not re.search(r"pub fn senza_clic\([^)]*\) -> bool \{\s*abilitato && lasciapassare_valido && terminale && windows_installato\s*\}", n):
+    guai.append("%s: senza_clic non e' piu' l'AND di abilitato, lasciapassare, terminale e Windows installato" % N)
+if not re.search(r"pub fn rifiuta_prelogin\(prelogin: bool, senza_clic: bool\) -> bool \{\s*prelogin && !senza_clic\s*\}", n):
+    guai.append("%s: rifiuta_prelogin non e' piu' prelogin && !senza_clic (il rifiuto da prelogin deve saltare solo il caso 3)" % N)
+if not re.search(r"pub fn vista_al_cm\(prelogin: bool\) -> bool \{\s*!prelogin\s*\}", n):
+    guai.append("%s: vista_al_cm non e' piu' !prelogin (in prelogin l'output del terminale non deve andare al CM)" % N)
+for radice, _, file in os.walk("src"):
+    for f in file:
+        p = os.path.join(radice, f)
+        if p != N and f.endswith((".rs", ".dart")) and "remotek-agente" in open(p, encoding="utf-8", errors="replace").read():
+            guai.append("%s: la chiave remotek-agente compare fuori da %s" % (p, N))
+for radice, _, file in os.walk("flutter/lib"):
+    for f in file:
+        p = os.path.join(radice, f)
+        if f.endswith(".dart") and "remotek-agente" in open(p, encoding="utf-8", errors="replace").read():
+            guai.append("%s: la chiave remotek-agente compare nell'interfaccia" % p)
+C = "src/server/connection.rs"
+c = codice(C)
+rami = re.findall(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.amministratore_scelto = true;\s*if !self\.send_logon_response_and_keep_alive\(\)\.await \{\s*return false;\s*\}\s*if self\.authorized \{\s*if let Some\(v\) = self\.lasciapassare\.as_ref\(\) \{\s*crate::remotek::non_presidiato::registra\(&v\.agente, &v\.tecnico, &lr\.my_id\);\s*\}\s*\}\s*self\.try_start_cm\(lr\.my_id, lr\.my_name, self\.authorized\);\s*return true;\s*\}\s*if \(password::approve_mode\(\) == ApproveMode::Click", c)
+# senza_clic compare tre volte: il ramo del login, l'eccezione al rifiuto da
+# prelogin nel login, e il SelfUser del caso 3 in fill_terminal_user_token.
+if len(rami) != 1 or c.count("non_presidiato::senza_clic(") != 3:
+    guai.append("%s: il ramo non presidiato non e' piu' uno solo, con senza_clic, l'amministratore scelto, la riga INFO a token pronto e autorizzazione fatta, il CM gia' autorizzato, prima della scelta del modo di accettazione" % C)
+# ADR-0028, caso 3: i due rifiuti da is_prelogin non valgono per il caso 3, e
+# solo per quello. Nel login il rifiuto passa da rifiuta_prelogin con la stessa
+# senza_clic; se manca o dipende da altro, qui si ferma.
+if not re.search(r"if self\.terminal\s*&& lr\.os_login\.username\.trim\(\)\.is_empty\(\)\s*&& crate::remotek::non_presidiato::rifiuta_prelogin\(\s*crate::platform::is_prelogin\(\),\s*crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\),?\s*\)\s*\{", c):
+    guai.append("%s: il rifiuto da prelogin nel login non passa da rifiuta_prelogin con senza_clic (deve saltare solo il caso 3)" % C)
+riempi = re.search(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
+corpo = riempi.group(1) if riempi else ""
+# Nel fill il SelfUser del caso 3 precede il rifiuto da prelogin, cosi' l'agente
+# parte anche senza nessuno alla console; il caso 2 resta sotto, invariato.
+caso3 = re.search(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}", corpo)
+prelogin = corpo.find("if crate::platform::is_prelogin()")
+if not caso3 or prelogin == -1 or caso3.start() >= prelogin:
+    guai.append("%s: in fill_terminal_user_token il SelfUser del caso 3 (senza_clic) non precede il rifiuto da prelogin" % C)
+# In prelogin l'output del terminale non si accumula verso un CM che non legge:
+# in `ingresso` la vista del CM si attacca solo se `vista_al_cm(is_prelogin())`.
+T = "src/remotek/trascrizione.rs"
+tr = codice(T)
+ing = re.search(r"pub fn ingresso\(.*?\n\}\n", tr, re.S)
+if not ing or "non_presidiato::vista_al_cm(crate::platform::is_prelogin())" not in ing.group(0):
+    guai.append("%s: in prelogin l'output del terminale va ancora al CM (ingresso non passa da non_presidiato::vista_al_cm(is_prelogin()))" % T)
+L = "src/remotek/lasciapassare.rs"
+l = codice(L)
+if not re.search(r"verifica_con_registro\(stringa, CHIAVE, &Config::get_id\(\), adesso, &file_visti\(\)\)", l):
+    guai.append("%s: verifica_login non usa piu' i nonce su file" % L)
+reg = re.search(r"pub fn verifica_con_registro\((.*?)\n\}\n", l, re.S)
+if not reg or reg.group(1).count("Rifiuto::Riusato") != 2 or "scrivi_visti(percorso, &visti)" not in reg.group(1):
+    guai.append("%s: un errore del file dei nonce non vale piu' come nonce gia' visto, o il file non si riscrive" % L)
+if "crate::platform::set_path_permission_for_portable_service_shmem_file(percorso)" not in l or "proteggi(&nuovo)?;" not in l:
+    guai.append("%s: il file dei nonce non si protegge piu' (solo SYSTEM e Administrators su Windows)" % L)
+if re.search(r"static VISTI", l):
+    guai.append("%s: i nonce visti tornano in memoria" % L)
+print("\n".join(guai))
+PY
+) || esito_non_presidiato="${esito_non_presidiato:-}"$'\n'"controllo del non presidiato non eseguito: python3 terminato con errore"
+if [ -z "$esito_non_presidiato" ]; then
+  ok "agente non presidiato solo con remotek-agente = non-presidiato del custom.txt firmato, lasciapassare, terminale e Windows installato; nonce su file (ADR-0028, caso 3)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_non_presidiato"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

@@ -6,8 +6,11 @@
 //! dell'API ("Lasciapassare dell'agente"): firma Ed25519 della chiave
 //! pubblica cablata sui byte del payload, prima di leggere il JSON; poi
 //! versione, modo, PC, finestra di tempo con 30 secondi di tolleranza, nonce
-//! mai visto. I nonce visti stanno in memoria, nel processo del server, fino a
-//! `scade + 30`: un riavvio del servizio li dimentica.
+//! mai visto. I nonce visti stanno su file (`lasciapassare-visti.json` nella
+//! cartella di configurazione del servizio, solo SYSTEM e Administrators su
+//! Windows, solo il proprietario altrove) fino a `scade + 30`, cosi' un
+//! riavvio del servizio non li dimentica. Un errore del file vale come nonce
+//! gia' visto.
 //!
 //! Un lasciapassare non valido non ferma la connessione: si prosegue come
 //! senza (il terminale da utente, col clic del cliente).
@@ -24,7 +27,12 @@ use hbb_common::{
 };
 use serde_derive::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, fmt, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fmt, io,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 /// La chiave pubblica dell'API, in base64 come `KEY` del `custom.txt`
 /// (src/common.rs). Vuota, ogni lasciapassare e' rifiutato.
@@ -34,8 +42,8 @@ const CONTESTO: &[u8] = b"remotek-lasciapassare-v1.";
 /// Secondi di tolleranza per gli orologi, prima di `emesso` e dopo `scade`.
 const TOLLERANZA: i64 = 30;
 
-/// I nonce gia' visti, con l'ora fino a cui si tengono.
-static VISTI: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
+/// Una verifica alla volta sul file dei nonce visti.
+static REGISTRO: Mutex<()> = Mutex::new(());
 
 /// Un lasciapassare valido: chi l'ha chiesto e il nonce per l'audit.
 #[derive(Debug, Clone, PartialEq)]
@@ -175,17 +183,89 @@ pub fn verifica(
     })
 }
 
-/// [`verifica`] con la chiave cablata, l'ID di questo PC, l'ora e i nonce del
-/// processo. Un rifiuto e' una riga di log con l'ID del controllante, mai la
-/// stringa ne' il nonce.
+/// Il file dei nonce visti, nella cartella di configurazione del processo
+/// (per il servizio Windows, quella di SYSTEM).
+fn file_visti() -> PathBuf {
+    Config::path("lasciapassare-visti.json")
+}
+
+/// I nonce visti scritti in `percorso`, con l'ora fino a cui tenerli. Un file
+/// che non c'e' e' un registro vuoto; ogni altro errore torna all'Err.
+fn leggi_visti(percorso: &Path) -> io::Result<HashMap<String, i64>> {
+    match std::fs::read(percorso) {
+        Ok(dati) => {
+            serde_json::from_slice(&dati).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Scrive i nonce visti in `percorso`: prima un file accanto, protetto
+/// ([`proteggi`]), poi lo sposta al suo posto.
+fn scrivi_visti(percorso: &Path, visti: &HashMap<String, i64>) -> io::Result<()> {
+    let nuovo = percorso.with_extension("nuovo");
+    let dati =
+        serde_json::to_vec(visti).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&nuovo, dati)?;
+    proteggi(&nuovo)?;
+    std::fs::rename(&nuovo, percorso)
+}
+
+/// Su Windows solo SYSTEM, Administrators e l'utente del processo (il
+/// servizio gira come SYSTEM): la stessa DACL protetta del file della memoria
+/// condivisa del servizio portatile.
+#[cfg(target_os = "windows")]
+fn proteggi(percorso: &Path) -> io::Result<()> {
+    crate::platform::set_path_permission_for_portable_service_shmem_file(percorso)
+        .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e.to_string()))
+}
+
+/// Altrove solo il proprietario.
+#[cfg(not(target_os = "windows"))]
+fn proteggi(percorso: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(percorso, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = percorso;
+    Ok(())
+}
+
+/// [`verifica`] coi nonce visti scritti in `percorso`. Se il file non si
+/// legge o non si scrive, il lasciapassare vale come gia' visto: meglio un
+/// agente rifiutato che un lasciapassare usato due volte.
+pub fn verifica_con_registro(
+    stringa: &str,
+    chiave: &str,
+    pc: &str,
+    adesso: i64,
+    percorso: &Path,
+) -> Result<Valido, Rifiuto> {
+    let mut visti = leggi_visti(percorso).map_err(|e| {
+        log::warn!("nonce visti non leggibili ({}): {}", percorso.display(), e);
+        Rifiuto::Riusato
+    })?;
+    let valido = verifica(stringa, chiave, pc, adesso, &mut visti)?;
+    scrivi_visti(percorso, &visti).map_err(|e| {
+        log::warn!("nonce visti non scrivibili ({}): {}", percorso.display(), e);
+        Rifiuto::Riusato
+    })?;
+    Ok(valido)
+}
+
+/// [`verifica_con_registro`] con la chiave cablata, l'ID di questo PC, l'ora e
+/// il file dei nonce del servizio. Un rifiuto e' una riga di log con l'ID del
+/// controllante, mai la stringa ne' il nonce.
 pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
     let adesso = hbb_common::get_time() / 1000;
-    let esito = match VISTI.lock() {
-        Ok(mut visti) => {
-            let visti = visti.get_or_insert_with(HashMap::new);
-            verifica(stringa, CHIAVE, &Config::get_id(), adesso, visti)
+    let esito = match REGISTRO.lock() {
+        Ok(_registro) => {
+            verifica_con_registro(stringa, CHIAVE, &Config::get_id(), adesso, &file_visti())
         }
-        Err(_) => Err(Rifiuto::Spenta),
+        Err(_) => Err(Rifiuto::Riusato),
     };
     match esito {
         Ok(v) => {
@@ -417,6 +497,65 @@ mod tests {
             assert_eq!(togli(&mut lr), None);
             assert_eq!(lr.os_login.password, p);
         }
+    }
+
+    /// Un percorso nuovo in una cartella temporanea tutta per il test.
+    fn registro(nome: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "remotek-lasciapassare-{}-{}",
+            nome,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("lasciapassare-visti.json")
+    }
+
+    #[test]
+    fn i_nonce_visti_restano_sul_file() {
+        let file = registro("file");
+        let primo = verifica_con_registro(VETTORE, CHIAVE_PROVA, PC, EMESSO, &file);
+        assert!(primo.is_ok(), "{:?}", primo);
+        // Come dopo un riavvio: il registro si rilegge dal file.
+        assert_eq!(
+            verifica_con_registro(VETTORE, CHIAVE_PROVA, PC, EMESSO + 1, &file),
+            Err(Rifiuto::Riusato)
+        );
+        let visti = leggi_visti(&file).unwrap();
+        assert_eq!(
+            visti.get("AAECAwQFBgcICQoLDA0ODw"),
+            Some(&(EMESSO + 60 + TOLLERANZA))
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let modo = std::fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(modo & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn un_errore_del_registro_vale_come_riusato() {
+        // File illeggibile come JSON.
+        let rotto = registro("rotto");
+        std::fs::write(&rotto, b"non json").unwrap();
+        assert_eq!(
+            verifica_con_registro(VETTORE, CHIAVE_PROVA, PC, EMESSO, &rotto),
+            Err(Rifiuto::Riusato)
+        );
+        // Al posto del file una cartella: non si legge e non si scrive.
+        let cartella = registro("cartella");
+        std::fs::create_dir_all(&cartella).unwrap();
+        assert_eq!(
+            verifica_con_registro(VETTORE, CHIAVE_PROVA, PC, EMESSO, &cartella),
+            Err(Rifiuto::Riusato)
+        );
+        // Cartella del registro che non c'e': non si scrive, quindi rifiutato.
+        let senza = registro("senza").with_file_name("manca").join("visti.json");
+        assert_eq!(
+            verifica_con_registro(VETTORE, CHIAVE_PROVA, PC, EMESSO, &senza),
+            Err(Rifiuto::Riusato)
+        );
     }
 
     #[test]

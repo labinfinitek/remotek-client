@@ -419,8 +419,18 @@ pub fn ingresso(
             Config::get_option("custom-rendezvous-server"),
             "terminal".to_owned(),
         );
-        let vista = super::vista_cm::Vista::nuova(conn_id, tx_cm.clone());
-        Trascrizione::nuova(conn_id, url, tx, cartella(), Some(vista))
+        // Remotek (ADR-0028, caso 3): in prelogin (schermata di accesso) non
+        // c'e' nessuno alla console, quindi l'output non va al CM. Altrimenti
+        // si accumulerebbe senza tetto verso un CM che non legge e chi poi
+        // accede lo riceverebbe tutto in arretrato. Fuori dal prelogin la
+        // vista e' quella di sempre.
+        let vista = if crate::remotek::non_presidiato::vista_al_cm(crate::platform::is_prelogin())
+        {
+            Some(super::vista_cm::Vista::nuova(conn_id, tx_cm.clone()))
+        } else {
+            None
+        };
+        Trascrizione::nuova(conn_id, url, tx, cartella(), vista)
     });
     if let Some(terminal_action::Union::Data(d)) = &azione.union {
         t.dati(Dir::In, d.terminal_id, &d.data);

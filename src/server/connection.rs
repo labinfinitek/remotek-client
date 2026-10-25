@@ -2773,10 +2773,21 @@ impl Connection {
                 return false;
             }
 
+            // Remotek (ADR-0028, caso 3): il rifiuto da prelogin non vale sul
+            // server non presidiato abilitato, dove il SYSTEM parte senza
+            // nessuno alla console; vale per tutti gli altri terminali.
             #[cfg(target_os = "windows")]
             if self.terminal
                 && lr.os_login.username.trim().is_empty()
-                && crate::platform::is_prelogin()
+                && crate::remotek::non_presidiato::rifiuta_prelogin(
+                    crate::platform::is_prelogin(),
+                    crate::remotek::non_presidiato::senza_clic(
+                        crate::remotek::non_presidiato::abilitato(),
+                        self.lasciapassare.is_some(),
+                        self.terminal,
+                        crate::remotek::scelta_terminale::windows_installato(),
+                    ),
+                )
             {
                 self.send_login_error(
                     "No active console user logged on, please connect and logon first.",
@@ -2851,6 +2862,32 @@ impl Connection {
             let allow_logon_screen_password =
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
+
+            // Remotek (ADR-0028, caso 3): sul server non presidiato abilitato dal
+            // custom.txt firmato, il terminale col lasciapassare valido si autorizza
+            // senza clic e gira come SYSTEM; il CM lo mostra gia' autorizzato.
+            if crate::remotek::non_presidiato::senza_clic(
+                crate::remotek::non_presidiato::abilitato(),
+                self.lasciapassare.is_some(),
+                self.terminal,
+                crate::remotek::scelta_terminale::windows_installato(),
+            ) {
+                self.amministratore_scelto = true;
+                if !self.send_logon_response_and_keep_alive().await {
+                    return false;
+                }
+                // La riga del registro va a token pronto e autorizzazione
+                // fatta, non prima: send_logon_response_and_keep_alive puo'
+                // tornare true senza autorizzare (il ramo 2FA), quindi solo
+                // se self.authorized e' vero.
+                if self.authorized {
+                    if let Some(v) = self.lasciapassare.as_ref() {
+                        crate::remotek::non_presidiato::registra(&v.agente, &v.tecnico, &lr.my_id);
+                    }
+                }
+                self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
+                return true;
+            }
 
             if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
@@ -3007,6 +3044,8 @@ impl Connection {
                             // di un login precedente sulla stessa connessione.
                             self.lasciapassare = None;
                             self.amministratore_scelto = false;
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            self.azzera_token_terminale();
                             self.from_switch = true;
                             self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::SwitchSides);
                             if !self.send_logon_response_and_keep_alive().await {
@@ -3889,6 +3928,20 @@ impl Connection {
         // No need to check if the password is empty.
         if !username.is_empty() {
             return self.handle_administrator_check(username, password);
+        }
+
+        // Remotek (ADR-0028, caso 3): sul server non presidiato abilitato il
+        // SYSTEM precede il rifiuto da prelogin, cosi' l'agente parte anche
+        // senza nessuno alla console. Deciso dalla stessa `senza_clic` del
+        // login; il caso 2 qui sotto resta invariato.
+        if crate::remotek::non_presidiato::senza_clic(
+            crate::remotek::non_presidiato::abilitato(),
+            self.lasciapassare.is_some(),
+            self.terminal,
+            crate::remotek::scelta_terminale::windows_installato(),
+        ) {
+            self.terminal_user_token = Some(TerminalUserToken::SelfUser);
+            return None;
         }
 
         if crate::platform::is_prelogin() {

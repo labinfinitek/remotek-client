@@ -2494,6 +2494,21 @@ impl Connection {
         )
     }
 
+    // Remotek: toglie il token del terminale fissato da un login precedente, chiudendo
+    // l'handle come fa il Drop.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn azzera_token_terminale(&mut self) {
+        #[cfg(target_os = "windows")]
+        if let Some(TerminalUserToken::CurrentLogonUser(token)) = self.terminal_user_token.take() {
+            if token.as_raw() != 0 {
+                unsafe {
+                    hbb_common::allow_err!(CloseHandle(HANDLE(token.as_raw() as _)));
+                };
+            }
+        }
+        self.terminal_user_token = None;
+    }
+
     fn reset_session_scope_for_login(&mut self) {
         self.file_transfer = None;
         self.view_camera = false;
@@ -2665,9 +2680,16 @@ impl Connection {
         if let Some(message::Union::LoginRequest(mut lr)) = msg.union {
             // Remotek (ADR-0028): il lasciapassare esce dal login prima di ogni altro uso.
             let lasciapassare = crate::remotek::lasciapassare::togli(&mut lr);
+            let primo_login = self.login_scope.is_none();
             if !self.check_login_scope(&lr).await {
                 return false;
             }
+            // Remotek: il lasciapassare vale solo nel primo login della connessione.
+            let lasciapassare = crate::remotek::lasciapassare::solo_al_primo_login(
+                lasciapassare,
+                primo_login,
+                &lr.my_id,
+            );
             self.handle_login_request_without_validation(&lr).await;
             if self.authorized {
                 return true;
@@ -2676,6 +2698,10 @@ impl Connection {
             // Remotek (ADR-0028): il lasciapassare vale solo per il login che lo porta.
             self.lasciapassare = None;
             self.amministratore_scelto = false;
+            // Remotek: anche il token del terminale, cosi' token e audit vengono dallo
+            // stesso login (un os_login precedente lo fissa gia' al login, in modo clic).
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            self.azzera_token_terminale();
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(

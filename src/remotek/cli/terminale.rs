@@ -35,6 +35,9 @@ pub(super) enum Evento {
     Aperto,
     Dati(Vec<u8>),
     Chiuso(i32),
+    /// L'helper del PC e' uscito prima che la shell partisse
+    /// (`uscita_terminale::NON_PARTITO`).
+    NonPartito,
     Errore(String),
     FineInput,
 }
@@ -89,6 +92,9 @@ pub(super) fn evento_da_risposta(risposta: TerminalResponse) -> Option<Evento> {
         }
         Union::Data(d) => Some(Evento::Dati(d.data.to_vec())),
         Union::Closed(c) => Some(Evento::Chiuso(c.exit_code)),
+        Union::Error(e) if e.message == crate::remotek::uscita_terminale::NON_PARTITO => {
+            Some(Evento::NonPartito)
+        }
         Union::Error(e) => Some(Evento::Errore(format!("terminale: {}", e.message))),
         _ => None,
     }
@@ -390,6 +396,13 @@ fn attendi(
                     .map_err(|e| format!("stdout: {e}"))?;
             }
             Evento::Chiuso(codice) => return Ok(codice_uscita(codice)),
+            Evento::NonPartito => {
+                eprintln!(
+                    "remotek-cli: {}",
+                    crate::remotek::uscita_terminale::NON_PARTITO
+                );
+                return Ok(super::USCITA_NON_PARTITO);
+            }
             Evento::Errore(e) => return Err(e),
             Evento::FineInput => {
                 session.close_terminal(ID_TERMINALE);
@@ -513,6 +526,27 @@ mod tests {
         assert_eq!(esito, Ok(3));
         // Connesso: `open_terminal` con righe e colonne.
         assert!(matches!(&inviati[..], [Data::Message(m)] if m.has_terminal_action()));
+    }
+
+    #[test]
+    fn il_terminale_non_partito_esce_col_suo_codice() {
+        let non_partito = crate::remotek::uscita_terminale::risposta_chiusura(
+            ID_TERMINALE,
+            crate::remotek::uscita_terminale::HELPER_NON_PARTITO,
+        );
+        assert_eq!(evento_da_risposta(non_partito), Some(Evento::NonPartito));
+        let (esito, _) = ciclo(vec![Evento::Connesso, Evento::NonPartito], 5);
+        assert_eq!(esito, Ok(super::super::USCITA_NON_PARTITO));
+        // Mai 0 e mai il 255 di un codice della shell fuori da 0-255.
+        assert_ne!(super::super::USCITA_NON_PARTITO, 0);
+        assert_ne!(
+            super::super::USCITA_NON_PARTITO,
+            codice_uscita(crate::remotek::uscita_terminale::HELPER_NON_PARTITO)
+        );
+        assert_ne!(
+            super::super::USCITA_NON_PARTITO,
+            super::super::USCITA_ERRORE
+        );
     }
 
     #[test]

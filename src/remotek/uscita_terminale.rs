@@ -5,11 +5,50 @@
 //! `child`: l'helper esce col codice della shell, e il servizio legge quello
 //! dell'helper per `TerminalClosed`. Fuori dal modo helper non c'e' un
 //! processo helper e il codice resta quello del `child`.
+//!
+//! Se l'helper fallisce prima che la shell lavori (collaudo di
+//! `remotek-1.4.9-4`, caso 20(d): "Failed to open PTY"), esce con
+//! [`HELPER_NON_PARTITO`] e il controllante riceve un `TerminalError` con
+//! [`NON_PARTITO`] invece della chiusura normale ([`risposta_chiusura`]).
 
+use hbb_common::message_proto::{TerminalClosed, TerminalError, TerminalResponse};
 use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+
+/// Il codice con cui esce l'helper quando fallisce prima che la shell lavori:
+/// `run_terminal_helper` (src/server/terminal_helper.rs) torna solo con un
+/// errore, prima dei thread dell'input e dell'output; finita la shell esce da
+/// se' col suo codice. "RTK" e 1: fuori dai codici di una shell (0-255), dai
+/// codici NTSTATUS di un crash (0xC0000000 e oltre) e da STILL_ACTIVE (259).
+pub const HELPER_NON_PARTITO: i32 = 0x5254_4B01;
+
+/// Il messaggio del `TerminalError` al controllante quando l'helper esce con
+/// [`HELPER_NON_PARTITO`]; `remotek-cli` lo riconosce
+/// (src/remotek/cli/terminale.rs).
+pub const NON_PARTITO: &str = "il terminale non e' partito sul PC";
+
+/// La risposta per un terminale finito col codice `codice` (quello di
+/// [`scegli_codice`]): un `TerminalError` con [`NON_PARTITO`] se l'helper non
+/// ha fatto partire la shell, altrimenti la chiusura col codice.
+pub fn risposta_chiusura(terminal_id: i32, codice: i32) -> TerminalResponse {
+    let mut risposta = TerminalResponse::new();
+    if codice == HELPER_NON_PARTITO {
+        risposta.set_error(TerminalError {
+            terminal_id,
+            message: NON_PARTITO.to_owned(),
+            ..Default::default()
+        });
+    } else {
+        risposta.set_closed(TerminalClosed {
+            terminal_id,
+            exit_code: codice,
+            ..Default::default()
+        });
+    }
+    risposta
+}
 
 /// Il codice con cui esce l'helper, dal codice della shell (`None` se
 /// `child.wait()` e' fallito: -1, come una chiusura forzata).
@@ -107,6 +146,51 @@ mod tests {
     #[test]
     fn senza_nessun_codice_resta_zero() {
         assert_eq!(scegli_codice(0, None), 0);
+    }
+
+    #[test]
+    fn l_helper_non_partito_e_un_errore() {
+        use hbb_common::message_proto::terminal_response::Union;
+        let codice = scegli_codice(0, Some(HELPER_NON_PARTITO as u32));
+        assert_eq!(codice, HELPER_NON_PARTITO);
+        match risposta_chiusura(4, codice).union {
+            Some(Union::Error(e)) => {
+                assert_eq!(e.terminal_id, 4);
+                assert_eq!(e.message, NON_PARTITO);
+            }
+            altro => panic!("attesa una TerminalError, arrivata {:?}", altro),
+        }
+    }
+
+    #[test]
+    fn la_shell_finita_e_una_chiusura() {
+        use hbb_common::message_proto::terminal_response::Union;
+        for codice in [
+            0,
+            3,
+            255,
+            -1,
+            HELPER_NON_PARTITO - 1,
+            HELPER_NON_PARTITO + 1,
+        ] {
+            match risposta_chiusura(2, codice).union {
+                Some(Union::Closed(c)) => {
+                    assert_eq!(c.terminal_id, 2);
+                    assert_eq!(c.exit_code, codice);
+                }
+                altro => panic!("attesa una TerminalClosed, arrivata {:?}", altro),
+            }
+        }
+    }
+
+    #[test]
+    fn il_codice_non_partito_e_fuori_dai_codici_di_una_shell() {
+        assert!(!(0..=259).contains(&HELPER_NON_PARTITO));
+        assert!((HELPER_NON_PARTITO as u32) < 0xC000_0000);
+        assert_eq!(
+            codice_helper(Some(HELPER_NON_PARTITO as u32)),
+            HELPER_NON_PARTITO
+        );
     }
 
     #[test]

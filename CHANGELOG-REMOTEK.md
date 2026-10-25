@@ -15,6 +15,9 @@ rilasciate non si riscrivono.
 - Il terminale da utente con l'Administrator predefinito di Windows, o con
   un amministratore e UAC spento, parte: la shell ha di nuovo accesso alla
   pseudo-console (collaudo di `remotek-1.4.9-4`, caso 20(d)).
+- `remotek-cli terminal` esce con un errore (codice 125, "il terminale non
+  e' partito sul PC" su stderr) se il terminale non parte sul PC, invece di
+  uscire con 0 come un terminale finito bene.
 
 ## [remotek-1.4.9-4] - 2026-10-25
 Base upstream: RustDesk 1.4.9, piu' due correzioni di RustDesk 1.5.0 prese

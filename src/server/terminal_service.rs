@@ -1703,8 +1703,6 @@ impl TerminalServiceProxy {
         service: &mut PersistentTerminalService,
         close: &CloseTerminal,
     ) -> Result<Option<TerminalResponse>> {
-        let mut response = TerminalResponse::new();
-
         // Always close and remove the terminal
         if let Some(session_arc) = service.sessions.remove(&close.terminal_id) {
             let mut session = session_arc.lock().unwrap();
@@ -1723,11 +1721,11 @@ impl TerminalServiceProxy {
                 0,
             );
 
-            let mut closed = TerminalClosed::new();
-            closed.terminal_id = close.terminal_id;
-            closed.exit_code = exit_code;
-            response.set_closed(closed);
-            Ok(Some(response))
+            // Remotek: l'helper che non ha fatto partire la shell e' un errore.
+            Ok(Some(crate::remotek::uscita_terminale::risposta_chiusura(
+                close.terminal_id,
+                exit_code,
+            )))
         } else {
             Ok(None)
         }
@@ -2084,12 +2082,11 @@ impl TerminalServiceProxy {
                     }
                 }
 
-                let mut response = TerminalResponse::new();
-                let mut closed = TerminalClosed::new();
-                closed.terminal_id = terminal_id;
-                closed.exit_code = exit_code;
-                response.set_closed(closed);
-                responses.push(response);
+                // Remotek: l'helper che non ha fatto partire la shell e' un errore.
+                responses.push(crate::remotek::uscita_terminale::risposta_chiusura(
+                    terminal_id,
+                    exit_code,
+                ));
             }
         }
 

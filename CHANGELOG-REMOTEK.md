@@ -84,6 +84,12 @@ rilasciate non si riscrivono.
 - Lo scambio dei lati con un tecnico vale solo per il desktop remoto
   (correzione portata da RustDesk 1.5.0). Prima, con lo scambio, una
   sessione di terminale o un tunnel si aprivano senza il clic del cliente.
+- Un lasciapassare dell'agente AI gia' usato resta rifiutato anche dopo un
+  riavvio del servizio: i lasciapassare visti si scrivono su un file che
+  possono leggere solo il sistema e gli amministratori. Prima stavano in
+  memoria e, entro 90 secondi da un riavvio, uno intercettato si poteva usare
+  una seconda volta. Se il file non si legge o non si scrive, il
+  lasciapassare si rifiuta.
 
 ## [remotek-1.4.9-3] - 2026-10-11
 Base upstream: RustDesk 1.4.9. Exe Windows x86_64 **non firmato**, sorgenti

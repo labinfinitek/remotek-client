@@ -2310,7 +2310,9 @@ if not caso3 or prelogin == -1 or caso3.start() >= prelogin:
 T = "src/remotek/trascrizione.rs"
 tr = codice(T)
 ing = re.search(r"pub fn ingresso\(.*?\n\}\n", tr, re.S)
-if not ing or "non_presidiato::vista_al_cm(crate::platform::is_prelogin())" not in ing.group(0):
+# Il ramo che sceglie la vista, non solo il testo: con `|| true` o coi rami
+# scambiati il CM riceverebbe l'output anche in prelogin.
+if not ing or not re.search(r"let vista = if crate::remotek::non_presidiato::vista_al_cm\(crate::platform::is_prelogin\(\)\)\s*\{\s*Some\(super::vista_cm::Vista::nuova\(conn_id, tx_cm\.clone\(\)\)\)\s*\}\s*else\s*\{\s*None\s*\};\s*Trascrizione::nuova\(conn_id, url, tx, cartella\(\), vista\)", ing.group(0)):
     guai.append("%s: in prelogin l'output del terminale va ancora al CM (ingresso non passa da non_presidiato::vista_al_cm(is_prelogin()))" % T)
 L = "src/remotek/lasciapassare.rs"
 l = codice(L)
@@ -2332,6 +2334,74 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_non_presidiato"
+fi
+
+# --- 29. Il terminale da utente col token abbassato parte, o lo dice ---------
+# Collaudo di remotek-1.4.9-4, caso 20(d): col token ristretto dell'Administrator
+# predefinito l'helper falliva su openpty ("Failed to open PTY") e usciva con
+# 0, e il controllante riceveva una chiusura normale. In
+# src/remotek/token_terminale.rs `ristretto`, dopo l'integrita' media, passa da
+# `proprietario_e_dacl`, che imposta TokenOwner (l'utente di TokenUser) e
+# TokenDefaultDacl con gli ACE di `ace_dacl_predefinita` (utente e SYSTEM a
+# GENERIC_ALL, sessione di logon a lettura ed esecuzione); se fallisce il token
+# si chiude e il terminale si rifiuta. L'helper che fallisce esce con
+# HELPER_NON_PARTITO (src/core_main.rs), il servizio ne fa un TerminalError con
+# NON_PARTITO in tutti e due i punti che chiudono (`risposta_chiusura`), e
+# remotek-cli lo riconosce ed esce con USCITA_NON_PARTITO (125, ne' 0 ne' 1).
+# Codice Windows che la CI delle MR non compila. Se python3 fallisce il
+# controllo non e' eseguito ed e' un errore.
+esito_partenza=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+T = "src/remotek/token_terminale.rs"
+t = codice(T)
+ristretti = re.findall(r"^    fn ristretto\(token: HANDLE\) -> ResultType<HANDLE> \{\n(.*?)^    \}$", t, re.M | re.S)
+if len(ristretti) != 1 or not re.search(r"if let Err\(e\) = integrita_media\(nuovo\)\.and_then\(\|\(\)\| proprietario_e_dacl\(nuovo\)\) \{\s*chiudi\(nuovo\);\s*return Err\(e\);\s*\}\s*Ok\(nuovo\)\s*$", ristretti[0]):
+    guai.append("%s: ristretto non passa piu' da proprietario_e_dacl dopo l'integrita' media, o un suo errore non rifiuta il token" % T)
+pd = re.findall(r"^    fn proprietario_e_dacl\(token: HANDLE\) -> ResultType<\(\)> \{\n(.*?)^    \}$", t, re.M | re.S)
+if len(pd) != 1:
+    guai.append("%s: le definizioni di proprietario_e_dacl sono %d, attesa 1" % (T, len(pd)))
+else:
+    corpo = pd[0]
+    if not re.search(r"informazione\(token, TokenUser\)\?;.*?let proprietario = TOKEN_OWNER \{ Owner: utente \};\s*unsafe \{\s*SetTokenInformation\(\s*token,\s*TokenOwner,\s*&proprietario as \*const _ as \*const c_void,.*?\}\s*\.map_err\([^;]*\)\?;", corpo, re.S):
+        guai.append("%s: proprietario_e_dacl non imposta piu' TokenOwner = l'utente del token, o ne ignora l'errore" % T)
+    if not re.search(r"for \(chi, maschera\) in ace_dacl_predefinita\(logon\.is_some\(\)\)", corpo) or not re.search(r"let dacl = TOKEN_DEFAULT_DACL \{ DefaultDacl: acl \};\s*unsafe \{\s*SetTokenInformation\(\s*token,\s*TokenDefaultDacl,\s*&dacl as \*const _ as \*const c_void,[^}]*\}\s*\.map_err\([^;]*\)\s*$", corpo, re.S):
+        guai.append("%s: proprietario_e_dacl non imposta piu' TokenDefaultDacl con gli ACE di ace_dacl_predefinita, o non ne restituisce l'errore" % T)
+ace = re.search(r"pub fn ace_dacl_predefinita\(sessione_logon: bool\) -> Vec<\(Fiduciario, u32\)> \{\n(.*?)\n\}\n", t, re.S)
+if not ace or not re.fullmatch(r"\s*let mut ace = vec!\[\s*\(Fiduciario::Utente, GENERIC_ALL\),\s*\(Fiduciario::Sistema, GENERIC_ALL\),\s*\];\s*if sessione_logon \{\s*ace\.push\(\(Fiduciario::SessioneLogon, GENERIC_READ \| GENERIC_EXECUTE\)\);\s*\}\s*ace\s*", ace.group(1)):
+    guai.append("%s: ace_dacl_predefinita non e' piu' utente e SYSTEM a GENERIC_ALL e la sessione di logon a lettura ed esecuzione" % T)
+M = "src/core_main.rs"
+m = codice(M)
+if not re.search(r"if let Err\(e\) = crate::server::terminal_helper::run_terminal_helper\(&helper_args\) \{\s*log::error!\([^;]*\);\s*log::logger\(\)\.flush\(\);\s*std::process::exit\(crate::remotek::uscita_terminale::HELPER_NON_PARTITO\);\s*\}", m):
+    guai.append("%s: l'helper che fallisce non esce piu' con uscita_terminale::HELPER_NON_PARTITO" % M)
+U = "src/remotek/uscita_terminale.rs"
+u = codice(U)
+if not re.search(r"pub const HELPER_NON_PARTITO: i32 = 0x5254_4B01;", u) or not re.search(r"pub fn risposta_chiusura\(terminal_id: i32, codice: i32\) -> TerminalResponse \{\s*let mut risposta = TerminalResponse::new\(\);\s*if codice == HELPER_NON_PARTITO \{\s*risposta\.set_error\(TerminalError \{\s*terminal_id,\s*message: NON_PARTITO\.to_owned\(\),", u):
+    guai.append("%s: risposta_chiusura non fa piu' di HELPER_NON_PARTITO un TerminalError con NON_PARTITO" % U)
+S = "src/server/terminal_service.rs"
+sv = codice(S)
+if sv.count("crate::remotek::uscita_terminale::risposta_chiusura(") != 2 or "set_closed(" in sv:
+    guai.append("%s: la chiusura del terminale non passa piu' da uscita_terminale::risposta_chiusura nei due punti (read_outputs e handle_close)" % S)
+C = "src/remotek/cli/terminale.rs"
+cl = codice(C)
+if not re.search(r"Union::Error\(e\) if e\.message == crate::remotek::uscita_terminale::NON_PARTITO => \{\s*Some\(Evento::NonPartito\)\s*\}", cl) or not re.search(r"Evento::NonPartito => \{\s*eprintln!\([^;]*NON_PARTITO\s*\);\s*return Ok\(super::USCITA_NON_PARTITO\);\s*\}", cl):
+    guai.append("%s: remotek-cli non riconosce piu' il terminale non partito, o non lo scrive su stderr uscendo con USCITA_NON_PARTITO" % C)
+D = "src/remotek/cli/mod.rs"
+d = codice(D)
+uscita = re.search(r"pub\(crate\) const USCITA_NON_PARTITO: i32 = (\d+);", d)
+if not uscita or int(uscita.group(1)) in (0, 1, 2, 255) or "%s se il" % uscita.group(1) not in d:
+    guai.append("%s: USCITA_NON_PARTITO manca, coincide con 0, 1, 2 o 255, o l'aiuto non la documenta" % D)
+print("\n".join(guai))
+PY
+) || esito_partenza="${esito_partenza:-}"$'\n'"controllo della partenza del terminale non eseguito: python3 terminato con errore"
+if [ -z "$esito_partenza" ]; then
+  ok "il token ristretto ha proprietario e DACL di default dell'utente; l'helper non partito arriva al CLI come errore (collaudo 20(d))"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_partenza"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

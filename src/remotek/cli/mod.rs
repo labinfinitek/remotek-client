@@ -19,7 +19,8 @@ const USO: &str = "uso:
                                si entra solo se il cliente accetta (attesa di default 120 s);
                                righe e colonne da 1 a 65535 (default 24 e 80);
                                esce col codice del terminale (fuori da 0-255: 255); 0 anche
-                               quando il PC non conosce il codice della shell;
+                               quando il PC non conosce il codice della shell; 125 se il
+                               terminale non e' partito sul PC (lo dice anche su stderr);
                                la fine di stdin chiude subito il terminale e la shell: per il
                                codice della shell si manda `exit` e si tiene stdin aperto";
 
@@ -27,6 +28,10 @@ const USO: &str = "uso:
 pub(crate) const USCITA_ERRORE: i32 = 1;
 /// Uscita per argomenti sbagliati.
 pub(crate) const USCITA_USO: i32 = 2;
+/// Uscita quando il terminale non e' partito sul PC (l'helper e' uscito prima
+/// della shell): 125, come `env` e i lanciatori quando il comando non parte.
+/// Una shell che esce da se' con 125 si distingue solo da stderr.
+pub(crate) const USCITA_NON_PARTITO: i32 = 125;
 
 #[derive(Debug, PartialEq)]
 enum Comando {

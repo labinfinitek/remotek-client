@@ -8,6 +8,8 @@
 //! prima di salvarlo; se non si puo', il terminale si rifiuta, mai col token
 //! pieno di ripiego. Il token abbassato e' dello stesso utente: la DACL delle
 //! pipe dell'helper, che ammette il SID dell'utente del token, non cambia.
+//! Il token ristretto prende anche proprietario e DACL di default come quelli
+//! del token filtrato di UAC (vedi [`ace_dacl_predefinita`]).
 //!
 //! La decisione sta in funzioni pure, provate anche su Linux; la parte
 //! Windows sono solo le chiamate di sistema.
@@ -30,6 +32,11 @@ const SE_GROUP_ENABLED: u32 = 0x4;
 const SE_GROUP_USE_FOR_DENY_ONLY: u32 = 0x10;
 #[cfg(target_os = "windows")]
 const SE_GROUP_INTEGRITY: u32 = 0x20;
+
+// winnt.h, i diritti generici degli ACE della DACL di default.
+const GENERIC_ALL: u32 = 0x1000_0000;
+const GENERIC_EXECUTE: u32 = 0x2000_0000;
+const GENERIC_READ: u32 = 0x8000_0000;
 
 // winnt.h, i flag di CreateRestrictedToken.
 const DISABLE_MAX_PRIVILEGE: u32 = 0x1;
@@ -55,6 +62,46 @@ pub enum Scelta {
     /// `CreateRestrictedToken` con [`FLAG_RISTRETTO`] e Administrators solo
     /// "deny-only", poi integrita' media.
     Ristretto,
+}
+
+/// Chi riceve un ACE nella DACL di default del token ristretto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fiduciario {
+    /// L'utente del token (`TokenUser`).
+    Utente,
+    /// NT AUTHORITY\SYSTEM.
+    Sistema,
+    /// Il SID della sessione di logon (`TokenLogonSid`).
+    SessioneLogon,
+}
+
+/// Gli ACE della DACL di default del token ristretto, in ordine: come quella
+/// del token filtrato di UAC, l'utente e SYSTEM a GENERIC_ALL e la sessione
+/// di logon, se il token ne ha una, a lettura ed esecuzione.
+///
+/// Dopo `CreateRestrictedToken` il token dell'Administrator predefinito ha
+/// ancora proprietario e DACL di default del token elevato (Administrators e
+/// SYSTEM), ma Administrators e' ormai solo deny-only. Ipotesi (caso 20(d) di
+/// `remotek-1.4.9-4`, "Failed to open PTY" 3 ms dopo l'avvio dell'helper):
+/// gli oggetti che l'helper crea con la DACL di default, le pipe e il
+/// `conhost` della pseudo-console, non gli sono piu' accessibili e
+/// `CreatePseudoConsole` fallisce. La prova e' il collaudo 20(d) sulla 109.
+pub fn ace_dacl_predefinita(sessione_logon: bool) -> Vec<(Fiduciario, u32)> {
+    let mut ace = vec![
+        (Fiduciario::Utente, GENERIC_ALL),
+        (Fiduciario::Sistema, GENERIC_ALL),
+    ];
+    if sessione_logon {
+        ace.push((Fiduciario::SessioneLogon, GENERIC_READ | GENERIC_EXECUTE));
+    }
+    ace
+}
+
+/// La lunghezza di un'ACL con un ACCESS_ALLOWED_ACE per ognuno dei SID
+/// lunghi `sid` byte: l'intestazione ACL (8 byte) e, per ogni ACE,
+/// intestazione e maschera (8 byte) piu' il SID.
+pub fn lunghezza_acl(sid: &[u32]) -> u32 {
+    8 + sid.iter().map(|l| 8 + l).sum::<u32>()
 }
 
 /// La scelta dato il `TOKEN_ELEVATION_TYPE` (1 Default, 2 Full, 3 Limited) e,
@@ -110,12 +157,15 @@ mod windows_impl {
     use windows::Win32::{
         Foundation::{CloseHandle, HANDLE},
         Security::{
-            CreateRestrictedToken, CreateWellKnownSid, DuplicateTokenEx, EqualSid, GetLengthSid,
-            GetTokenInformation, SecurityImpersonation, SetTokenInformation, TokenElevationType,
-            TokenGroups, TokenIntegrityLevel, TokenLinkedToken, TokenPrimary,
-            WinBuiltinAdministratorsSid, WinMediumLabelSid, CREATE_RESTRICTED_TOKEN_FLAGS, PSID,
-            SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_ALL_ACCESS, TOKEN_ELEVATION_TYPE,
-            TOKEN_GROUPS, TOKEN_LINKED_TOKEN, TOKEN_MANDATORY_LABEL, WELL_KNOWN_SID_TYPE,
+            AddAccessAllowedAce, CreateRestrictedToken, CreateWellKnownSid, DuplicateTokenEx,
+            EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, SecurityImpersonation,
+            SetTokenInformation, TokenDefaultDacl, TokenElevationType, TokenGroups,
+            TokenIntegrityLevel, TokenLinkedToken, TokenLogonSid, TokenOwner, TokenPrimary,
+            TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid, WinMediumLabelSid, ACL,
+            ACL_REVISION, CREATE_RESTRICTED_TOKEN_FLAGS, PSID, SECURITY_MAX_SID_SIZE,
+            SID_AND_ATTRIBUTES, TOKEN_ALL_ACCESS, TOKEN_DEFAULT_DACL, TOKEN_ELEVATION_TYPE,
+            TOKEN_GROUPS, TOKEN_INFORMATION_CLASS, TOKEN_LINKED_TOKEN, TOKEN_MANDATORY_LABEL,
+            TOKEN_OWNER, TOKEN_USER, WELL_KNOWN_SID_TYPE,
         },
     };
 
@@ -123,6 +173,9 @@ mod windows_impl {
     const _: () = assert!(
         DISABLE_MAX_PRIVILEGE == windows::Win32::Security::DISABLE_MAX_PRIVILEGE.0
             && LUA_TOKEN == windows::Win32::Security::LUA_TOKEN.0
+            && GENERIC_ALL == windows::Win32::Foundation::GENERIC_ALL.0
+            && GENERIC_EXECUTE == windows::Win32::Foundation::GENERIC_EXECUTE.0
+            && GENERIC_READ == windows::Win32::Foundation::GENERIC_READ.0
     );
 
     /// Abbassa `token` (primario; passa al chiamato) e restituisce quello da
@@ -170,26 +223,7 @@ mod windows_impl {
 
     fn amministratori_attivi(token: HANDLE) -> ResultType<bool> {
         let amministratori = sid_noto(WinBuiltinAdministratorsSid)?;
-        let mut lunghezza = 0u32;
-        // La prima chiamata da' la lunghezza e fallisce con ERROR_INSUFFICIENT_BUFFER.
-        if let Err(e) = unsafe { GetTokenInformation(token, TokenGroups, None, 0, &mut lunghezza) }
-        {
-            if lunghezza == 0 {
-                bail!("TokenGroups: {}", e);
-            }
-        }
-        // u64: TOKEN_GROUPS contiene puntatori e va allineato.
-        let mut buffer = vec![0u64; (lunghezza as usize).div_ceil(8)];
-        unsafe {
-            GetTokenInformation(
-                token,
-                TokenGroups,
-                Some(buffer.as_mut_ptr() as *mut c_void),
-                lunghezza,
-                &mut lunghezza,
-            )
-        }
-        .map_err(|e| anyhow!("TokenGroups: {}", e))?;
+        let buffer = informazione(token, TokenGroups)?;
         let gruppi = unsafe { &*(buffer.as_ptr() as *const TOKEN_GROUPS) };
         let elenco = unsafe {
             std::slice::from_raw_parts(gruppi.Groups.as_ptr(), gruppi.GroupCount as usize)
@@ -197,6 +231,30 @@ mod windows_impl {
         Ok(elenco.iter().any(|g| {
             attivo(g.Attributes) && unsafe { EqualSid(g.Sid, amministratori.psid()) }.is_ok()
         }))
+    }
+
+    /// Un'informazione del token di lunghezza variabile, in un buffer u64:
+    /// TOKEN_GROUPS e TOKEN_USER contengono puntatori e vanno allineati.
+    fn informazione(token: HANDLE, classe: TOKEN_INFORMATION_CLASS) -> ResultType<Vec<u64>> {
+        let mut lunghezza = 0u32;
+        // La prima chiamata da' la lunghezza e fallisce con ERROR_INSUFFICIENT_BUFFER.
+        if let Err(e) = unsafe { GetTokenInformation(token, classe, None, 0, &mut lunghezza) } {
+            if lunghezza == 0 {
+                bail!("{:?}: {}", classe, e);
+            }
+        }
+        let mut buffer = vec![0u64; (lunghezza as usize).div_ceil(8)];
+        unsafe {
+            GetTokenInformation(
+                token,
+                classe,
+                Some(buffer.as_mut_ptr() as *mut c_void),
+                lunghezza,
+                &mut lunghezza,
+            )
+        }
+        .map_err(|e| anyhow!("{:?}: {}", classe, e))?;
+        Ok(buffer)
     }
 
     fn collegato(token: HANDLE) -> ResultType<HANDLE> {
@@ -248,11 +306,78 @@ mod windows_impl {
             )
         }
         .map_err(|e| anyhow!("CreateRestrictedToken: {}", e))?;
-        if let Err(e) = integrita_media(nuovo) {
+        if let Err(e) = integrita_media(nuovo).and_then(|()| proprietario_e_dacl(nuovo)) {
             chiudi(nuovo);
             return Err(e);
         }
         Ok(nuovo)
+    }
+
+    /// `TokenOwner` = l'utente del token e `TokenDefaultDacl` con gli ACE di
+    /// [`ace_dacl_predefinita`], come il token filtrato di UAC.
+    fn proprietario_e_dacl(token: HANDLE) -> ResultType<()> {
+        let utente_buffer = informazione(token, TokenUser)?;
+        let utente = unsafe { &*(utente_buffer.as_ptr() as *const TOKEN_USER) }
+            .User
+            .Sid;
+        let proprietario = TOKEN_OWNER { Owner: utente };
+        unsafe {
+            SetTokenInformation(
+                token,
+                TokenOwner,
+                &proprietario as *const _ as *const c_void,
+                size_of::<TOKEN_OWNER>() as u32,
+            )
+        }
+        .map_err(|e| anyhow!("TokenOwner: {}", e))?;
+
+        let sistema = sid_noto(WinLocalSystemSid)?;
+        // Un token senza sessione di logon resta senza il suo ACE.
+        let logon_buffer = match informazione(token, TokenLogonSid) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                log::warn!("token del terminale senza sessione di logon: {}", e);
+                None
+            }
+        };
+        let logon = logon_buffer.as_ref().and_then(|b| {
+            let gruppi = unsafe { &*(b.as_ptr() as *const TOKEN_GROUPS) };
+            (gruppi.GroupCount > 0).then(|| gruppi.Groups[0].Sid)
+        });
+        let mut elenco = Vec::new();
+        for (chi, maschera) in ace_dacl_predefinita(logon.is_some()) {
+            let sid = match chi {
+                Fiduciario::Utente => Some(utente),
+                Fiduciario::Sistema => Some(sistema.psid()),
+                Fiduciario::SessioneLogon => logon,
+            }
+            .ok_or_else(|| anyhow!("SID mancante per {:?}", chi))?;
+            elenco.push((sid, maschera));
+        }
+        let lunghezze: Vec<u32> = elenco
+            .iter()
+            .map(|(sid, _)| unsafe { GetLengthSid(*sid) })
+            .collect();
+        let lunghezza = lunghezza_acl(&lunghezze);
+        // u64: l'ACL va allineata a 4 byte.
+        let mut buffer = vec![0u64; (lunghezza as usize).div_ceil(8)];
+        let acl = buffer.as_mut_ptr() as *mut ACL;
+        unsafe { InitializeAcl(acl, lunghezza, ACL_REVISION) }
+            .map_err(|e| anyhow!("InitializeAcl: {}", e))?;
+        for (sid, maschera) in elenco {
+            unsafe { AddAccessAllowedAce(acl, ACL_REVISION, maschera, sid) }
+                .map_err(|e| anyhow!("AddAccessAllowedAce: {}", e))?;
+        }
+        let dacl = TOKEN_DEFAULT_DACL { DefaultDacl: acl };
+        unsafe {
+            SetTokenInformation(
+                token,
+                TokenDefaultDacl,
+                &dacl as *const _ as *const c_void,
+                size_of::<TOKEN_DEFAULT_DACL>() as u32,
+            )
+        }
+        .map_err(|e| anyhow!("TokenDefaultDacl: {}", e))
     }
 
     fn integrita_media(token: HANDLE) -> ResultType<()> {
@@ -367,6 +492,32 @@ mod tests {
         assert!(portatile(Ok(false)).is_ok());
         assert!(portatile(Ok(true)).is_err());
         assert!(portatile(Err(anyhow!("OpenProcessToken"))).is_err());
+    }
+
+    #[test]
+    fn la_dacl_di_default_e_quella_del_token_filtrato() {
+        assert_eq!(
+            ace_dacl_predefinita(true),
+            vec![
+                (Fiduciario::Utente, GENERIC_ALL),
+                (Fiduciario::Sistema, GENERIC_ALL),
+                (Fiduciario::SessioneLogon, GENERIC_READ | GENERIC_EXECUTE),
+            ]
+        );
+        assert_eq!(
+            ace_dacl_predefinita(false),
+            vec![
+                (Fiduciario::Utente, GENERIC_ALL),
+                (Fiduciario::Sistema, GENERIC_ALL),
+            ]
+        );
+    }
+
+    #[test]
+    fn la_lunghezza_dell_acl_conta_intestazione_e_sid() {
+        assert_eq!(lunghezza_acl(&[]), 8);
+        // Utente (S-1-5-21-x-y-z-rid, 28 byte), SYSTEM (12), logon (S-1-5-5-x-y, 20).
+        assert_eq!(lunghezza_acl(&[28, 12, 20]), 8 + 36 + 20 + 28);
     }
 
     #[test]

@@ -700,7 +700,10 @@ pub fn core_main() -> Option<Vec<String>> {
             {
                 let helper_args: Vec<String> = args[1..].to_vec();
                 if let Err(e) = crate::server::terminal_helper::run_terminal_helper(&helper_args) {
-                    log::error!("Terminal helper failed: {}", e);
+                    log::error!("Terminal helper failed: {:#}", e);
+                    // Remotek: la shell non e' partita; il servizio lo dice al controllante.
+                    log::logger().flush();
+                    std::process::exit(crate::remotek::uscita_terminale::HELPER_NON_PARTITO);
                 }
             }
             return None;

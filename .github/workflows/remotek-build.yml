@@ -15,7 +15,10 @@
 #   poi aggiornare il tag scritto in questo commento.
 # - Nessuna release pubblica: l'exe esce solo come artefatto della run.
 # - Firma del codice: passi presenti e SPENTI (variabile di repo FIRMA_ATTIVA).
-# - Attestazione di provenienza (SLSA L2) sull'exe finale; verifica:
+# - remotek-cli.exe (ADR-0033 passo 1) accanto all'exe finale, con le stesse
+#   feature della libreria.
+# - Attestazione di provenienza (SLSA L2) sull'exe finale e su remotek-cli.exe;
+#   verifica:
 #     gh attestation verify <exe> --repo labinfinitek/remotek-client
 name: Remotek build Windows
 
@@ -280,6 +283,17 @@ jobs:
           python3 -c "import os, sys; d = open(os.path.join('SignOutput', os.environ['NOME_EXE']), 'rb').read(); b = bytes([92]); sys.exit(0 if d.count(b'rustdesk.' + b + os.environ['NOME_EXE'].encode()) == 1 and d.count(b'.' + b + b'rustdesk.exe') == 0 else 1)" \
             || { echo "::error::il pacchetto non contiene ${NOME_EXE} o contiene ancora rustdesk.exe"; exit 1; }
 
+      # Nostro. remotek-cli per l'agente AI su Windows (ADR-0033 passo 1). Le
+      # feature sono quelle che build.py da' alla libreria (hwcodec, vram,
+      # flutter: get_features), cosi' cargo riusa la compilazione e il CLI e'
+      # lo stesso codice dell'exe.
+      - name: remotek-cli per Windows
+        shell: bash
+        run: |
+          cargo build --locked --release --bin remotek-cli --features hwcodec,vram,flutter
+          cp ./target/release/remotek-cli.exe ./SignOutput/remotek-cli.exe
+          ./SignOutput/remotek-cli.exe --help > /dev/null
+
       # Nostro. Come sopra, per l'exe autoestraente che riceve il cliente.
       - name: Firma dell'exe finale (spenta)
         if: ${{ vars.FIRMA_ATTIVA == 'true' }}
@@ -295,7 +309,7 @@ jobs:
           MOTIVO: ${{ inputs.motivo }}
         run: |
           cd SignOutput
-          sha256sum "${NOME_EXE}" | tee SHA256SUMS.txt
+          sha256sum "${NOME_EXE}" remotek-cli.exe | tee SHA256SUMS.txt
           {
             echo "### ${NOME_EXE} (non firmato)"
             echo ""
@@ -303,7 +317,8 @@ jobs:
             echo "- ref: ${GITHUB_REF}"
             echo "- commit: ${GITHUB_SHA}"
             echo "- run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo "- sha256: $(cut -d' ' -f1 SHA256SUMS.txt)"
+            echo "- sha256: $(head -n 1 SHA256SUMS.txt | cut -d' ' -f1)"
+            echo "- remotek-cli.exe sha256: $(sed -n 2p SHA256SUMS.txt | cut -d' ' -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attestazione di provenienza

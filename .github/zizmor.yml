@@ -10,8 +10,8 @@ rules:
       # compreso: i tag mobili v1 e v2 nel frattempo puntano ad altri commit.
       # Si tengono i commit con cui upstream (e il nostro build 35326276849)
       # compilano; si riallineano al prossimo merge upstream.
-      - remotek-build.yml:159
-      - remotek-build.yml:166
+      - remotek-build.yml:162
+      - remotek-build.yml:169
       # Stessi due pin in remotek-cli.yml, dagli stessi commit di ci.yml:146 e
       # :162 (MR del build Linux di remotek-cli).
       - remotek-cli.yml:80
@@ -22,5 +22,5 @@ rules:
       # sintassi `$/...` (GitHub, 2026-07-30) non e' ancora provata con i
       # workflow riusabili di questo repo. Si adotta e si toglie l'eccezione al
       # prossimo build utile: non si lancia un build da 50 minuti per questo.
-      - remotek-build.yml:50
-      - remotek-build.yml:55
+      - remotek-build.yml:53
+      - remotek-build.yml:58

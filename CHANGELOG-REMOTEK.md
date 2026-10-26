@@ -11,6 +11,21 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-5] - 2026-10-26
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-5`
+di remotek-client e remotek-hbb-common (hbb_common `df5cf4f`, lo stesso di
+`remotek-1.4.9-4`). Con l'exe c'e' `remotek-cli` per Linux. Corregge il KO
+del collaudo del -4 al caso 20(d): il terminale da utente non partiva con
+l'Administrator predefinito.
+**Per chi installa**: come per il -4 (API `api-v0.8.0` o seguente con la
+chiave dei lasciapassare accesa per l'agente, orologio entro 5 minuti ed
+entro 30 secondi per il lasciapassare, si installa sopra la versione
+precedente). Il -4 non e' stato pubblicato: dal -3 o da prima si passa
+direttamente al -5.
+**Per l'agente AI**: `remotek-cli terminal` esce con 125 se il terminale
+non parte sul PC.
+
 ### Corretto
 - Il terminale da utente con l'Administrator predefinito di Windows, o con
   un amministratore e UAC spento, parte: la shell ha di nuovo accesso alla

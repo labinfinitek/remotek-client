@@ -148,7 +148,7 @@ pub fn new() -> ServerPtr {
         }
     }
     #[cfg(all(target_os = "windows", feature = "flutter"))]
-    {
+    if crate::remotek::stampante::servizio() {
         match printer_service::init(&crate::get_app_name()) {
             Ok(()) => {
                 log::info!("printer service initialized");
@@ -160,6 +160,8 @@ pub fn new() -> ServerPtr {
                 log::error!("printer service init failed: {}", e);
             }
         }
+    } else {
+        log::info!("{}", crate::remotek::stampante::MOTIVO);
     }
     // Terminal service is created per connection, not globally
     Arc::new(RwLock::new(server))

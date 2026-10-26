@@ -24,6 +24,21 @@ rilasciate non si riscrivono.
   MAC): sulla stessa macchina di norma coincide. Le impostazioni di rete del
   client grafico (proxy, opzioni) non passano piu' al CLI.
 
+### Rimosso
+- La stampante remota ("Remotek Printer"): non si installa piu', e
+  installando o aggiornando il client sopra una versione precedente quella
+  gia' installata si toglie. Chi controlla non riceve piu' sulla propria
+  stampante quello che si stampa sul PC controllato: il documento va
+  salvato e trasferito con il trasferimento file. Il programma di
+  supporto della stampante non era compilato da noi e faceva uscire il
+  servizio (riga sotto).
+
+### Corretto
+- Il servizio dei server non presidiati (`custom.txt` firmato) non riparte
+  piu' in ciclo: usciva dopo circa 150 ms dall'avvio a causa del programma
+  di supporto della stampante remota (collaudo di `remotek-1.4.9-4` e `-5`,
+  caso 26).
+
 ### Sicurezza
 - Il servizio non scrive piu' la propria configurazione nel log di trace:
   con il livello di log al massimo vi finivano la chiave privata del PC, il

@@ -6,6 +6,7 @@ pub mod firma;
 pub mod lasciapassare;
 pub mod non_presidiato;
 pub mod scelta_terminale;
+pub mod stampante;
 pub mod token_terminale;
 pub mod trascrizione;
 pub mod uscita_terminale;

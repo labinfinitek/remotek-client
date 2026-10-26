@@ -23,6 +23,14 @@ rilasciate non si riscrivono.
   sta nella sua cartella ma si calcola come quello del client (dall'indirizzo
   MAC): sulla stessa macchina di norma coincide. Le impostazioni di rete del
   client grafico (proxy, opzioni) non passano piu' al CLI.
+- **Per l'agente AI**: il PC accetta il lasciapassare dell'API per eseguire
+  script (`v` = 2, capacita' `exec`), da amministratore o da utente
+  (ADR-0033). Da utente non apre mai la finestra dell'amministratore, ne'
+  SYSTEM, ne' il senza clic dei server non presidiati, che resta solo per il
+  terminale. Con exec da amministratore la finestra del cliente dice che
+  l'agente chiede di eseguire comandi come amministratore. Gli altri
+  lasciapassare `v` = 2 (terminale, file, tunnel, schermo) valgono come
+  nessun lasciapassare.
 
 ### Rimosso
 - La stampante remota ("Remotek Printer"): non si installa piu', e

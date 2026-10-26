@@ -11,12 +11,15 @@
 //! `Data::RemotekSceltaAmministratore` e subito dopo l'`Authorize` di sempre.
 //! Il servizio la accetta solo con un lasciapassare valido, per un terminale,
 //! su un PC installato ([`scelta`]); altrimenti vale "accetta come utente".
-//! Senza lasciapassare valido la finestra resta quella di oggi.
+//! Senza lasciapassare valido la finestra resta quella di oggi, e cosi' col
+//! lasciapassare `utente` (ADR-0033): exec da utente ha gli stessi poteri
+//! del terminale da utente. Col lasciapassare di exec la finestra dice che
+//! l'agente chiede di eseguire comandi, non un terminale.
 //!
 //! I testi della finestra stanno qui, in italiano e in inglese (ADR-0011), e
 //! si scelgono con la lingua che usa `translate` (src/lang.rs).
 
-use super::lasciapassare::Valido;
+use super::lasciapassare::{self, Valido};
 use hbb_common::log;
 use serde_derive::{Deserialize, Serialize};
 
@@ -25,21 +28,25 @@ use serde_derive::{Deserialize, Serialize};
 pub struct Richiesta {
     pub agente: String,
     pub tecnico: String,
+    /// Il lasciapassare e' di exec: si eseguono comandi, non un terminale.
+    #[serde(default)]
+    pub exec: bool,
 }
 
-/// La richiesta da mostrare al cliente: solo con un lasciapassare valido, per
-/// un terminale, su un PC Windows con il client installato.
+/// La richiesta da mostrare al cliente: solo con un lasciapassare valido da
+/// amministratore, per un terminale, su un PC Windows con il client installato.
 pub fn richiesta(
     valido: Option<&Valido>,
     terminale: bool,
     windows_installato: bool,
 ) -> Option<Richiesta> {
-    if !terminale || !windows_installato {
+    if !terminale || !windows_installato || !lasciapassare::amministratore(valido) {
         return None;
     }
     valido.map(|v| Richiesta {
         agente: v.agente.clone(),
         tecnico: v.tecnico.clone(),
+        exec: lasciapassare::exec(Some(v)),
     })
 }
 
@@ -53,7 +60,8 @@ pub fn windows_installato() -> bool {
 }
 
 /// Il servizio riceve "accetta come amministratore": vale solo con un
-/// lasciapassare valido, per un terminale, su un PC Windows installato.
+/// lasciapassare valido da amministratore (`lasciapassare::amministratore`),
+/// per un terminale, su un PC Windows installato.
 /// Altrimenti (un client modificato, una finestra vecchia) e' "accetta come
 /// utente", con una riga di warn. Dopo l'autorizzazione la scelta si ignora
 /// (warn): il token e l'audit sono gia' fissati.
@@ -82,8 +90,8 @@ pub fn scelta(
 }
 
 /// Il terminale senza `os_login` gira come SYSTEM solo per la scelta esplicita
-/// del cliente, gia' passata da [`scelta`], e con il lasciapassare ancora
-/// valido su un PC installato; altrimenti col token dell'utente abbassato.
+/// del cliente, gia' passata da [`scelta`], e con il lasciapassare da
+/// amministratore ancora valido su un PC installato; altrimenti col token dell'utente abbassato.
 pub fn come_sistema(
     lasciapassare_valido: bool,
     installato: bool,
@@ -138,6 +146,24 @@ pub struct Finestra {
 
 pub fn finestra(richiesta: Richiesta, lingua: Lingua) -> Finestra {
     let (testo, amministratore, utente, rifiuta) = match lingua {
+        Lingua::Italiano if richiesta.exec => (
+            format!(
+                "{}, agente AI di {}, chiede di eseguire comandi come amministratore",
+                richiesta.agente, richiesta.tecnico
+            ),
+            "Accetta come amministratore",
+            "Accetta come utente",
+            "Rifiuta",
+        ),
+        Lingua::Inglese if richiesta.exec => (
+            format!(
+                "{}, AI agent of {}, asks to run commands as administrator",
+                richiesta.agente, richiesta.tecnico
+            ),
+            "Accept as administrator",
+            "Accept as user",
+            "Decline",
+        ),
         Lingua::Italiano => (
             format!(
                 "{}, agente AI di {}, chiede i permessi di amministratore",
@@ -177,7 +203,38 @@ mod tests {
             agente: "agente-mario".into(),
             tecnico: "mario".into(),
             nonce: "n".into(),
+            modo: lasciapassare::Modo::Amministratore,
+            capacita: lasciapassare::Capacita::Terminale,
         }
+    }
+
+    fn exec(modo: lasciapassare::Modo) -> Valido {
+        Valido {
+            modo,
+            capacita: lasciapassare::Capacita::Exec,
+            ..valido()
+        }
+    }
+
+    #[test]
+    fn exec_da_utente_nessuna_finestra_exec_da_amministratore_comandi() {
+        let utente = exec(lasciapassare::Modo::Utente);
+        assert_eq!(richiesta(Some(&utente), true, true), None);
+        let r = richiesta(Some(&exec(lasciapassare::Modo::Amministratore)), true, true).unwrap();
+        assert!(r.exec);
+        let it = finestra(r.clone(), Lingua::Italiano);
+        assert_eq!(
+            it.testo,
+            "agente-mario, agente AI di mario, chiede di eseguire comandi come amministratore"
+        );
+        assert_eq!(
+            finestra(r, Lingua::Inglese).testo,
+            "agente-mario, AI agent of mario, asks to run commands as administrator"
+        );
+        // Una richiesta di un CM vecchio, senza `exec`: il terminale.
+        let vecchia: Richiesta =
+            serde_json::from_value(json!({"agente": "a", "tecnico": "t"})).unwrap();
+        assert!(!vecchia.exec);
     }
 
     #[test]
@@ -185,6 +242,7 @@ mod tests {
         let r = Richiesta {
             agente: "agente-mario".into(),
             tecnico: "mario".into(),
+            exec: false,
         };
         assert_eq!(richiesta(Some(&valido()), true, true), Some(r));
         assert_eq!(richiesta(None, true, true), None);
@@ -232,6 +290,7 @@ mod tests {
         let r = Richiesta {
             agente: "agente-mario".into(),
             tecnico: "mario".into(),
+            exec: false,
         };
         assert_eq!(
             serde_json::to_value(finestra(r.clone(), Lingua::Italiano)).unwrap(),

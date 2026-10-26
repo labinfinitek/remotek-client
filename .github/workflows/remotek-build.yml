@@ -214,32 +214,11 @@ jobs:
           Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
           mv -Force .\usbmmidd_v2 ./rustdesk
 
-          # Download printer driver files and extract them to ./rustdesk
-          try {
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
-
-            # Check and move the files
-            $checksum_driver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
-            $downloadsum_driver = Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256
-            $checksum_adapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
-            $downloadsum_adapter = Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256
-            if ($checksum_driver -eq $downloadsum_driver.Hash -and $checksum_adapter -eq $downloadsum_adapter.Hash) {
-                Write-Output "rustdesk_printer_driver_v4-1.4, checksums match, extract the file."
-                Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
-                mkdir ./rustdesk/drivers
-                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
-                Expand-Archive printer_driver_adapter.zip -DestinationPath .
-                mv -Force .\printer_driver_adapter.dll ./rustdesk
-            } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
-                Write-Output "rustdesk_printer_driver_v4-1.4, checksums do not match, ignore the file."
-            } else {
-                Write-Output "printer_driver_adapter.dll, checksums do not match, ignore the file."
-            }
-          } catch {
-              Write-Host "Ingore the printer driver error."
-          }
+          # Remotek: niente driver ne' printer_driver_adapter.dll della stampante
+          # remota (upstream qui li scarica dalle release di rustdesk/hbb_common,
+          # binari gia' compilati). Con la DLL e il custom.txt non presidiato
+          # --server esce in 150 ms col codice 3 e riparte in ciclo (caso 26 del
+          # collaudo, 2026-10-26); il client non la carica piu' (fix(stampante)).
 
       # [upstream] flutter-build.yml:311-316, senza la condizione su inputs.upload-artifact
       - name: Download RustDeskTempTopMostWindow artifacts
@@ -252,8 +231,8 @@ jobs:
       # cartella venga caricata e impacchettata: install_me copia la cartella senza
       # rinominare, mentre servizio, collegamenti, disinstallazione e is_installed
       # cercano <APP_NAME>.exe (src/platform/windows.rs, get_install_info_with_subkey,
-      # install_me, is_installed). librustdesk.dll e drivers/RustDeskPrinterDriver
-      # restano col loro nome: il codice li cerca cosi'.
+      # install_me, is_installed). librustdesk.dll resta col suo nome: il codice
+      # la cerca cosi'.
       - name: Exe dell'applicazione col nome del prodotto
         shell: bash
         run: |

@@ -24,6 +24,12 @@ rilasciate non si riscrivono.
   MAC): sulla stessa macchina di norma coincide. Le impostazioni di rete del
   client grafico (proxy, opzioni) non passano piu' al CLI.
 
+### Sicurezza
+- Il servizio non scrive piu' la propria configurazione nel log di trace:
+  con il livello di log al massimo vi finivano la chiave privata del PC, il
+  salt, l'ID cifrato e la password permanente (REM-2026-009; hbb_common
+  `643ee42`).
+
 ## [remotek-1.4.9-5] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-5`

@@ -11,6 +11,19 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Aggiunto
+- **Per l'agente AI**: `remotek-cli` si costruisce anche per Windows x86_64,
+  con gli stessi comandi di Linux (ADR-0033). Su Windows stdin e stdout vanno
+  rediretti (pipe o file): su una console i byte non UTF-8 sono rifiutati.
+- `remotek-cli` ha una cartella di configurazione sua (`<nome dell'app>-cli`),
+  separata da quella del client grafico dello stesso utente: il suo `login`
+  non tocca piu' l'account, l'ID e le chiavi del client. **Su Linux chi
+  aggiorna il CLI rifa' il `login`**: prima `remotek-cli logout` col CLI
+  vecchio, cosi' il token non resta nella cartella di prima. L'ID del CLI
+  sta nella sua cartella ma si calcola come quello del client (dall'indirizzo
+  MAC): sulla stessa macchina di norma coincide. Le impostazioni di rete del
+  client grafico (proxy, opzioni) non passano piu' al CLI.
+
 ## [remotek-1.4.9-5] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-5`

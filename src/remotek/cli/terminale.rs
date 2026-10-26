@@ -163,8 +163,15 @@ impl InvokeUiSession for Gestore {
         std::ptr::null()
     }
     fn next_rgba(&self, _: usize) {}
+    // Il build Windows compila la libreria con `flutter` e `vram` (build.py).
+    #[cfg(all(feature = "vram", feature = "flutter"))]
+    fn on_texture(&self, _: usize, _: *mut std::ffi::c_void) {}
     fn set_multiple_windows_session(&self, _: Vec<WindowsSession>) {}
     fn set_current_display(&self, _: i32) {}
+    #[cfg(feature = "flutter")]
+    fn is_multi_ui_session(&self) -> bool {
+        false
+    }
     fn update_record_status(&self, _: bool) {}
     fn printer_request(&self, _: i32, _: String) {}
     fn handle_screenshot_resp(&self, _: String, _: String) {}

@@ -1,6 +1,6 @@
 //! Codice del fork Remotek che non sta in upstream (REMOTEK.md).
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod cli;
 pub mod firma;
 pub mod lasciapassare;

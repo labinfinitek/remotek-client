@@ -11,6 +11,25 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-6] - 2026-10-26
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-6`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`). Nello stesso
+build c'e' `remotek-cli.exe` per Windows, attestato come l'exe e come lui non
+firmato. Corregge il KO del collaudo del -4 e del -5 al caso 26: col
+`custom.txt` firmato il servizio ripartiva in ciclo per il programma di
+supporto della stampante remota, che non c'e' piu'.
+**Per chi installa**: come per il -5 (API `api-v0.8.0` o seguente con la
+chiave dei lasciapassare accesa per l'agente, orologio entro 5 minuti ed
+entro 30 secondi per il lasciapassare). Si installa sopra la versione
+precedente, e l'installazione toglie la stampante "Remotek Printer" se
+c'era. Le capacita' nuove dei lasciapassare dell'API 0.14.0 (exec, file,
+tunnel, schermo) il PC col -6 non le accetta ancora: il terminale resta
+com'era.
+**Per l'agente AI**: `remotek-cli` anche per Windows, con una cartella di
+configurazione sua; su Linux chi aggiorna il CLI rifa' il `login` (righe
+sotto).
+
 ### Aggiunto
 - **Per l'agente AI**: `remotek-cli` si costruisce anche per Windows x86_64,
   con gli stessi comandi di Linux (ADR-0033). Su Windows stdin e stdout vanno

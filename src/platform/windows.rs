@@ -1333,7 +1333,7 @@ pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static st
             printer.as_deref() == Some("1")
         }
     };
-    if install_printer && is_win_10_or_greater() {
+    if crate::remotek::stampante::installa(install_printer) && is_win_10_or_greater() {
         "desktopicon startmenu printer"
     } else {
         "desktopicon startmenu"
@@ -1641,7 +1641,8 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{start_menu}\\\"
         );
         reg_value_start_menu_shortcuts = "1".to_owned();
     }
-    let install_printer = options.contains("printer") && is_win_10_or_greater();
+    let install_printer =
+        crate::remotek::stampante::installa(options.contains("printer")) && is_win_10_or_greater();
     if install_printer {
         reg_value_printer = "1".to_owned();
     }
@@ -3377,7 +3378,9 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     let (uninstall_printer_cmd, install_printer_cmd) = if is_printer_installed {
         (
             format!("\"{}\" --uninstall-remote-printer", &src_exe),
-            format!("\"{}\" --install-remote-printer", &src_exe),
+            // Remotek: si toglie e non si rimette (src/remotek/stampante.rs).
+            // format!("\"{}\" --install-remote-printer", &src_exe),
+            "".to_owned(),
         )
     } else {
         ("".to_owned(), "".to_owned())

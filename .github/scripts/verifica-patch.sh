@@ -16,7 +16,8 @@
 # password; lo STUN solo sul server Infinitek; le richieste del PC all'API
 # firmate con la sua chiave; il dialogo del server bloccato senza l'import;
 # il terminale da utente col token abbassato; il lasciapassare dell'agente;
-# il login del terminale senza le credenziali di Windows.
+# il login del terminale senza le credenziali di Windows; la stampante remota
+# spenta.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -2402,6 +2403,91 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_partenza"
+fi
+
+# --- 30. La stampante remota resta spenta -----------------------------------
+# Collaudo di remotek-1.4.9-4 e -5, caso 26: `--server` usciva in ciclo da un
+# thread di printer_driver_adapter.dll, binario gia' compilato che non viene
+# dai nostri sorgenti. La DLL la carica solo printer_service::init, chiamata
+# una volta sola, in src/server.rs, dentro `if stampante::servizio()`, che e'
+# sempre falso. Nessuna installazione mette la stampante: `installa` e'
+# sempre falso, get_silent_install_options e install_me ci passano, e il
+# ramo di install_me senza stampante lancia ancora `--uninstall-remote-printer`
+# (toglie quella di una versione precedente); update_me la toglie e non la
+# rimette; la pagina di installazione non mostra l'opzione e non la passa.
+# Il build non scarica piu' il driver ne' printer_driver_adapter (remotek-client
+# #49): nessuna riga non commentata di remotek-build.yml li nomina. E
+# hbb_common non stampa piu' la Config con {:?} (REM-2026-009, remotek-hbb-common
+# #6: era `log::trace!("{:?}", cfg)` in Config::load_).
+# Codice Windows che la CI delle MR non compila. Se python3 fallisce il
+# controllo non e' eseguito ed e' un errore.
+esito_stampante=$(python3 - <<'PY'
+import os, re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+S = "src/remotek/stampante.rs"
+s = codice(S)
+if not re.search(r"pub fn servizio\(\) -> bool \{\s*false\s*\}", s):
+    guai.append("%s: servizio non e' piu' sempre falso (il servizio della stampante caricherebbe printer_driver_adapter.dll)" % S)
+if not re.search(r"pub fn installa\(_richiesta: bool\) -> bool \{\s*false\s*\}", s):
+    guai.append("%s: installa non e' piu' sempre falso (un'installazione rimetterebbe la stampante)" % S)
+P = "src/server/printer_service.rs"
+chiamate = []
+for radice, _, file in os.walk("src"):
+    for f in file:
+        q = os.path.join(radice, f)
+        if f.endswith(".rs") and q != P:
+            chiamate += [q] * len(re.findall(r"printer_service::init\(", codice(q)))
+V = "src/server.rs"
+if chiamate != [V] or not re.search(r"if crate::remotek::stampante::servizio\(\) \{\s*match printer_service::init\(", codice(V)):
+    guai.append("%s: printer_service::init non e' piu' chiamata una volta sola, in %s dentro `if stampante::servizio()` (chiamata da: %s)" % (P, V, ", ".join(chiamate) or "nessuno"))
+W = "src/platform/windows.rs"
+w = codice(W)
+silenziosa = re.search(r"pub fn get_silent_install_options\(.*?\n\}\n", w, re.S)
+if not silenziosa or silenziosa.group(0).count("printer\"") != 1 or not re.search(r"if crate::remotek::stampante::installa\(install_printer\) && is_win_10_or_greater\(\) \{\s*\"desktopicon startmenu printer\"\s*\}", silenziosa.group(0)):
+    guai.append("%s: get_silent_install_options puo' restituire `printer` senza passare da stampante::installa" % W)
+if not re.search(r"let install_printer =\s*crate::remotek::stampante::installa\(options\.contains\(\"printer\"\)\) && is_win_10_or_greater\(\);", w):
+    guai.append("%s: install_me decide la stampante senza stampante::installa" % W)
+if not re.search(r"let install_remote_printer = if install_printer \{\s*format!\(\"\\\"\{\}\\\" --install-remote-printer\", &src_exe\)\s*\} else if is_win_10_or_greater\(\) \{\s*format!\(\"\\\"\{\}\\\" --uninstall-remote-printer\", &src_exe\)", w):
+    guai.append("%s: install_me senza stampante non lancia piu' --uninstall-remote-printer (l'aggiornamento lascerebbe quella di prima)" % W)
+if w.count("--install-remote-printer") != 1:
+    guai.append("%s: --install-remote-printer compare %d volte fuori dai commenti, attesa 1 (install_me, dietro stampante::installa): update_me la rimetterebbe" % (W, w.count("--install-remote-printer")))
+D = "flutter/lib/desktop/pages/install_page.dart"
+d = codice(D)
+if re.search(r"Option\(\s*printer\b", d) or "' printer'" in d:
+    guai.append("%s: la pagina di installazione mostra di nuovo l'opzione della stampante o la passa negli argomenti" % D)
+B = "libs/hbb_common/src/config.rs"
+if not os.path.isfile(B):
+    guai.append("%s: manca (submodule non inizializzato): la stampa della Config nel log non e' controllata" % B)
+else:
+    b = "\n".join(r.rstrip("\n").split("//", 1)[0] for r in open(B, encoding="utf-8"))
+    # REM-2026-009: nessuna stampa con {:?} della Config (chiave privata, salt,
+    # enc_id, password del PC). Si guardano le macro di log e di formato il cui
+    # testo ha un {:?} (o {:#?}, {nome:?}) e nomina cfg o una delle tre Config.
+    stampa = re.compile(r"\b(?:log::)?(?:trace|debug|info|warn|error|println|eprintln|print|eprint|format|write|writeln)!\((.*?)\);", re.S)
+    debug = re.compile(r"\{[A-Za-z_0-9]*:#?\?\}")
+    config = re.compile(r"\b(?:cfg|config|CONFIG2?|LOCAL_CONFIG|Config2?|LocalConfig)\b")
+    for m in stampa.finditer(b):
+        if debug.search(m.group(1)) and config.search(m.group(1)):
+            riga = b.count("\n", 0, m.start()) + 1
+            guai.append("%s:%d: una stampa con {:?} di cfg o di una Config/Config2/LocalConfig (REM-2026-009: porterebbe nel log chiave privata, salt, enc_id e password del PC)" % (B, riga))
+F = ".github/workflows/remotek-build.yml"
+if not os.path.isfile(F):
+    guai.append("%s: manca: lo scaricamento della stampante remota non e' controllato" % F)
+else:
+    for n, r in enumerate(open(F, encoding="utf-8"), 1):
+        if re.search(r"printer_driver_adapter|rustdesk_printer_driver", r.split("#", 1)[0], re.I):
+            guai.append("%s:%d: il build scarica di nuovo il driver o printer_driver_adapter della stampante remota (binari gia' compilati di rustdesk/hbb_common, caso 26)" % (F, n))
+print("\n".join(guai))
+PY
+) || esito_stampante="${esito_stampante:-}"$'\n'"controllo della stampante remota non eseguito: python3 terminato con errore"
+if [ -z "$esito_stampante" ]; then
+  ok "stampante remota spenta: printer_driver_adapter.dll mai caricata ne' scaricata dal build, nessuna installazione la mette (collaudo 26); Config mai nel log (REM-2026-009)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_stampante"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

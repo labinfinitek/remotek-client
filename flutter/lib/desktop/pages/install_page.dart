@@ -165,7 +165,8 @@ class _InstallPageBodyState extends State<_InstallPageBody>
                   .marginOnly(bottom: 7),
               Option(desktopicon, label: 'Create desktop icon')
                   .marginOnly(bottom: 7),
-              Option(printer, label: 'Install {$appName} Printer'),
+              // Remotek: la stampante remota non si installa (src/remotek/stampante.rs).
+              // Option(printer, label: 'Install {$appName} Printer'),
               Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -257,7 +258,8 @@ class _InstallPageBodyState extends State<_InstallPageBody>
       String args = '';
       if (startmenu.value) args += ' startmenu';
       if (desktopicon.value) args += ' desktopicon';
-      if (printer.value) args += ' printer';
+      // Remotek: mai ' printer' (src/remotek/stampante.rs).
+      // if (printer.value) args += ' printer';
       bind.installInstallMe(options: args, path: controller.text);
     }
 

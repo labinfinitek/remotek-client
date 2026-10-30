@@ -133,6 +133,17 @@ fn nome_cli(app: &str) -> String {
     }
 }
 
+/// L'inverso di `nome_cli`: il nome del client sul PC, per i messaggi
+/// all'agente. Nel processo del CLI `APP_NAME` vale `<nome>-cli`.
+fn nome_client(app: &str) -> &str {
+    app.strip_suffix(SUFFISSO_CLI).unwrap_or(app)
+}
+
+/// Il marchio del client (APP_NAME senza `SUFFISSO_CLI`).
+pub(super) fn marchio() -> String {
+    nome_client(&crate::get_app_name()).to_owned()
+}
+
 /// Da chiamare prima di ogni accesso alla configurazione: `Config` e
 /// `LocalConfig` si caricano al primo uso, dal file di `APP_NAME` di quel
 /// momento, e restano in memoria. Un `login` del CLI cosi' non tocca account,
@@ -363,6 +374,23 @@ mod tests {
             avvia(["whoami"].map(std::ffi::OsString::from).into_iter()),
             USCITA_ERRORE
         );
+        // Qui APP_NAME vale `<app>-cli`: i consigli all'agente nominano il
+        // client sul PC, non il CLI (compito 61).
+        let evento = terminale::evento_da_msgbox(
+            "error",
+            "Login Error",
+            crate::remotek::token_terminale::RIFIUTO_NIENTE_AMMINISTRATORE,
+            true,
+        );
+        let consiglio = match evento {
+            Some(terminale::Evento::Errore(c)) => c,
+            altro => panic!("{altro:?}"),
+        };
+        assert!(
+            consiglio.contains(&format!("fai installare {app}")),
+            "{consiglio}"
+        );
+        assert!(!consiglio.contains(SUFFISSO_CLI), "{consiglio}");
         let cli = Config::path("");
         assert_ne!(cli, client);
         assert!(cli

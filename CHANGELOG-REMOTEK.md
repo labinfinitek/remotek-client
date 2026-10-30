@@ -26,6 +26,10 @@ rilasciate non si riscrivono.
   del cliente: la finestra ha due scelte, "Accetta come amministratore" e
   "Rifiuta", e dice che su quel PC l'agente puo' entrare solo cosi'
   (ADR-0028).
+- **Per l'agente AI**: `remotek-cli terminal` riconosce i due rifiuti del PC
+  con Remotek non installato e dice cosa fare: rilanciare con
+  `--amministratore` (il PC accetta l'agente solo come amministratore), o
+  senza (li' l'amministratore non c'e'). Non rilancia da solo.
 
 ### Corretto
 - Su quel PC il terminale senza lasciapassare da amministratore si rifiutava

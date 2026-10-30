@@ -11,6 +11,16 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Aggiunto
+- **Per l'agente AI**: il PC accetta il lasciapassare dell'API per eseguire
+  script (`v` = 2, capacita' `exec`), da amministratore o da utente
+  (ADR-0033). Da utente non apre mai la finestra dell'amministratore, ne'
+  SYSTEM, ne' il senza clic dei server non presidiati, che resta solo per il
+  terminale. Con exec da amministratore la finestra del cliente dice che
+  l'agente chiede di eseguire comandi come amministratore. Gli altri
+  lasciapassare `v` = 2 (terminale, file, tunnel, schermo) valgono come
+  nessun lasciapassare.
+
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-6`

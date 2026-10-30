@@ -5,8 +5,11 @@
 //! login, prima che arrivi altrove, e si verifica come dice il README
 //! dell'API ("Lasciapassare dell'agente"): firma Ed25519 della chiave
 //! pubblica cablata sui byte del payload, prima di leggere il JSON; poi
-//! versione, modo, PC, finestra di tempo con 30 secondi di tolleranza, nonce
-//! mai visto. I nonce visti stanno su file (`lasciapassare-visti.json` nella
+//! versione, capacita', modo, PC, finestra di tempo con 30 secondi di
+//! tolleranza, nonce mai visto. Il `v` = 1 e' il terminale da amministratore;
+//! del `v` = 2 vale solo `exec` (ADR-0033), da amministratore o da utente:
+//! ogni altra capacita' vale come nessun lasciapassare finche' il suo passo
+//! non arriva. I nonce visti stanno su file (`lasciapassare-visti.json` nella
 //! cartella di configurazione del servizio, solo SYSTEM e Administrators su
 //! Windows, solo il proprietario altrove) fino a `scade + 30`, cosi' un
 //! riavvio del servizio non li dimentica. Un errore del file vale come nonce
@@ -45,12 +48,47 @@ const TOLLERANZA: i64 = 30;
 /// Una verifica alla volta sul file dei nonce visti.
 static REGISTRO: Mutex<()> = Mutex::new(());
 
-/// Un lasciapassare valido: chi l'ha chiesto e il nonce per l'audit.
+/// Un lasciapassare valido: chi l'ha chiesto, il nonce per l'audit, il modo e
+/// la capacita'.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Valido {
     pub agente: String,
     pub tecnico: String,
     pub nonce: String,
+    pub modo: Modo,
+    pub capacita: Capacita,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Modo {
+    Amministratore,
+    /// Gli stessi poteri del terminale da utente: mai l'amministratore.
+    Utente,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Capacita {
+    /// `v` = 1.
+    Terminale,
+    /// `v` = 2, `capacita` = `exec`.
+    Exec,
+}
+
+/// Il lasciapassare chiede l'amministratore: la finestra del caso 2, la
+/// scelta del cliente e SYSTEM decidono con questo, mai con `is_some()`.
+pub fn amministratore(valido: Option<&Valido>) -> bool {
+    valido.is_some_and(|v| v.modo == Modo::Amministratore)
+}
+
+/// Senza clic (`non_presidiato::senza_clic`) solo il terminale da
+/// amministratore: exec senza clic verra' col passo 7 di ADR-0033.
+pub fn terminale_amministratore(valido: Option<&Valido>) -> bool {
+    valido.is_some_and(|v| v.modo == Modo::Amministratore && v.capacita == Capacita::Terminale)
+}
+
+/// Il lasciapassare della connessione e' di exec (src/remotek/exec.rs).
+pub fn exec(valido: Option<&Valido>) -> bool {
+    valido.is_some_and(|v| v.capacita == Capacita::Exec)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,6 +97,10 @@ pub enum Rifiuto {
     Formato,
     Firma,
     VersioneOModo,
+    /// Un `v` = 2 con una capacita' che il PC non accetta ancora.
+    Capacita,
+    /// Un `v` = 2 exec con porte o durata.
+    PorteODurata,
     AltroPc,
     NonAncoraValido,
     Scaduto,
@@ -72,6 +114,8 @@ impl fmt::Display for Rifiuto {
             Rifiuto::Formato => "formato",
             Rifiuto::Firma => "firma",
             Rifiuto::VersioneOModo => "versione o modo",
+            Rifiuto::Capacita => "capacita' non accettata",
+            Rifiuto::PorteODurata => "porte o durata",
             Rifiuto::AltroPc => "altro PC",
             Rifiuto::NonAncoraValido => "non ancora valido",
             Rifiuto::Scaduto => "scaduto",
@@ -87,6 +131,11 @@ struct Payload {
     agente: String,
     tecnico: String,
     modo: String,
+    // Solo nel `v` = 2.
+    #[serde(default)]
+    capacita: String,
+    porte: Option<Vec<u16>>,
+    durata: Option<i64>,
     emesso: i64,
     scade: i64,
     nonce: String,
@@ -157,9 +206,7 @@ pub fn verifica(
         return Err(Rifiuto::Firma);
     }
     let p: Payload = serde_json::from_slice(&payload).map_err(|_| Rifiuto::Formato)?;
-    if p.v != 1 || p.modo != "amministratore" {
-        return Err(Rifiuto::VersioneOModo);
-    }
+    let (modo, capacita) = modo_e_capacita(&p)?;
     if p.pc != pc {
         return Err(Rifiuto::AltroPc);
     }
@@ -180,7 +227,28 @@ pub fn verifica(
         agente: p.agente,
         tecnico: p.tecnico,
         nonce: p.nonce,
+        modo,
+        capacita,
     })
+}
+
+/// `v` = 1: solo `amministratore`, il terminale. `v` = 2: solo `exec`, con
+/// `amministratore` o `utente`, `porte` = `[]` e `durata` = 0.
+fn modo_e_capacita(p: &Payload) -> Result<(Modo, Capacita), Rifiuto> {
+    let modo = match p.modo.as_str() {
+        "amministratore" => Modo::Amministratore,
+        "utente" if p.v == 2 => Modo::Utente,
+        _ => return Err(Rifiuto::VersioneOModo),
+    };
+    match p.v {
+        1 => Ok((modo, Capacita::Terminale)),
+        2 if p.capacita != "exec" => Err(Rifiuto::Capacita),
+        2 if !p.porte.as_ref().is_some_and(Vec::is_empty) || p.durata != Some(0) => {
+            Err(Rifiuto::PorteODurata)
+        }
+        2 => Ok((modo, Capacita::Exec)),
+        _ => Err(Rifiuto::VersioneOModo),
+    }
 }
 
 /// Il file dei nonce visti, nella cartella di configurazione del processo
@@ -270,9 +338,11 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
     match esito {
         Ok(v) => {
             log::info!(
-                "lasciapassare valido: agente {}, tecnico {}, controllante {}",
+                "lasciapassare valido: agente {}, tecnico {}, {:?} {:?}, controllante {}",
                 v.agente,
                 v.tecnico,
+                v.capacita,
+                v.modo,
                 controllante
             );
             Some(v)
@@ -304,7 +374,7 @@ pub fn audit(
         audit["lasciapassare"] = json!(v.nonce);
     }
     if terminale {
-        audit["amministratore"] = json!(sistema || amministratore(os_username));
+        audit["amministratore"] = json!(sistema || amministratore_os_login(os_username));
     }
 }
 
@@ -312,7 +382,7 @@ pub fn audit(
 /// `os_login` di upstream (nome e password di un amministratore di Windows) su
 /// un PC installato: gira come il servizio. Altrimenti la shell da utente non
 /// e' mai elevata (src/remotek/token_terminale.rs).
-fn amministratore(os_username: &str) -> bool {
+fn amministratore_os_login(os_username: &str) -> bool {
     #[cfg(target_os = "windows")]
     return !os_username.trim().is_empty() && crate::platform::is_installed();
     #[cfg(not(target_os = "windows"))]
@@ -357,6 +427,8 @@ mod tests {
                 agente: "agente-mario".into(),
                 tecnico: "mario".into(),
                 nonce: "AAECAwQFBgcICQoLDA0ODw".into(),
+                modo: Modo::Amministratore,
+                capacita: Capacita::Terminale,
             })
         );
         // Lo stesso payload firmato qui da' la stessa stringa.
@@ -423,7 +495,7 @@ mod tests {
         let base = r#"{"v":1,"pc":"999000111","agente":"a","tecnico":"t","modo":"amministratore","emesso":1791000000,"scade":1791000060,"nonce":"n"}"#;
         assert!(prova(&firmato(base), CHIAVE_PROVA, PC, EMESSO).is_ok());
         for (da, a) in [
-            (r#""v":1"#, r#""v":2"#),
+            (r#""v":1"#, r#""v":3"#),
             (r#""modo":"amministratore""#, r#""modo":"utente""#),
         ] {
             let altro = firmato(&base.replace(da, a));
@@ -445,6 +517,126 @@ mod tests {
             );
         }
         assert_eq!(prova(VETTORE, "", PC, EMESSO), Err(Rifiuto::Spenta));
+    }
+
+    // Il vettore v2 del README dell'API (remotek-api 5eec81f): un tunnel.
+    const VETTORE_V2: &str = "eyJ2IjoyLCJwYyI6Ijk5OTAwMDExMSIsImFnZW50ZSI6ImFnZW50ZS1tYXJpbyIsInRlY25pY28iOiJtYXJpbyIsIm1vZG8iOiJhbW1pbmlzdHJhdG9yZSIsImNhcGFjaXRhIjoidHVubmVsIiwicG9ydGUiOlsyMiwzMzg5XSwiZHVyYXRhIjozNjAwLCJlbWVzc28iOjE3OTEwMDAwMDAsInNjYWRlIjoxNzkxMDAwMDYwLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.kahITkYNGYmo1y2rCRX08LPvdZjiMCzrQPrcvZExTBF3g_eAAAYyPqPjjgl4pImNa-rcg5LmhkH_yqGFu_hOAw";
+
+    /// Un v2 come quello del README, con capacita', modo, porte e durata dati.
+    fn v2(capacita: &str, modo: &str, porte: &str, durata: i64) -> String {
+        firmato(&format!(
+            r#"{{"v":2,"pc":"999000111","agente":"agente-mario","tecnico":"mario","modo":"{modo}","capacita":"{capacita}","porte":{porte},"durata":{durata},"emesso":1791000000,"scade":1791000060,"nonce":"AAECAwQFBgcICQoLDA0ODw"}}"#
+        ))
+    }
+
+    #[test]
+    fn vettore_v2_del_readme_firma_buona_capacita_rifiutata() {
+        // Lo stesso payload, firmato qui, da' la stringa del README.
+        assert_eq!(
+            v2("tunnel", "amministratore", "[22,3389]", 3600),
+            VETTORE_V2
+        );
+        assert_eq!(
+            prova(VETTORE_V2, CHIAVE_PROVA, PC, EMESSO),
+            Err(Rifiuto::Capacita)
+        );
+        assert_eq!(Rifiuto::Capacita.to_string(), "capacita' non accettata");
+        // Un byte alterato: la firma si controlla prima della capacita'.
+        let rotto = VETTORE_V2.replacen("kahITk", "kahITj", 1);
+        assert_eq!(prova(&rotto, CHIAVE_PROVA, PC, EMESSO), Err(Rifiuto::Firma));
+    }
+
+    #[test]
+    fn v2_exec_accettato_coi_due_modi() {
+        for (modo, atteso) in [
+            ("amministratore", Modo::Amministratore),
+            ("utente", Modo::Utente),
+        ] {
+            let v = prova(&v2("exec", modo, "[]", 0), CHIAVE_PROVA, PC, EMESSO).unwrap();
+            assert_eq!((v.modo, v.capacita), (atteso, Capacita::Exec));
+            assert_eq!(v.nonce, "AAECAwQFBgcICQoLDA0ODw");
+        }
+    }
+
+    #[test]
+    fn v2_non_exec_o_con_porte_e_v1_utente_rifiutati() {
+        for capacita in ["terminale", "file", "tunnel", "schermo", ""] {
+            assert_eq!(
+                prova(
+                    &v2(capacita, "amministratore", "[]", 0),
+                    CHIAVE_PROVA,
+                    PC,
+                    EMESSO
+                ),
+                Err(Rifiuto::Capacita),
+                "{capacita}"
+            );
+        }
+        for (porte, durata) in [("[22]", 0), ("[]", 60), ("[22]", 60)] {
+            assert_eq!(
+                prova(
+                    &v2("exec", "utente", porte, durata),
+                    CHIAVE_PROVA,
+                    PC,
+                    EMESSO
+                ),
+                Err(Rifiuto::PorteODurata)
+            );
+        }
+        // Senza porte e durata, o con un modo che non esiste.
+        let senza = firmato(
+            r#"{"v":2,"pc":"999000111","agente":"a","tecnico":"t","modo":"utente","capacita":"exec","emesso":1791000000,"scade":1791000060,"nonce":"n"}"#,
+        );
+        assert_eq!(
+            prova(&senza, CHIAVE_PROVA, PC, EMESSO),
+            Err(Rifiuto::PorteODurata)
+        );
+        assert_eq!(
+            prova(&v2("exec", "ospite", "[]", 0), CHIAVE_PROVA, PC, EMESSO),
+            Err(Rifiuto::VersioneOModo)
+        );
+        let v1_utente = firmato(
+            r#"{"v":1,"pc":"999000111","agente":"a","tecnico":"t","modo":"utente","emesso":1791000000,"scade":1791000060,"nonce":"n"}"#,
+        );
+        assert_eq!(
+            prova(&v1_utente, CHIAVE_PROVA, PC, EMESSO),
+            Err(Rifiuto::VersioneOModo)
+        );
+    }
+
+    #[test]
+    fn utente_mai_amministratore_ed_exec_mai_senza_clic() {
+        use crate::remotek::{non_presidiato::senza_clic, scelta_terminale};
+        let lasciapassare = |modo, capacita| {
+            Some(Valido {
+                agente: "a".into(),
+                tecnico: "t".into(),
+                nonce: "n".into(),
+                modo,
+                capacita,
+            })
+        };
+        let terminale = lasciapassare(Modo::Amministratore, Capacita::Terminale);
+        let exec_amm = lasciapassare(Modo::Amministratore, Capacita::Exec);
+        let exec_ut = lasciapassare(Modo::Utente, Capacita::Exec);
+        // Come in src/server/connection.rs: finestra, scelta, SYSTEM, senza clic.
+        let decisioni = |l: &Option<Valido>| {
+            (
+                scelta_terminale::richiesta(l.as_ref(), true, true).is_some(),
+                scelta_terminale::scelta(amministratore(l.as_ref()), true, true, false, "1"),
+                scelta_terminale::come_sistema(amministratore(l.as_ref()), true, true),
+                senza_clic(true, terminale_amministratore(l.as_ref()), true, true),
+            )
+        };
+        assert_eq!(decisioni(&terminale), (true, true, true, true));
+        assert_eq!(decisioni(&exec_amm), (true, true, true, false));
+        assert_eq!(decisioni(&exec_ut), (false, false, false, false));
+        assert_eq!(decisioni(&None), (false, false, false, false));
+        assert!(exec(exec_ut.as_ref()) && !exec(terminale.as_ref()));
+        // L'audit porta il nonce anche del lasciapassare da utente.
+        let mut a = json!({"type": 0});
+        audit(&mut a, exec_ut.as_ref(), true, "", false);
+        assert_eq!(a["lasciapassare"], json!("n"));
     }
 
     #[test]

@@ -2135,15 +2135,15 @@ C = "src/server/connection.rs"
 c = codice(C)
 riempi = re.findall(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
 installato = re.search(r"if crate::platform::is_installed\(\) \{(.*?)return self\.handle_installed_user\(\);", riempi[0], re.S) if len(riempi) == 1 else None
-if not installato or not re.fullmatch(r"\s*if crate::remotek::scelta_terminale::come_sistema\(\s*self\.lasciapassare\.is_some\(\),\s*true,\s*self\.amministratore_scelto,?\s*\)\s*\{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}\s*", installato.group(1)):
+if not installato or not re.fullmatch(r"\s*if crate::remotek::scelta_terminale::come_sistema\(\s*crate::remotek::lasciapassare::amministratore\(self\.lasciapassare\.as_ref\(\)\),\s*true,\s*self\.amministratore_scelto,?\s*\)\s*\{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}\s*", installato.group(1)):
     guai.append("%s: nel ramo installato di fill_terminal_user_token SelfUser (SYSTEM) non e' legato solo a scelta_terminale::come_sistema(lasciapassare, scelta)" % C)
 assegnazioni = [" ".join(a.split()) for a in re.findall(r"amministratore_scelto = ([^;]+);", c)]
 # Nell'inizializzazione della struttura, non la dichiarazione del campo.
 assegnazioni += [a for a in re.findall(r"^\s*amministratore_scelto: (\w+),$", c, re.M) if a != "bool"]
 falsi = [a for a in assegnazioni if a == "false"]
-scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*conn\.lasciapassare\.is_some\(\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),\s*conn\.authorized,", c)
+scelte = re.findall(r"ipc::Data::RemotekSceltaAmministratore => \{\s*conn\.amministratore_scelto = crate::remotek::scelta_terminale::scelta\(\s*crate::remotek::lasciapassare::amministratore\(conn\.lasciapassare\.as_ref\(\)\),\s*conn\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),\s*conn\.authorized,", c)
 # Caso 3: l'unico altro vero, solo dentro il ramo non presidiato del login.
-non_presidiati = re.findall(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.amministratore_scelto = true;", c)
+non_presidiati = re.findall(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*crate::remotek::lasciapassare::terminale_amministratore\(\s*self\.lasciapassare\.as_ref\(\),?\s*\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.amministratore_scelto = true;", c)
 if len(scelte) != 1 or len(non_presidiati) != 1 or len(assegnazioni) != len(falsi) + 2:
     guai.append("%s: amministratore_scelto diventa vero fuori da RemotekSceltaAmministratore (scelta_terminale::scelta con conn.authorized) e dal ramo non presidiato (assegnazioni: %s)" % (C, " | ".join(assegnazioni)))
 if not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*match lr\.union", c) or not re.search(r"self\.lasciapassare = None;\s*self\.amministratore_scelto = false;\s*#\[cfg\(not\(any\(target_os = \"android\", target_os = \"ios\"\)\)\)\]\s*self\.azzera_token_terminale\(\);\s*self\.from_switch = true;", c):
@@ -2288,7 +2288,7 @@ for radice, _, file in os.walk("flutter/lib"):
             guai.append("%s: la chiave remotek-agente compare nell'interfaccia" % p)
 C = "src/server/connection.rs"
 c = codice(C)
-rami = re.findall(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.amministratore_scelto = true;\s*if !self\.send_logon_response_and_keep_alive\(\)\.await \{\s*return false;\s*\}\s*if self\.authorized \{\s*if let Some\(v\) = self\.lasciapassare\.as_ref\(\) \{\s*crate::remotek::non_presidiato::registra\(&v\.agente, &v\.tecnico, &lr\.my_id\);\s*\}\s*\}\s*self\.try_start_cm\(lr\.my_id, lr\.my_name, self\.authorized\);\s*return true;\s*\}\s*if \(password::approve_mode\(\) == ApproveMode::Click", c)
+rami = re.findall(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*crate::remotek::lasciapassare::terminale_amministratore\(\s*self\.lasciapassare\.as_ref\(\),?\s*\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.amministratore_scelto = true;\s*if !self\.send_logon_response_and_keep_alive\(\)\.await \{\s*return false;\s*\}\s*if self\.authorized \{\s*if let Some\(v\) = self\.lasciapassare\.as_ref\(\) \{\s*crate::remotek::non_presidiato::registra\(&v\.agente, &v\.tecnico, &lr\.my_id\);\s*\}\s*\}\s*self\.try_start_cm\(lr\.my_id, lr\.my_name, self\.authorized\);\s*return true;\s*\}\s*if \(password::approve_mode\(\) == ApproveMode::Click", c)
 # senza_clic compare tre volte: il ramo del login, l'eccezione al rifiuto da
 # prelogin nel login, e il SelfUser del caso 3 in fill_terminal_user_token.
 if len(rami) != 1 or c.count("non_presidiato::senza_clic(") != 3:
@@ -2296,13 +2296,13 @@ if len(rami) != 1 or c.count("non_presidiato::senza_clic(") != 3:
 # ADR-0028, caso 3: i due rifiuti da is_prelogin non valgono per il caso 3, e
 # solo per quello. Nel login il rifiuto passa da rifiuta_prelogin con la stessa
 # senza_clic; se manca o dipende da altro, qui si ferma.
-if not re.search(r"if self\.terminal\s*&& lr\.os_login\.username\.trim\(\)\.is_empty\(\)\s*&& crate::remotek::non_presidiato::rifiuta_prelogin\(\s*crate::platform::is_prelogin\(\),\s*crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\),?\s*\)\s*\{", c):
+if not re.search(r"if self\.terminal\s*&& lr\.os_login\.username\.trim\(\)\.is_empty\(\)\s*&& crate::remotek::non_presidiato::rifiuta_prelogin\(\s*crate::platform::is_prelogin\(\),\s*crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*crate::remotek::lasciapassare::terminale_amministratore\(\s*self\.lasciapassare\.as_ref\(\),?\s*\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\),?\s*\)\s*\{", c):
     guai.append("%s: il rifiuto da prelogin nel login non passa da rifiuta_prelogin con senza_clic (deve saltare solo il caso 3)" % C)
 riempi = re.search(r"^    fn fill_terminal_user_token\(&mut self, username: &str, password: &str\) -> Option<&'static str> \{\n(.*?)^    \}$", c, re.M | re.S)
 corpo = riempi.group(1) if riempi else ""
 # Nel fill il SelfUser del caso 3 precede il rifiuto da prelogin, cosi' l'agente
 # parte anche senza nessuno alla console; il caso 2 resta sotto, invariato.
-caso3 = re.search(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*self\.lasciapassare\.is_some\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}", corpo)
+caso3 = re.search(r"if crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*crate::remotek::lasciapassare::terminale_amministratore\(\s*self\.lasciapassare\.as_ref\(\),?\s*\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\) \{\s*self\.terminal_user_token = Some\(TerminalUserToken::SelfUser\);\s*return None;\s*\}", corpo)
 prelogin = corpo.find("if crate::platform::is_prelogin()")
 if not caso3 or prelogin == -1 or caso3.start() >= prelogin:
     guai.append("%s: in fill_terminal_user_token il SelfUser del caso 3 (senza_clic) non precede il rifiuto da prelogin" % C)
@@ -2488,6 +2488,54 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_stampante"
+fi
+
+# --- 31. Il lasciapassare da utente non da' mai l'amministratore -----------
+# ADR-0033: il PC accetta anche il `v` = 2 exec, col modo `amministratore` o
+# `utente`. In src/server/connection.rs nessuna decisione torna a
+# `lasciapassare.is_some()`: la scelta del cliente e SYSTEM decidono con
+# `lasciapassare::amministratore`, il senza clic con
+# `lasciapassare::terminale_amministratore` (solo il terminale: exec senza clic
+# verra' col passo 7), la finestra del caso 2 con `scelta_terminale::richiesta`,
+# che controlla il modo; l'audit manda il nonce di ogni lasciapassare valido.
+esito_modo=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+C = "src/server/connection.rs"
+c = codice(C)
+if re.search(r"lasciapassare\s*\.\s*is_some\s*\(", c):
+    guai.append("%s: una decisione col lasciapassare usa di nuovo is_some(): il modo utente darebbe l'amministratore" % C)
+AMM = r"crate::remotek::lasciapassare::amministratore\((?:self|conn)\.lasciapassare\.as_ref\(\)\)"
+for nome, attese in (("scelta_terminale::scelta", 1), ("scelta_terminale::come_sistema", 2)):
+    chiamate = re.findall(r"%s\(\s*([^,]*)," % re.escape(nome), c)
+    buone = [a for a in chiamate if re.fullmatch(AMM, a.strip())]
+    if len(chiamate) != attese or len(buone) != attese:
+        guai.append("%s: %s non decide col modo amministratore (chiamate: %s)" % (C, nome, " | ".join(a.strip() for a in chiamate)))
+senza = re.findall(r"non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*(.*?),\s*self\.terminal,", c, re.S)
+if len(senza) != 3 or any(re.sub(r",\)", ")", re.sub(r"\s", "", a)) != "crate::remotek::lasciapassare::terminale_amministratore(self.lasciapassare.as_ref())" for a in senza):
+    guai.append("%s: senza_clic non vale solo per il terminale da amministratore (chiamate: %s)" % (C, " | ".join(" ".join(a.split()) for a in senza)))
+if not re.search(r"lasciapassare::audit\(\s*&mut audit,\s*self\.lasciapassare\.as_ref\(\),", c):
+    guai.append("%s: l'audit non manda piu' il nonce di ogni lasciapassare valido" % C)
+L = "src/remotek/lasciapassare.rs"
+l = codice(L)
+if not re.search(r"pub fn amministratore\(valido: Option<&Valido>\) -> bool \{\s*valido\.is_some_and\(\|v\| v\.modo == Modo::Amministratore\)\s*\}", l):
+    guai.append("%s: amministratore non guarda piu' solo il modo amministratore" % L)
+if not re.search(r"pub fn terminale_amministratore\(valido: Option<&Valido>\) -> bool \{\s*valido\.is_some_and\(\|v\| v\.modo == Modo::Amministratore && v\.capacita == Capacita::Terminale\)\s*\}", l):
+    guai.append("%s: terminale_amministratore non e' piu' solo il terminale da amministratore" % L)
+S = "src/remotek/scelta_terminale.rs"
+if not re.search(r"if !terminale \|\| !windows_installato \|\| !lasciapassare::amministratore\(valido\) \{\s*return None;", codice(S)):
+    guai.append("%s: la finestra del caso 2 non e' piu' solo per il lasciapassare da amministratore" % S)
+print("\n".join(guai))
+PY
+) || esito_modo="${esito_modo:-}"$'\n'"controllo del modo del lasciapassare non eseguito: python3 terminato con errore"
+if [ -z "$esito_modo" ]; then
+  ok "il lasciapassare da utente non apre la finestra del caso 2, SYSTEM ne' il senza clic; senza clic solo col terminale (ADR-0033)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_modo"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

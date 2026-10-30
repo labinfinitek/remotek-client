@@ -698,7 +698,7 @@ impl Connection {
                         }
                         ipc::Data::RemotekSceltaAmministratore => {
                             conn.amministratore_scelto = crate::remotek::scelta_terminale::scelta(
-                                conn.lasciapassare.is_some(),
+                                crate::remotek::lasciapassare::amministratore(conn.lasciapassare.as_ref()),
                                 conn.terminal,
                                 crate::remotek::scelta_terminale::windows_installato(),
                                 conn.authorized,
@@ -1723,7 +1723,7 @@ impl Connection {
             self.terminal,
             &self.lr.os_login.username,
             crate::remotek::scelta_terminale::come_sistema(
-                self.lasciapassare.is_some(),
+                crate::remotek::lasciapassare::amministratore(self.lasciapassare.as_ref()),
                 crate::remotek::scelta_terminale::windows_installato(),
                 self.amministratore_scelto,
             ),
@@ -2783,7 +2783,9 @@ impl Connection {
                     crate::platform::is_prelogin(),
                     crate::remotek::non_presidiato::senza_clic(
                         crate::remotek::non_presidiato::abilitato(),
-                        self.lasciapassare.is_some(),
+                        crate::remotek::lasciapassare::terminale_amministratore(
+                            self.lasciapassare.as_ref(),
+                        ),
                         self.terminal,
                         crate::remotek::scelta_terminale::windows_installato(),
                     ),
@@ -2868,7 +2870,9 @@ impl Connection {
             // senza clic e gira come SYSTEM; il CM lo mostra gia' autorizzato.
             if crate::remotek::non_presidiato::senza_clic(
                 crate::remotek::non_presidiato::abilitato(),
-                self.lasciapassare.is_some(),
+                crate::remotek::lasciapassare::terminale_amministratore(
+                    self.lasciapassare.as_ref(),
+                ),
                 self.terminal,
                 crate::remotek::scelta_terminale::windows_installato(),
             ) {
@@ -3936,7 +3940,7 @@ impl Connection {
         // login; il caso 2 qui sotto resta invariato.
         if crate::remotek::non_presidiato::senza_clic(
             crate::remotek::non_presidiato::abilitato(),
-            self.lasciapassare.is_some(),
+            crate::remotek::lasciapassare::terminale_amministratore(self.lasciapassare.as_ref()),
             self.terminal,
             crate::remotek::scelta_terminale::windows_installato(),
         ) {
@@ -3952,7 +3956,7 @@ impl Connection {
         if crate::platform::is_installed() {
             // Remotek (ADR-0028, caso 2): SYSTEM solo per la scelta del cliente col lasciapassare.
             if crate::remotek::scelta_terminale::come_sistema(
-                self.lasciapassare.is_some(),
+                crate::remotek::lasciapassare::amministratore(self.lasciapassare.as_ref()),
                 true,
                 self.amministratore_scelto,
             ) {

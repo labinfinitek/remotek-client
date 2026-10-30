@@ -24,6 +24,15 @@ pub const RIFIUTO: &str =
 /// amministratore.
 pub const RIFIUTO_PORTATILE: &str = "Terminale rifiutato: il client non installato gira con i permessi di amministratore. Installa il client, o aprilo da un utente senza permessi di amministratore.";
 
+/// Il rifiuto prima della finestra quando il client non installato gira come
+/// amministratore e l'agente non ha il lasciapassare da amministratore
+/// (src/remotek/scelta_terminale.rs, `rifiuto`).
+pub const RIFIUTO_SOLO_AMMINISTRATORE: &str = "Terminale solo come amministratore: il client non installato gira con i permessi di amministratore.";
+
+/// Il rifiuto prima della finestra quando il client non installato non gira
+/// come amministratore e l'agente ha il lasciapassare da amministratore.
+pub const RIFIUTO_NIENTE_AMMINISTRATORE: &str = "Amministratore non disponibile: il client non installato gira senza i permessi di amministratore.";
+
 // winnt.h. Nel crate `windows` stanno in Win32_System_SystemServices, una
 // feature che il client non abilita.
 #[cfg(any(target_os = "windows", test))]

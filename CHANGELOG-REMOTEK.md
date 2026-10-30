@@ -20,6 +20,20 @@ rilasciate non si riscrivono.
   l'agente chiede di eseguire comandi come amministratore. Gli altri
   lasciapassare `v` = 2 (terminale, file, tunnel, schermo) valgono come
   nessun lasciapassare.
+- **Per l'agente AI**: sul PC Windows dove Remotek non e' installato e gira
+  come amministratore (l'Administrator predefinito, o UAC spento) l'agente
+  entra, terminale o exec, col lasciapassare da amministratore e il consenso
+  del cliente: la finestra ha due scelte, "Accetta come amministratore" e
+  "Rifiuta", e dice che su quel PC l'agente puo' entrare solo cosi'
+  (ADR-0028).
+
+### Corretto
+- Su quel PC il terminale senza lasciapassare da amministratore si rifiutava
+  solo dopo che il cliente aveva accettato nella finestra, dicendo di
+  installare il client: ora si rifiuta subito, senza finestra.
+- Dove Remotek non e' installato e gira senza permessi di amministratore, chi
+  chiedeva l'amministratore riceveva la shell da utente: ora il collegamento
+  si rifiuta subito, senza finestra.
 
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

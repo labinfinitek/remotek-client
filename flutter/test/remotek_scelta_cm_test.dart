@@ -55,6 +55,33 @@ void main() {
     expect(eventi, ['rifiuta']);
   });
 
+  testWidgets('sul portatile elevato due scelte, senza accetta come utente',
+      (tester) async {
+    final due = Map<String, dynamic>.from(json)..['accetta_utente'] = null;
+    expect(RemotekScelta.daJson(due)!.accettaUtente, isNull);
+    expect(RemotekScelta.daJson(Map.of(due)..['accetta_utente'] = 1), isNull);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: remotekSceltaCm(
+          scelta: RemotekScelta.daJson(due)!,
+          pulsante: (
+                  {required color,
+                  required onClick,
+                  required text,
+                  required textColor,
+                  border}) =>
+              TextButton(onPressed: onClick, child: Text(text)),
+          coloreAccetta: Colors.blue,
+          sceltaAmministratore: () async {},
+          accetta: () {},
+          rifiuta: () {},
+        ),
+      ),
+    ));
+    expect(find.byType(TextButton), findsNWidgets(2));
+    expect(find.text('Accetta come utente'), findsNothing);
+  });
+
   testWidgets('l\'accettazione parte solo dopo la scelta di amministratore',
       (tester) async {
     final eventi = <String>[];

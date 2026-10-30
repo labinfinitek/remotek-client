@@ -18,9 +18,15 @@
 //!
 //! I testi della finestra stanno qui, in italiano e in inglese (ADR-0011), e
 //! si scelgono con la lingua che usa `translate` (src/lang.rs).
+//!
+//! Sul client non installato la shell ha il token del processo ([`Pc`]):
+//! se gira elevato l'agente entra solo da amministratore, e la finestra ha
+//! due scelte; se no solo da utente. L'altro caso si rifiuta prima della
+//! finestra ([`rifiuto`]).
 
 use super::lasciapassare::{self, Valido};
-use hbb_common::log;
+use super::token_terminale;
+use hbb_common::{log, ResultType};
 use serde_derive::{Deserialize, Serialize};
 
 /// Chi chiede l'amministratore, dal lasciapassare verificato (mai `my_name`).
@@ -31,27 +37,93 @@ pub struct Richiesta {
     /// Il lasciapassare e' di exec: si eseguono comandi, non un terminale.
     #[serde(default)]
     pub exec: bool,
+    /// Client non installato ed elevato: niente "accetta come utente".
+    #[serde(default)]
+    pub solo_amministratore: bool,
+}
+
+/// Il PC, per la shell senza `os_login` (ADR-0028, regola 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pc {
+    /// Windows con il client installato: da amministratore la shell gira
+    /// come SYSTEM, da utente col token abbassato.
+    Installato,
+    /// Windows, client non installato che gira elevato (o non si sa): la
+    /// shell ha il token del processo, solo da amministratore.
+    PortatileElevato,
+    /// Windows, client non installato e non elevato: solo da utente.
+    PortatileNonElevato,
+    /// Fuori da Windows: niente finestra del caso 2 e niente rifiuti.
+    Altro,
+}
+
+impl Pc {
+    /// Qui la shell da amministratore si puo' dare.
+    pub fn amministratore(self) -> bool {
+        matches!(self, Pc::Installato | Pc::PortatileElevato)
+    }
+}
+
+/// Il PC da sistema, installazione e, solo per il portatile, elevazione del
+/// processo; un errore nella lettura vale come elevato
+/// (`token_terminale::portatile`).
+pub fn pc_da(windows: bool, installato: bool, elevato: impl FnOnce() -> ResultType<bool>) -> Pc {
+    if !windows {
+        Pc::Altro
+    } else if installato {
+        Pc::Installato
+    } else if token_terminale::portatile(elevato()).is_err() {
+        Pc::PortatileElevato
+    } else {
+        Pc::PortatileNonElevato
+    }
+}
+
+/// Il PC su cui gira questo processo.
+pub fn pc() -> Pc {
+    #[cfg(target_os = "windows")]
+    return pc_da(true, crate::platform::is_installed(), || {
+        crate::platform::is_elevated(None)
+    });
+    #[cfg(not(target_os = "windows"))]
+    pc_da(false, false, || Ok(false))
 }
 
 /// La richiesta da mostrare al cliente: solo con un lasciapassare valido da
-/// amministratore, per un terminale, su un PC Windows con il client installato.
-pub fn richiesta(
-    valido: Option<&Valido>,
-    terminale: bool,
-    windows_installato: bool,
-) -> Option<Richiesta> {
-    if !terminale || !windows_installato || !lasciapassare::amministratore(valido) {
+/// amministratore, per un terminale, su un PC che puo' dare l'amministratore.
+pub fn richiesta(valido: Option<&Valido>, terminale: bool, pc: Pc) -> Option<Richiesta> {
+    if !terminale || !pc.amministratore() || !lasciapassare::amministratore(valido) {
         return None;
     }
     valido.map(|v| Richiesta {
         agente: v.agente.clone(),
         tecnico: v.tecnico.clone(),
         exec: lasciapassare::exec(Some(v)),
+        solo_amministratore: pc == Pc::PortatileElevato,
     })
 }
 
-/// Windows con il client installato: l'unico caso in cui il lasciapassare
-/// offre l'amministratore.
+/// Il rifiuto del login prima della finestra, per la shell senza `os_login`
+/// sul client non installato: elevato vuole il lasciapassare da
+/// amministratore, non elevato non lo puo' onorare.
+pub fn rifiuto(
+    lasciapassare_amministratore: bool,
+    terminale: bool,
+    os_username: &str,
+    pc: Pc,
+) -> Option<&'static str> {
+    if !terminale || !os_username.trim().is_empty() {
+        return None;
+    }
+    match (pc, lasciapassare_amministratore) {
+        (Pc::PortatileElevato, false) => Some(token_terminale::RIFIUTO_SOLO_AMMINISTRATORE),
+        (Pc::PortatileNonElevato, true) => Some(token_terminale::RIFIUTO_NIENTE_AMMINISTRATORE),
+        _ => None,
+    }
+}
+
+/// Windows con il client installato: il caso 3 senza clic e il prelogin. Il
+/// lasciapassare offre l'amministratore anche sul portatile elevato ([`Pc`]).
 pub fn windows_installato() -> bool {
     #[cfg(target_os = "windows")]
     return crate::platform::is_installed();
@@ -61,14 +133,14 @@ pub fn windows_installato() -> bool {
 
 /// Il servizio riceve "accetta come amministratore": vale solo con un
 /// lasciapassare valido da amministratore (`lasciapassare::amministratore`),
-/// per un terminale, su un PC Windows installato.
+/// per un terminale, su un PC che puo' dare l'amministratore.
 /// Altrimenti (un client modificato, una finestra vecchia) e' "accetta come
 /// utente", con una riga di warn. Dopo l'autorizzazione la scelta si ignora
 /// (warn): il token e l'audit sono gia' fissati.
 pub fn scelta(
     lasciapassare_valido: bool,
     terminale: bool,
-    windows_installato: bool,
+    pc: Pc,
     gia_autorizzata: bool,
     controllante: &str,
 ) -> bool {
@@ -79,25 +151,27 @@ pub fn scelta(
         );
         return false;
     }
-    let ammessa = lasciapassare_valido && terminale && windows_installato;
+    let ammessa = lasciapassare_valido && terminale && pc.amministratore();
     if !ammessa {
         log::warn!(
-            "scelta di amministratore senza lasciapassare valido, terminale o PC installato: vale come utente (controllante {})",
+            "scelta di amministratore senza lasciapassare valido, terminale o PC che la dia: vale come utente (controllante {})",
             controllante
         );
     }
     ammessa
 }
 
-/// Il terminale senza `os_login` gira come SYSTEM solo per la scelta esplicita
-/// del cliente, gia' passata da [`scelta`], e con il lasciapassare da
-/// amministratore ancora valido su un PC installato; altrimenti col token dell'utente abbassato.
-pub fn come_sistema(
+/// Il terminale senza `os_login` gira da amministratore (SYSTEM sul PC
+/// installato, il token del processo sul portatile elevato) solo per la
+/// scelta esplicita del cliente, gia' passata da [`scelta`], e con il
+/// lasciapassare da amministratore ancora valido; altrimenti col token
+/// dell'utente abbassato, o si rifiuta.
+pub fn come_amministratore(
     lasciapassare_valido: bool,
-    installato: bool,
+    pc: Pc,
     scelta_amministratore: bool,
 ) -> bool {
-    lasciapassare_valido && installato && scelta_amministratore
+    lasciapassare_valido && pc.amministratore() && scelta_amministratore
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,12 +214,13 @@ pub struct Finestra {
     pub tecnico: String,
     pub testo: String,
     pub accetta_amministratore: String,
-    pub accetta_utente: String,
+    /// `None` sul portatile elevato: la finestra ha due scelte.
+    pub accetta_utente: Option<String>,
     pub rifiuta: String,
 }
 
 pub fn finestra(richiesta: Richiesta, lingua: Lingua) -> Finestra {
-    let (testo, amministratore, utente, rifiuta) = match lingua {
+    let (mut testo, amministratore, utente, rifiuta) = match lingua {
         Lingua::Italiano if richiesta.exec => (
             format!(
                 "{}, agente AI di {}, chiede di eseguire comandi come amministratore",
@@ -183,12 +258,24 @@ pub fn finestra(richiesta: Richiesta, lingua: Lingua) -> Finestra {
             "Decline",
         ),
     };
+    if richiesta.solo_amministratore {
+        // Il marchio da APP_NAME (REGOLE 10.3), mai scritto qui.
+        let app = crate::get_app_name();
+        testo.push_str(&match lingua {
+            Lingua::Italiano => format!(
+                ". Su questo PC {app} gira come amministratore: l'agente puo' entrare solo cosi'."
+            ),
+            Lingua::Inglese => format!(
+                ". {app} runs as administrator on this PC: the agent can only connect this way."
+            ),
+        });
+    }
     Finestra {
         agente: richiesta.agente,
         tecnico: richiesta.tecnico,
         testo,
         accetta_amministratore: amministratore.to_owned(),
-        accetta_utente: utente.to_owned(),
+        accetta_utente: (!richiesta.solo_amministratore).then(|| utente.to_owned()),
         rifiuta: rifiuta.to_owned(),
     }
 }
@@ -219,8 +306,13 @@ mod tests {
     #[test]
     fn exec_da_utente_nessuna_finestra_exec_da_amministratore_comandi() {
         let utente = exec(lasciapassare::Modo::Utente);
-        assert_eq!(richiesta(Some(&utente), true, true), None);
-        let r = richiesta(Some(&exec(lasciapassare::Modo::Amministratore)), true, true).unwrap();
+        assert_eq!(richiesta(Some(&utente), true, Pc::Installato), None);
+        let r = richiesta(
+            Some(&exec(lasciapassare::Modo::Amministratore)),
+            true,
+            Pc::Installato,
+        )
+        .unwrap();
         assert!(r.exec);
         let it = finestra(r.clone(), Lingua::Italiano);
         assert_eq!(
@@ -235,6 +327,7 @@ mod tests {
         let vecchia: Richiesta =
             serde_json::from_value(json!({"agente": "a", "tecnico": "t"})).unwrap();
         assert!(!vecchia.exec);
+        assert!(!vecchia.solo_amministratore);
     }
 
     #[test]
@@ -243,35 +336,136 @@ mod tests {
             agente: "agente-mario".into(),
             tecnico: "mario".into(),
             exec: false,
+            solo_amministratore: false,
         };
-        assert_eq!(richiesta(Some(&valido()), true, true), Some(r));
-        assert_eq!(richiesta(None, true, true), None);
-        assert_eq!(richiesta(Some(&valido()), false, true), None);
-        // Fuori da Windows, o col client non installato: la finestra di oggi.
-        assert_eq!(richiesta(Some(&valido()), true, false), None);
+        assert_eq!(richiesta(Some(&valido()), true, Pc::Installato), Some(r));
+        assert_eq!(richiesta(None, true, Pc::Installato), None);
+        assert_eq!(richiesta(Some(&valido()), false, Pc::Installato), None);
+        // Fuori da Windows, o col client non installato non elevato: la finestra di oggi.
+        assert_eq!(richiesta(Some(&valido()), true, Pc::Altro), None);
+        assert_eq!(
+            richiesta(Some(&valido()), true, Pc::PortatileNonElevato),
+            None
+        );
+    }
+
+    #[test]
+    fn il_pc_dal_sistema_installazione_ed_elevazione() {
+        fn mai() -> ResultType<bool> {
+            panic!("l'elevazione serve solo al portatile su Windows")
+        }
+        assert_eq!(pc_da(false, false, mai), Pc::Altro);
+        assert_eq!(pc_da(true, true, mai), Pc::Installato);
+        assert_eq!(pc_da(true, false, || Ok(true)), Pc::PortatileElevato);
+        assert_eq!(pc_da(true, false, || Ok(false)), Pc::PortatileNonElevato);
+        // Un errore nella lettura vale come elevato.
+        assert_eq!(
+            pc_da(true, false, || Err(hbb_common::anyhow::anyhow!("token"))),
+            Pc::PortatileElevato
+        );
+    }
+
+    // La tabella del compito 61, una casella per test: (PC, lasciapassare da
+    // amministratore) -> rifiuto prima della finestra, finestra, shell.
+    #[test]
+    fn installato_senza_lasciapassare_da_amministratore_come_oggi() {
+        assert_eq!(rifiuto(false, true, "", Pc::Installato), None);
+        assert_eq!(richiesta(None, true, Pc::Installato), None);
+        assert!(!come_amministratore(false, Pc::Installato, true));
+    }
+
+    #[test]
+    fn installato_col_lasciapassare_da_amministratore_tre_scelte() {
+        assert_eq!(rifiuto(true, true, "", Pc::Installato), None);
+        let r = richiesta(Some(&valido()), true, Pc::Installato).unwrap();
+        assert!(!r.solo_amministratore);
+        assert!(finestra(r, Lingua::Italiano).accetta_utente.is_some());
+        assert!(come_amministratore(true, Pc::Installato, true));
+        assert!(!come_amministratore(true, Pc::Installato, false));
+    }
+
+    #[test]
+    fn portatile_elevato_senza_lasciapassare_da_amministratore_rifiuto() {
+        assert_eq!(
+            rifiuto(false, true, "", Pc::PortatileElevato),
+            Some(token_terminale::RIFIUTO_SOLO_AMMINISTRATORE)
+        );
+        assert_eq!(
+            rifiuto(false, true, " ", Pc::PortatileElevato),
+            Some(token_terminale::RIFIUTO_SOLO_AMMINISTRATORE)
+        );
+        assert!(!come_amministratore(false, Pc::PortatileElevato, true));
+    }
+
+    #[test]
+    fn portatile_elevato_col_lasciapassare_da_amministratore_due_scelte() {
+        assert_eq!(rifiuto(true, true, "", Pc::PortatileElevato), None);
+        let r = richiesta(Some(&valido()), true, Pc::PortatileElevato).unwrap();
+        assert!(r.solo_amministratore);
+        let f = finestra(r.clone(), Lingua::Italiano);
+        assert_eq!(f.accetta_utente, None);
+        assert_eq!(
+            f.testo,
+            "agente-mario, agente AI di mario, chiede i permessi di amministratore. Su questo PC Remotek gira come amministratore: l'agente puo' entrare solo cosi'."
+        );
+        assert_eq!(
+            finestra(r, Lingua::Inglese).testo,
+            "agente-mario, AI agent of mario, asks for administrator permissions. Remotek runs as administrator on this PC: the agent can only connect this way."
+        );
+        let e = richiesta(
+            Some(&exec(lasciapassare::Modo::Amministratore)),
+            true,
+            Pc::PortatileElevato,
+        )
+        .unwrap();
+        assert_eq!(
+            finestra(e, Lingua::Italiano).testo,
+            "agente-mario, agente AI di mario, chiede di eseguire comandi come amministratore. Su questo PC Remotek gira come amministratore: l'agente puo' entrare solo cosi'."
+        );
+        assert!(scelta(true, true, Pc::PortatileElevato, false, "1"));
+        assert!(come_amministratore(true, Pc::PortatileElevato, true));
+        // Senza la scelta (una finestra vecchia) resta il rifiuto del portatile.
+        assert!(!come_amministratore(true, Pc::PortatileElevato, false));
+    }
+
+    #[test]
+    fn portatile_non_elevato_senza_lasciapassare_da_amministratore_come_oggi() {
+        assert_eq!(rifiuto(false, true, "", Pc::PortatileNonElevato), None);
+        assert_eq!(richiesta(None, true, Pc::PortatileNonElevato), None);
+    }
+
+    #[test]
+    fn portatile_non_elevato_col_lasciapassare_da_amministratore_rifiuto() {
+        assert_eq!(
+            rifiuto(true, true, "", Pc::PortatileNonElevato),
+            Some(token_terminale::RIFIUTO_NIENTE_AMMINISTRATORE)
+        );
+        assert!(!scelta(true, true, Pc::PortatileNonElevato, false, "1"));
+        assert!(!come_amministratore(true, Pc::PortatileNonElevato, true));
+    }
+
+    #[test]
+    fn i_rifiuti_non_toccano_os_login_le_altre_connessioni_e_gli_altri_sistemi() {
+        for pc in [Pc::PortatileElevato, Pc::PortatileNonElevato] {
+            for amministratore in [false, true] {
+                assert_eq!(rifiuto(amministratore, true, "mario", pc), None);
+                assert_eq!(rifiuto(amministratore, false, "", pc), None);
+            }
+        }
+        for amministratore in [false, true] {
+            assert_eq!(rifiuto(amministratore, true, "", Pc::Altro), None);
+        }
+        assert!(!come_amministratore(true, Pc::Altro, true));
     }
 
     #[test]
     fn la_scelta_senza_lasciapassare_vale_come_utente() {
-        assert!(scelta(true, true, true, false, "1"));
-        assert!(!scelta(false, true, true, false, "1"));
-        assert!(!scelta(true, false, true, false, "1"));
-        assert!(!scelta(true, true, false, false, "1"));
+        assert!(scelta(true, true, Pc::Installato, false, "1"));
+        assert!(!scelta(false, true, Pc::Installato, false, "1"));
+        assert!(!scelta(true, false, Pc::Installato, false, "1"));
+        assert!(!scelta(true, true, Pc::Altro, false, "1"));
         // Dopo l'autorizzazione la scelta non conta piu'.
-        assert!(!scelta(true, true, true, true, "1"));
-    }
-
-    #[test]
-    fn system_solo_con_lasciapassare_pc_installato_e_scelta_esplicita() {
-        assert!(come_sistema(true, true, true));
-        for (v, i, s) in [
-            (false, true, true),
-            (true, false, true),
-            (true, true, false),
-            (false, false, false),
-        ] {
-            assert!(!come_sistema(v, i, s), "{v} {i} {s}");
-        }
+        assert!(!scelta(true, true, Pc::Installato, true, "1"));
     }
 
     #[test]
@@ -291,6 +485,7 @@ mod tests {
             agente: "agente-mario".into(),
             tecnico: "mario".into(),
             exec: false,
+            solo_amministratore: false,
         };
         assert_eq!(
             serde_json::to_value(finestra(r.clone(), Lingua::Italiano)).unwrap(),
@@ -311,10 +506,10 @@ mod tests {
         assert_eq!(
             (
                 en.accetta_amministratore.as_str(),
-                en.accetta_utente.as_str(),
+                en.accetta_utente.as_deref(),
                 en.rifiuta.as_str()
             ),
-            ("Accept as administrator", "Accept as user", "Decline")
+            ("Accept as administrator", Some("Accept as user"), "Decline")
         );
     }
 }

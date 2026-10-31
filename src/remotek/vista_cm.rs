@@ -8,6 +8,8 @@
 //! Va al CM solo l'output della shell, non quello che digita chi controlla:
 //! quello che la shell fa vedere lo vede anche il cliente, una password
 //! digitata senza eco no.
+//! Con exec va al CM anche lo script (`trascrizione::ingresso`): la shell
+//! non lo ripete a schermo, e il cliente deve vedere i comandi.
 
 use crate::ipc::Data;
 use hbb_common::tokio::{

@@ -3912,6 +3912,7 @@ impl Connection {
                             &self.tx_post_seq,
                             &self.tx_to_cm,
                             &action,
+                            crate::remotek::lasciapassare::exec(self.lasciapassare.as_ref()),
                         );
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]

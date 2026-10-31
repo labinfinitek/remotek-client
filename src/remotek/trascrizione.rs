@@ -384,6 +384,17 @@ impl Trascrizione {
         self.registra(blocchi);
     }
 
+    /// Lo script di exec: entra come il terminale e va anche al CM, perche'
+    /// la shell non lo ripete a schermo (ADR-0021, regola 6: il cliente vede
+    /// i comandi). Nel terminale invece l'eco della shell basta, e quello che
+    /// non ha eco (una password) non si mostra.
+    fn script(&mut self, terminal_id: i32, dati: &[u8]) {
+        if let Some(v) = self.vista.as_ref() {
+            v.uscita(terminal_id, dati);
+        }
+        self.dati(Dir::In, terminal_id, dati);
+    }
+
     /// Da chiamare ogni secondo: manda il blocco in attesa da almeno 1 s.
     pub fn tick(&mut self) {
         let b = self.accumulo.scadenza(Instant::now());
@@ -405,13 +416,14 @@ impl Drop for Trascrizione {
 /// Un `TerminalAction` arrivato da chi controlla: apre la trascrizione della
 /// connessione alla prima azione e registra i byte delle azioni Data cosi'
 /// come arrivano. L'output va anche al connection manager (`tx_cm`), che lo
-/// mostra al cliente.
+/// mostra al cliente; con `exec` (`lasciapassare::exec`) anche lo script.
 pub fn ingresso(
     t: &mut Option<Trascrizione>,
     conn_id: i32,
     tx: &UnboundedSender<(String, Value)>,
     tx_cm: &UnboundedSender<crate::ipc::Data>,
     azione: &TerminalAction,
+    exec: bool,
 ) {
     let t = t.get_or_insert_with(|| {
         let url = crate::get_audit_server(
@@ -433,7 +445,11 @@ pub fn ingresso(
         Trascrizione::nuova(conn_id, url, tx, cartella(), vista)
     });
     if let Some(terminal_action::Union::Data(d)) = &azione.union {
-        t.dati(Dir::In, d.terminal_id, &d.data);
+        if exec {
+            t.script(d.terminal_id, &d.data);
+        } else {
+            t.dati(Dir::In, d.terminal_id, &d.data);
+        }
     }
 }
 
@@ -572,7 +588,7 @@ mod tests {
             ..Default::default()
         });
         let (tx_cm, _rx_cm) = mpsc::unbounded_channel();
-        ingresso(&mut t, 7, &tx, &tx_cm, &azione);
+        ingresso(&mut t, 7, &tx, &tx_cm, &azione, false);
         let mut risposta = TerminalResponse::new();
         risposta.set_data(TerminalData {
             terminal_id: 1,
@@ -613,7 +629,7 @@ mod tests {
         let mut t = Some(Trascrizione::nuova(7, String::new(), &tx, Some(c.clone()), None));
         let mut e = Esecuzione::nuova(false);
         for azione in [apri(1), manda(1, b"echo o; echo e >&2\n"), manda(1, b"")] {
-            ingresso(&mut t, 7, &tx, &tx_cm, &azione);
+            ingresso(&mut t, 7, &tx, &tx_cm, &azione, true);
             e.azione(&azione);
         }
         let inizio = Instant::now();
@@ -650,6 +666,23 @@ mod tests {
             uscita(t, &msg);
         }
         chiuso
+    }
+
+    #[tokio::test]
+    async fn lo_script_di_exec_va_al_cm() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+        let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm);
+        let mut t = Trascrizione::nuova(7, String::new(), &tx, None, Some(vista));
+        t.script(1, b"Get-Date\n");
+        drop(t);
+        let mut testi = Vec::new();
+        while let Some(crate::ipc::Data::FileTransferLog((_, testo))) = rx_cm.recv().await {
+            testi.push(testo);
+        }
+        assert_eq!(testi.len(), 1);
+        let v: Value = serde_json::from_str(&testi[0]).expect("json");
+        assert_eq!(v["data"], crate::encode64(b"Get-Date\n"));
     }
 
     #[tokio::test]

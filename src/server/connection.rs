@@ -700,7 +700,7 @@ impl Connection {
                             conn.amministratore_scelto = crate::remotek::scelta_terminale::scelta(
                                 crate::remotek::lasciapassare::amministratore(conn.lasciapassare.as_ref()),
                                 conn.terminal,
-                                crate::remotek::scelta_terminale::windows_installato(),
+                                crate::remotek::scelta_terminale::pc(),
                                 conn.authorized,
                                 &conn.lr.my_id,
                             );
@@ -1722,9 +1722,9 @@ impl Connection {
             self.lasciapassare.as_ref(),
             self.terminal,
             &self.lr.os_login.username,
-            crate::remotek::scelta_terminale::come_sistema(
+            crate::remotek::scelta_terminale::come_amministratore(
                 crate::remotek::lasciapassare::amministratore(self.lasciapassare.as_ref()),
-                crate::remotek::scelta_terminale::windows_installato(),
+                crate::remotek::scelta_terminale::pc(),
                 self.amministratore_scelto,
             ),
         );
@@ -2157,7 +2157,7 @@ impl Connection {
             remotek_amministratore: crate::remotek::scelta_terminale::richiesta(
                 self.lasciapassare.as_ref(),
                 self.terminal,
-                crate::remotek::scelta_terminale::windows_installato(),
+                crate::remotek::scelta_terminale::pc(),
             ),
         });
     }
@@ -2795,6 +2795,20 @@ impl Connection {
                     "No active console user logged on, please connect and logon first.",
                 )
                 .await;
+                sleep(1.).await;
+                return false;
+            }
+
+            // Remotek (ADR-0028, regola 1): sul client non installato l'agente
+            // entra solo nel modo che il processo puo' dare; l'altro si rifiuta
+            // qui, prima della finestra del cliente.
+            if let Some(rifiuto) = crate::remotek::scelta_terminale::rifiuto(
+                crate::remotek::lasciapassare::amministratore(self.lasciapassare.as_ref()),
+                self.terminal,
+                &lr.os_login.username,
+                crate::remotek::scelta_terminale::pc(),
+            ) {
+                self.send_login_error(rifiuto).await;
                 sleep(1.).await;
                 return false;
             }
@@ -3955,9 +3969,9 @@ impl Connection {
 
         if crate::platform::is_installed() {
             // Remotek (ADR-0028, caso 2): SYSTEM solo per la scelta del cliente col lasciapassare.
-            if crate::remotek::scelta_terminale::come_sistema(
+            if crate::remotek::scelta_terminale::come_amministratore(
                 crate::remotek::lasciapassare::amministratore(self.lasciapassare.as_ref()),
-                true,
+                crate::remotek::scelta_terminale::Pc::Installato,
                 self.amministratore_scelto,
             ) {
                 self.terminal_user_token = Some(TerminalUserToken::SelfUser);
@@ -3966,10 +3980,19 @@ impl Connection {
             return self.handle_installed_user();
         }
 
-        // Remotek (ADR-0028): il client portatile elevato non da' una shell da amministratore.
+        // Remotek (ADR-0028): il client portatile elevato da' la shell da
+        // amministratore solo per la scelta del cliente col lasciapassare.
         if let Err(e) =
             crate::remotek::token_terminale::portatile(crate::platform::is_elevated(None))
         {
+            if crate::remotek::scelta_terminale::come_amministratore(
+                crate::remotek::lasciapassare::amministratore(self.lasciapassare.as_ref()),
+                crate::remotek::scelta_terminale::Pc::PortatileElevato,
+                self.amministratore_scelto,
+            ) {
+                self.terminal_user_token = Some(TerminalUserToken::SelfUser);
+                return None;
+            }
             log::error!("terminale rifiutato: {}", e);
             return Some(crate::remotek::token_terminale::RIFIUTO_PORTATILE);
         }

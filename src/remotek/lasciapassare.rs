@@ -361,8 +361,10 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
 /// I due campi facoltativi dell'audit della connessione (README dell'API,
 /// "Collegamento alla connessione"): `lasciapassare`, il nonce del
 /// lasciapassare valido; per il terminale `amministratore`, se la shell gira
-/// con i permessi di amministratore. `sistema`: SYSTEM per la scelta del
-/// cliente col lasciapassare (src/remotek/scelta_terminale.rs, `come_sistema`).
+/// con i permessi di amministratore. `sistema`: la shell da amministratore per
+/// la scelta del cliente col lasciapassare, SYSTEM sul PC installato e il
+/// token del processo sul portatile elevato (src/remotek/scelta_terminale.rs,
+/// `come_amministratore`).
 pub fn audit(
     audit: &mut Value,
     valido: Option<&Valido>,
@@ -622,9 +624,20 @@ mod tests {
         // Come in src/server/connection.rs: finestra, scelta, SYSTEM, senza clic.
         let decisioni = |l: &Option<Valido>| {
             (
-                scelta_terminale::richiesta(l.as_ref(), true, true).is_some(),
-                scelta_terminale::scelta(amministratore(l.as_ref()), true, true, false, "1"),
-                scelta_terminale::come_sistema(amministratore(l.as_ref()), true, true),
+                scelta_terminale::richiesta(l.as_ref(), true, scelta_terminale::Pc::Installato)
+                    .is_some(),
+                scelta_terminale::scelta(
+                    amministratore(l.as_ref()),
+                    true,
+                    scelta_terminale::Pc::Installato,
+                    false,
+                    "1",
+                ),
+                scelta_terminale::come_amministratore(
+                    amministratore(l.as_ref()),
+                    scelta_terminale::Pc::Installato,
+                    true,
+                ),
                 senza_clic(true, terminale_amministratore(l.as_ref()), true, true),
             )
         };

@@ -35,6 +35,10 @@ rilasciate non si riscrivono.
   separati (ADR-0033). Consenso, lasciapassare, trascrizione e utente sono
   quelli del terminale; alla chiusura muoiono anche i processi lanciati dallo
   script.
+- **Per l'agente AI**: con exec il cliente vede nel connection manager anche
+  lo script, intero e prima del suo output, fra una riga d'inizio e una di
+  fine: exec non ha l'eco della shell che col terminale mostra i comandi
+  (ADR-0021, regola 6). Col terminale non cambia niente.
 
 ### Corretto
 - Su quel PC il terminale senza lasciapassare da amministratore si rifiutava

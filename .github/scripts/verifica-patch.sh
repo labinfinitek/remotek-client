@@ -17,7 +17,7 @@
 # firmate con la sua chiave; il dialogo del server bloccato senza l'import;
 # il terminale da utente col token abbassato; il lasciapassare dell'agente;
 # il login del terminale senza le credenziali di Windows; la stampante remota
-# spenta.
+# spenta; exec senza pseudo-console coi figli nel Job.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -2561,6 +2561,42 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_modo"
+fi
+
+# --- 32. Exec senza pseudo-console, coi figli nel Job ---------------------
+# ADR-0033 passo 2: col lasciapassare di exec l'OpenTerminal non apre la
+# ConPTY: in src/server/terminal_service.rs `handle_action` passa la sessione
+# di exec a src/remotek/exec.rs prima di ogni ramo del terminale, e cosi'
+# `read_outputs`. Su Windows lo script e i suoi figli stanno in un Job object
+# con KILL_ON_JOB_CLOSE; exec non avvia processi con un token ne' sospesi:
+# l'identita' resta quella del servizio o dell'helper di upstream.
+esito_exec=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+E = "src/remotek/exec.rs"
+e = codice(E)
+if "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" not in e:
+    guai.append("%s: manca JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (i figli dello script sopravviverebbero alla chiusura)" % E)
+for vietato in ("CREATE_SUSPENDED", "CreateProcessAsUser", "DuplicateToken", "portable_pty", "CreatePseudoConsole"):
+    if vietato in e:
+        guai.append("%s: c'e' %s (exec non avvia processi con token, sospesi o con una pseudo-console)" % (E, vietato))
+T = "src/server/terminal_service.rs"
+t = codice(T)
+if not re.search(r"if let Some\(e\) = service\.lock\(\)\.unwrap\(\)\.exec\.as_mut\(\) \{\s*return Ok\(e\.azione\(action\)\);\s*\}\s*match &action\.union \{", t):
+    guai.append("%s: handle_action non passa la sessione di exec a exec.rs prima dei rami del terminale (aprirebbe la ConPTY)" % T)
+if not re.search(r"if let Some\(e\) = service\.lock\(\)\.unwrap\(\)\.exec\.as_mut\(\) \{\s*return e\.leggi\(\);\s*\}", t):
+    guai.append("%s: read_outputs non legge la sessione di exec da exec.rs" % T)
+print("\n".join(guai))
+PY
+) || esito_exec="${esito_exec:-}"$'\n'"controllo di exec non eseguito: python3 terminato con errore"
+if [ -z "$esito_exec" ]; then
+  ok "exec non apre la ConPTY e chiude i figli col Job object, senza token ne' partenze sospese (ADR-0033)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_exec"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

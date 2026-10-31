@@ -48,6 +48,8 @@ pub(super) enum Evento {
 #[derive(Clone, Default)]
 pub(super) struct Gestore {
     eventi: Option<Sender<Evento>>,
+    /// Il login porta il lasciapassare (`--amministratore`).
+    amministratore: bool,
 }
 
 impl Gestore {
@@ -59,9 +61,46 @@ impl Gestore {
     }
 }
 
+/// Cosa fare ai due rifiuti del client non installato
+/// (`token_terminale::RIFIUTO_SOLO_AMMINISTRATORE` e
+/// `RIFIUTO_NIENTE_AMMINISTRATORE`); `amministratore`: il login portava il
+/// lasciapassare, che il PC puo' aver scartato (scaduto, gia' usato, di un
+/// altro PC). `app`: il nome del client sul PC (`super::marchio`, APP_NAME
+/// senza `-cli`). Il CLI non rilancia da solo.
+fn consiglio(testo: &str, amministratore: bool, app: &str) -> Option<String> {
+    use crate::remotek::token_terminale::{
+        RIFIUTO_NIENTE_AMMINISTRATORE, RIFIUTO_SOLO_AMMINISTRATORE,
+    };
+    if testo == RIFIUTO_SOLO_AMMINISTRATORE && amministratore {
+        Some(format!(
+            "lasciapassare rifiutato dal PC (scaduto, gia' usato o di un altro PC), che accetta l'agente solo come amministratore ({app} non installato, avviato come amministratore): controlla l'ID del PC e l'orologio"
+        ))
+    } else if testo == RIFIUTO_SOLO_AMMINISTRATORE {
+        Some(format!(
+            "il PC accetta l'agente solo come amministratore ({app} non installato, avviato come amministratore): rilancia con --amministratore, il cliente vedra' la richiesta"
+        ))
+    } else if testo == RIFIUTO_NIENTE_AMMINISTRATORE {
+        Some(format!(
+            "su questo PC l'amministratore non c'e' ({app} non installato, avviato senza permessi di amministratore): rilancia senza --amministratore, o fai installare {app}"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Il significato di un messaggio per il CLI (src/client.rs, `handle_hash` e
 /// `handle_login_error`). `None`: niente da fare.
-pub(super) fn evento_da_msgbox(tipo: &str, titolo: &str, testo: &str) -> Option<Evento> {
+pub(super) fn evento_da_msgbox(
+    tipo: &str,
+    titolo: &str,
+    testo: &str,
+    amministratore: bool,
+) -> Option<Evento> {
+    if tipo == "error" {
+        if let Some(c) = consiglio(testo, amministratore, &super::marchio()) {
+            return Some(Evento::Errore(c));
+        }
+    }
     match tipo {
         "input-password" | "wait-remote-accept-nook" => Some(Evento::Attesa),
         "insecure-connection-nocancel-hasclose" => Some(Evento::NonCifrata),
@@ -148,7 +187,7 @@ impl InvokeUiSession for Gestore {
     fn adapt_size(&self) {}
     fn on_rgba(&self, _: usize, _: &mut scrap::ImageRgb) {}
     fn msgbox(&self, tipo: &str, titolo: &str, testo: &str, _: &str, _: bool) {
-        if let Some(evento) = evento_da_msgbox(tipo, titolo, testo) {
+        if let Some(evento) = evento_da_msgbox(tipo, titolo, testo, self.amministratore) {
             self.invia(evento);
         }
     }
@@ -277,12 +316,14 @@ pub(super) fn terminale(
     chiedi: Option<impl FnOnce() -> Result<String, String>>,
 ) -> Result<i32, String> {
     let (tx, rx) = channel();
+    let amministratore = chiedi.is_some();
     let (session, lasciapassare) = prepara(
         || {
             sessione(
                 id,
                 Gestore {
                     eventi: Some(tx.clone()),
+                    amministratore,
                 },
             )
         },
@@ -571,7 +612,7 @@ mod tests {
             evento_da_risposta(non_aperto),
             Some(Evento::Errore(_))
         ));
-        let rifiuto = evento_da_msgbox("error", "Connection Error", "Connection declined");
+        let rifiuto = evento_da_msgbox("error", "Connection Error", "Connection declined", false);
         assert!(matches!(rifiuto, Some(Evento::Errore(_))));
         for tipo in [
             "re-input-password",
@@ -580,15 +621,67 @@ mod tests {
             "terminal-admin-login-password",
         ] {
             assert!(
-                matches!(evento_da_msgbox(tipo, "", ""), Some(Evento::Errore(_))),
+                matches!(
+                    evento_da_msgbox(tipo, "", "", false),
+                    Some(Evento::Errore(_))
+                ),
                 "{tipo}"
             );
         }
         assert!(ciclo(vec![Evento::Errore("x".into())], 5).0.is_err());
         // Nessuna risposta del cliente entro --attesa.
-        let attesa = evento_da_msgbox("wait-remote-accept-nook", "", "");
+        let attesa = evento_da_msgbox("wait-remote-accept-nook", "", "", false);
         assert_eq!(attesa, Some(Evento::Attesa));
         assert!(ciclo(vec![Evento::Attesa], 0).0.is_err());
+    }
+
+    #[test]
+    fn i_rifiuti_del_portatile_dicono_cosa_fare() {
+        use crate::remotek::token_terminale::{
+            RIFIUTO_NIENTE_AMMINISTRATORE, RIFIUTO_SOLO_AMMINISTRATORE,
+        };
+        let solo = consiglio(RIFIUTO_SOLO_AMMINISTRATORE, false, "Prova").unwrap();
+        assert!(solo.contains("rilancia con --amministratore"), "{solo}");
+        assert!(solo.contains("Prova non installato"), "{solo}");
+        // Col lasciapassare gia' mandato il PC l'ha scartato: non basta
+        // aggiungere --amministratore.
+        let scartato = consiglio(RIFIUTO_SOLO_AMMINISTRATORE, true, "Prova").unwrap();
+        assert!(!scartato.contains("rilancia"), "{scartato}");
+        assert!(
+            scartato.contains("lasciapassare rifiutato dal PC"),
+            "{scartato}"
+        );
+        let niente = consiglio(RIFIUTO_NIENTE_AMMINISTRATORE, true, "Prova").unwrap();
+        assert!(
+            niente.contains("rilancia senza --amministratore"),
+            "{niente}"
+        );
+        assert!(niente.contains("fai installare Prova"), "{niente}");
+        // Il marchio solo da APP_NAME.
+        for c in [&solo, &scartato, &niente] {
+            assert!(!c.contains("Remotek"), "{c}");
+        }
+        assert_eq!(consiglio("altro", true, "Prova"), None);
+        // Come li mostra handle_login_error (src/client.rs).
+        let app = super::super::marchio();
+        assert_eq!(
+            evento_da_msgbox("error", "Login Error", RIFIUTO_SOLO_AMMINISTRATORE, false),
+            Some(Evento::Errore(
+                consiglio(RIFIUTO_SOLO_AMMINISTRATORE, false, &app).unwrap()
+            ))
+        );
+        assert_eq!(
+            evento_da_msgbox("error", "Login Error", RIFIUTO_NIENTE_AMMINISTRATORE, true),
+            Some(Evento::Errore(
+                consiglio(RIFIUTO_NIENTE_AMMINISTRATORE, true, &app).unwrap()
+            ))
+        );
+        // Un altro errore di login resta com'e'.
+        assert_eq!(
+            evento_da_msgbox("error", "Login Error", "altro", true),
+            Some(Evento::Errore("Login Error: altro".to_owned()))
+        );
+        assert!(ciclo(vec![Evento::Errore(solo)], 5).0.is_err());
     }
 
     #[test]
@@ -613,7 +706,7 @@ mod tests {
 
     #[test]
     fn connessione_non_cifrata_rifiutata() {
-        let evento = evento_da_msgbox("insecure-connection-nocancel-hasclose", "", "");
+        let evento = evento_da_msgbox("insecure-connection-nocancel-hasclose", "", "", false);
         assert_eq!(evento, Some(Evento::NonCifrata));
         let (esito, inviati) = ciclo(vec![Evento::NonCifrata], 5);
         assert!(esito.is_err());

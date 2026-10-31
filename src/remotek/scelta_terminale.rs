@@ -153,8 +153,16 @@ pub fn scelta(
     }
     let ammessa = lasciapassare_valido && terminale && pc.amministratore();
     if !ammessa {
+        let perche = if !lasciapassare_valido {
+            "senza lasciapassare da amministratore"
+        } else if !terminale {
+            "fuori da un terminale"
+        } else {
+            "su un PC che non la da'"
+        };
         log::warn!(
-            "scelta di amministratore senza lasciapassare valido, terminale o PC che la dia: vale come utente (controllante {})",
+            "scelta di amministratore {}: vale come utente (controllante {})",
+            perche,
             controllante
         );
     }

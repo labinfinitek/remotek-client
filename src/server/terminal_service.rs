@@ -166,8 +166,13 @@ fn get_or_create_service(
     service_id: String,
     is_persistent: bool,
     is_specified_user: bool,
+    exec: bool,
 ) -> Result<Arc<Mutex<PersistentTerminalService>>> {
     let mut services = TERMINAL_SERVICES.lock().unwrap();
+    // Remotek: exec solo in un servizio nuovo (src/remotek/exec.rs).
+    if exec && services.contains_key(&service_id) {
+        return Err(anyhow!("exec: terminal service {} already exists", service_id));
+    }
 
     // Check service limit
     if !services.contains_key(&service_id) && services.len() >= MAX_SERVICES {
@@ -185,11 +190,10 @@ fn get_or_create_service(
                 service_id,
                 is_persistent
             );
-            Arc::new(Mutex::new(PersistentTerminalService::new(
-                service_id.clone(),
-                is_persistent,
-                is_specified_user,
-            )))
+            let mut s =
+                PersistentTerminalService::new(service_id.clone(), is_persistent, is_specified_user);
+            s.exec = exec.then(|| crate::remotek::exec::Esecuzione::nuova(is_specified_user));
+            Arc::new(Mutex::new(s))
         })
         .clone();
 
@@ -206,6 +210,7 @@ fn remove_service(service_id: &str) {
     let mut services = TERMINAL_SERVICES.lock().unwrap();
     if let Some(service) = services.remove(service_id) {
         log::info!("Removed service: {}", service_id);
+        service.lock().unwrap().exec = None; // Remotek: uccide lo script e i figli.
         // Close all terminals in the service
         let sessions = service.lock().unwrap().sessions.clone();
         for (_, session) in sessions.iter() {
@@ -392,12 +397,14 @@ pub fn new(
     service_id: String,
     is_persistent: bool,
     user_token: Option<UserToken>,
+    exec: bool,
 ) -> GenericService {
     // Create the service with initial persistence setting
     allow_err!(get_or_create_service(
         service_id.clone(),
-        is_persistent,
-        user_token.is_some()
+        is_persistent && !exec,
+        user_token.is_some(),
+        exec
     ));
     let svc = TerminalService {
         sp: GenericService::new(service_id.clone(), false),
@@ -892,6 +899,8 @@ pub struct PersistentTerminalService {
     pub is_persistent: bool,
     needs_session_sync: bool,
     is_specified_user: bool,
+    // Remotek: la sessione di exec, senza pseudo-console (src/remotek/exec.rs).
+    exec: Option<crate::remotek::exec::Esecuzione>,
 }
 
 impl PersistentTerminalService {
@@ -904,6 +913,7 @@ impl PersistentTerminalService {
             is_persistent,
             needs_session_sync: false,
             is_specified_user,
+            exec: None,
         }
     }
 
@@ -1012,6 +1022,9 @@ impl TerminalServiceProxy {
             }
         };
         service.lock().unwrap().update_activity();
+        if let Some(e) = service.lock().unwrap().exec.as_mut() {
+            return Ok(e.azione(action));
+        }
         match &action.union {
             Some(terminal_action::Union::Open(open)) => {
                 self.handle_open(&mut service.lock().unwrap(), open)
@@ -1848,6 +1861,9 @@ impl TerminalServiceProxy {
                 return vec![];
             }
         };
+        if let Some(e) = service.lock().unwrap().exec.as_mut() {
+            return e.leggi();
+        }
 
         // Get session references with minimal service lock time
         let sessions: Vec<(i32, Arc<Mutex<TerminalSession>>)> = {
@@ -2212,5 +2228,37 @@ mod tests {
 
         let actual_size: usize = buffer.lines.iter().map(|line| line.len()).sum();
         assert_eq!(buffer.total_size, actual_size);
+    }
+
+    // Remotek: la sessione di exec non apre una pseudo-console e passa dal
+    // servizio come il terminale (src/remotek/exec.rs).
+    #[test]
+    fn remotek_exec_senza_pseudo_console() {
+        use crate::remotek::exec::{tests::*, APERTO};
+        use hbb_common::message_proto::terminal_response::Union;
+        let id = super::generate_service_id();
+        let service = super::get_or_create_service(id.clone(), false, false, true).unwrap();
+        assert!(super::get_or_create_service(id.clone(), false, false, true).is_err());
+        let mut proxy = super::TerminalServiceProxy::new(id.clone(), None, None);
+        let r = proxy.handle_action(&apri(1)).unwrap().unwrap();
+        assert!(matches!(r.union, Some(Union::Opened(o)) if o.success && o.message == APERTO));
+        assert!(service.lock().unwrap().sessions.is_empty());
+        assert!(proxy.handle_action(&manda(1, b"echo ok; exit 3\n")).unwrap().is_none());
+        assert!(proxy.handle_action(&manda(1, b"")).unwrap().is_none());
+        let mut fine = None;
+        for _ in 0..500 {
+            for r in proxy.read_outputs() {
+                if let Some(Union::Closed(c)) = r.union {
+                    fine = Some(c.exit_code);
+                }
+            }
+            if fine.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(fine, Some(3));
+        assert!(service.lock().unwrap().sessions.is_empty());
+        super::remove_service(&id);
     }
 }

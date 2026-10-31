@@ -2,6 +2,8 @@
 
 #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod cli;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod exec;
 pub mod firma;
 pub mod lasciapassare;
 pub mod non_presidiato;

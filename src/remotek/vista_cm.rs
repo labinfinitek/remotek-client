@@ -8,7 +8,14 @@
 //! Va al CM solo l'output della shell, non quello che digita chi controlla:
 //! quello che la shell fa vedere lo vede anche il cliente, una password
 //! digitata senza eco no.
+//!
+//! Exec (src/remotek/exec.rs) non ha eco: lo script arriva dallo stdin e la
+//! shell non lo ripete. Percio' in una sessione di exec il cliente vede anche
+//! lo script, intero e prima del suo output, fra una riga d'inizio e una di
+//! fine ([`Script`]). I segreti di exec (ADR-0033 passo 4) dovranno passare
+//! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
+use super::scelta_terminale::Lingua;
 use crate::ipc::Data;
 use hbb_common::tokio::{
     self,
@@ -47,6 +54,64 @@ impl Vista {
         // chi mostrare l'output, la trascrizione continua lo stesso.
         self.tx.send((terminal_id, dati.to_vec())).ok();
     }
+}
+
+/// Lo stesso limite di `exec::MASSIMO_SCRIPT`: uno script piu' grande non
+/// parte, e non si mostra.
+const SCRIPT_MAX: usize = 1024 * 1024;
+
+/// Lo script di una sessione di exec, raccolto per la vista dai `TerminalData`
+/// che arrivano da chi controlla, fino a quello vuoto (la fine).
+#[derive(Default)]
+pub struct Script {
+    dati: Vec<u8>,
+    scartato: bool,
+}
+
+impl Script {
+    /// Il testo da mostrare al cliente quando lo script e' completo.
+    pub fn aggiungi(&mut self, dati: &[u8], lingua: Lingua) -> Option<Vec<u8>> {
+        if self.scartato {
+            return None;
+        }
+        if !dati.is_empty() {
+            if self.dati.len() + dati.len() > SCRIPT_MAX {
+                self.scartato = true;
+                self.dati = Vec::new();
+            } else {
+                self.dati.extend_from_slice(dati);
+            }
+            return None;
+        }
+        self.scartato = true; // Un solo script per sessione.
+        Some(testo_script(&std::mem::take(&mut self.dati), lingua))
+    }
+}
+
+/// Lo script fra una riga d'inizio e una di fine, nella lingua del CM, con
+/// gli a capo da terminale (`\r\n`) per la vista.
+fn testo_script(script: &[u8], lingua: Lingua) -> Vec<u8> {
+    let (inizio, fine) = match lingua {
+        Lingua::Italiano => (
+            "---- script dell'agente ----",
+            "---- fine dello script ----",
+        ),
+        Lingua::Inglese => ("---- agent script ----", "---- end of script ----"),
+    };
+    let mut t = format!("\r\n{}\r\n", inizio).into_bytes();
+    let mut prima = 0u8;
+    for &b in script {
+        if b == b'\n' && prima != b'\r' {
+            t.push(b'\r');
+        }
+        t.push(b);
+        prima = b;
+    }
+    if prima != b'\n' {
+        t.extend_from_slice(b"\r\n");
+    }
+    t.extend_from_slice(format!("{}\r\n", fine).as_bytes());
+    t
 }
 
 /// Unisce i pezzi consecutivi dello stesso terminale.
@@ -162,5 +227,30 @@ mod tests {
         assert_eq!(testi.len(), 1);
         let v: Value = serde_json::from_str(&testi[0]).expect("json");
         assert_eq!(v["data"], crate::encode64(b"dir\r\nC:\\>"));
+    }
+
+    #[test]
+    fn lo_script_intero_fra_inizio_e_fine() {
+        let mut s = Script::default();
+        assert_eq!(s.aggiungi(b"echo a\n", Lingua::Italiano), None);
+        assert_eq!(s.aggiungi(b"echo b", Lingua::Italiano), None);
+        let t = s.aggiungi(b"", Lingua::Italiano).expect("testo");
+        assert_eq!(
+            String::from_utf8_lossy(&t),
+            "\r\n---- script dell'agente ----\r\necho a\r\necho b\r\n---- fine dello script ----\r\n"
+        );
+        assert_eq!(s.aggiungi(b"", Lingua::Italiano), None, "una volta sola");
+        let en = Script::default()
+            .aggiungi(b"", Lingua::Inglese)
+            .expect("testo");
+        assert!(String::from_utf8_lossy(&en).contains("---- agent script ----"));
+        let mut grande = Script::default();
+        grande.aggiungi(&vec![b'#'; SCRIPT_MAX], Lingua::Italiano);
+        grande.aggiungi(b"x", Lingua::Italiano);
+        assert_eq!(
+            grande.aggiungi(b"", Lingua::Italiano),
+            None,
+            "non parte, non si mostra"
+        );
     }
 }

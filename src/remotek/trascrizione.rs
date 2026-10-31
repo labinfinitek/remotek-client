@@ -18,6 +18,7 @@ use hbb_common::{
     message_proto::{message, terminal_action, terminal_response, Message, TerminalAction},
     tokio::sync::mpsc::UnboundedSender,
 };
+use super::scelta_terminale::Lingua;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -293,6 +294,8 @@ pub struct Trascrizione {
     api: Option<Api>,
     file: Option<std_mpsc::Sender<String>>,
     vista: Option<super::vista_cm::Vista>,
+    /// Solo con exec: lo script per la vista (`vista_cm::Script`).
+    script: super::vista_cm::Script,
     #[cfg(test)]
     scrittore: Option<std::thread::JoinHandle<()>>,
     terminal_id: i32,
@@ -320,6 +323,7 @@ impl Trascrizione {
             api,
             file: None,
             vista,
+            script: Default::default(),
             #[cfg(test)]
             scrittore: None,
             terminal_id: 0,
@@ -384,6 +388,15 @@ impl Trascrizione {
         self.registra(blocchi);
     }
 
+    /// Exec non ha eco: lo script completo va alla vista prima che parta (e
+    /// quindi prima del suo output, che passa dallo stesso canale). La
+    /// trascrizione resta quella di `dati`.
+    fn script_alla_vista(&mut self, terminal_id: i32, dati: &[u8], lingua: Lingua) {
+        if let (Some(v), Some(testo)) = (self.vista.as_ref(), self.script.aggiungi(dati, lingua)) {
+            v.uscita(terminal_id, &testo);
+        }
+    }
+
     /// Da chiamare ogni secondo: manda il blocco in attesa da almeno 1 s.
     pub fn tick(&mut self) {
         let b = self.accumulo.scadenza(Instant::now());
@@ -405,13 +418,14 @@ impl Drop for Trascrizione {
 /// Un `TerminalAction` arrivato da chi controlla: apre la trascrizione della
 /// connessione alla prima azione e registra i byte delle azioni Data cosi'
 /// come arrivano. L'output va anche al connection manager (`tx_cm`), che lo
-/// mostra al cliente.
+/// mostra al cliente; con `exec` (`lasciapassare::exec`) anche lo script.
 pub fn ingresso(
     t: &mut Option<Trascrizione>,
     conn_id: i32,
     tx: &UnboundedSender<(String, Value)>,
     tx_cm: &UnboundedSender<crate::ipc::Data>,
     azione: &TerminalAction,
+    exec: bool,
 ) {
     let t = t.get_or_insert_with(|| {
         let url = crate::get_audit_server(
@@ -434,6 +448,10 @@ pub fn ingresso(
     });
     if let Some(terminal_action::Union::Data(d)) = &azione.union {
         t.dati(Dir::In, d.terminal_id, &d.data);
+        if exec {
+            let lingua = super::scelta_terminale::lingua_del_cm();
+            t.script_alla_vista(d.terminal_id, &d.data, lingua);
+        }
     }
 }
 
@@ -572,7 +590,7 @@ mod tests {
             ..Default::default()
         });
         let (tx_cm, _rx_cm) = mpsc::unbounded_channel();
-        ingresso(&mut t, 7, &tx, &tx_cm, &azione);
+        ingresso(&mut t, 7, &tx, &tx_cm, &azione, false);
         let mut risposta = TerminalResponse::new();
         risposta.set_data(TerminalData {
             terminal_id: 1,
@@ -613,7 +631,7 @@ mod tests {
         let mut t = Some(Trascrizione::nuova(7, String::new(), &tx, Some(c.clone()), None));
         let mut e = Esecuzione::nuova();
         for azione in [apri(1), manda(1, b"echo o; echo e >&2\n"), manda(1, b"")] {
-            ingresso(&mut t, 7, &tx, &tx_cm, &azione);
+            ingresso(&mut t, 7, &tx, &tx_cm, &azione, true);
             e.azione(&azione, None);
         }
         let inizio = Instant::now();
@@ -650,6 +668,32 @@ mod tests {
             uscita(t, &msg);
         }
         chiuso
+    }
+
+    #[tokio::test]
+    async fn exec_mostra_lo_script_prima_dell_output_il_terminale_no() {
+        for exec in [true, false] {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+            let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm);
+            let mut t = Trascrizione::nuova(7, String::new(), &tx, None, Some(vista));
+            for d in [&b"Get-"[..], b"Date", b""] {
+                t.dati(Dir::In, 1, d);
+                if exec {
+                    t.script_alla_vista(1, d, Lingua::Inglese);
+                }
+            }
+            t.dati(Dir::Out, 1, b"ok");
+            drop(t);
+            let mut visto = Vec::new();
+            while let Some(crate::ipc::Data::FileTransferLog((_, testo))) = rx_cm.recv().await {
+                let v: Value = serde_json::from_str(&testo).expect("json");
+                visto.extend(crate::decode64(v["data"].as_str().unwrap_or("")).expect("base64"));
+            }
+            let visto = String::from_utf8_lossy(&visto).into_owned();
+            let atteso = "\r\n---- agent script ----\r\nGet-Date\r\n---- end of script ----\r\nok";
+            assert_eq!(visto, if exec { atteso } else { "ok" });
+        }
     }
 
     #[tokio::test]

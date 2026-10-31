@@ -855,6 +855,8 @@ pub fn run_terminal_helper(args: &[String]) -> Result<()> {
     if args.get(5).map(String::as_str) == Some(crate::remotek::exec::ARG_HELPER) {
         let codice = crate::remotek::exec::helper(input_pipe, output_pipe);
         log::logger().flush();
+        // Come `uscita_terminale::codice_helper`: Windows legge i codici come
+        // u32, e `exit(c)` con c i32 torna c dal servizio.
         std::process::exit(codice);
     }
 

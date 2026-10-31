@@ -192,7 +192,7 @@ fn get_or_create_service(
             );
             let mut s =
                 PersistentTerminalService::new(service_id.clone(), is_persistent, is_specified_user);
-            s.exec = exec.then(|| crate::remotek::exec::Esecuzione::nuova(is_specified_user));
+            s.exec = exec.then(crate::remotek::exec::Esecuzione::nuova);
             Arc::new(Mutex::new(s))
         })
         .clone();
@@ -1023,7 +1023,10 @@ impl TerminalServiceProxy {
         };
         service.lock().unwrap().update_activity();
         if let Some(e) = service.lock().unwrap().exec.as_mut() {
-            return Ok(e.azione(action));
+            #[cfg(target_os = "windows")]
+            return Ok(e.azione(action, self.user_token));
+            #[cfg(not(target_os = "windows"))]
+            return Ok(e.azione(action, None));
         }
         match &action.union {
             Some(terminal_action::Union::Open(open)) => {
@@ -1437,6 +1440,7 @@ impl TerminalServiceProxy {
             open.terminal_id,
             open.rows as u16,
             open.cols as u16,
+            false,
         )?;
 
         // Use HelperProcessGuard for RAII cleanup - terminates process on error

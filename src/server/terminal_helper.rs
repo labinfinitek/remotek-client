@@ -707,16 +707,21 @@ pub fn launch_terminal_helper_with_token(
     terminal_id: i32,
     rows: u16,
     cols: u16,
+    exec: bool,
 ) -> Result<HelperProcessInfo> {
     let exe_path =
         std::env::current_exe().map_err(|e| anyhow!("Failed to get current exe path: {}", e))?;
 
     // Build command line arguments (without exe path to avoid escaping issues)
     // lpApplicationName will contain the exe path separately
-    let cmd_args = format!(
+    let mut cmd_args = format!(
         "--terminal-helper {} {} {} {} {}",
         input_pipe_name, output_pipe_name, rows, cols, terminal_id
     );
+    // Remotek: il modo exec, senza ConPTY (src/remotek/exec.rs).
+    if exec {
+        cmd_args = format!("{} {}", cmd_args, crate::remotek::exec::ARG_HELPER);
+    }
 
     log::debug!("Launching terminal helper for terminal {}", terminal_id);
 
@@ -845,6 +850,13 @@ pub fn run_terminal_helper(args: &[String]) -> Result<()> {
     // Open named pipes (created by the service)
     let mut input_pipe = open_pipe(input_pipe_name, true)?;
     let mut output_pipe = open_pipe(output_pipe_name, false)?;
+
+    // Remotek: col modo exec niente ConPTY: lo script va a src/remotek/exec.rs.
+    if args.get(5).map(String::as_str) == Some(crate::remotek::exec::ARG_HELPER) {
+        let codice = crate::remotek::exec::helper(input_pipe, output_pipe);
+        log::logger().flush();
+        std::process::exit(codice);
+    }
 
     // Create ConPTY and shell
     let pty_size = PtySize {

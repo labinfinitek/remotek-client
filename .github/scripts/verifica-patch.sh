@@ -2567,7 +2567,8 @@ fi
 # ADR-0033 passo 2: col lasciapassare di exec l'OpenTerminal non apre la
 # ConPTY: in src/server/terminal_service.rs `handle_action` passa la sessione
 # di exec a src/remotek/exec.rs prima di ogni ramo del terminale, e cosi'
-# `read_outputs`. Su Windows lo script e i suoi figli stanno in un Job object
+# `read_outputs`; l'helper (src/server/terminal_helper.rs) in modo exec esce
+# prima di `openpty`. Su Windows lo script e i suoi figli stanno in un Job object
 # con KILL_ON_JOB_CLOSE; exec non avvia processi con un token ne' sospesi:
 # l'identita' resta quella del servizio o dell'helper di upstream.
 esito_exec=$(python3 - <<'PY'
@@ -2584,10 +2585,16 @@ for vietato in ("CREATE_SUSPENDED", "CreateProcessAsUser", "DuplicateToken", "po
         guai.append("%s: c'e' %s (exec non avvia processi con token, sospesi o con una pseudo-console)" % (E, vietato))
 T = "src/server/terminal_service.rs"
 t = codice(T)
-if not re.search(r"if let Some\(e\) = service\.lock\(\)\.unwrap\(\)\.exec\.as_mut\(\) \{\s*return Ok\(e\.azione\(action\)\);\s*\}\s*match &action\.union \{", t):
+if not re.search(r"if let Some\(e\) = service\.lock\(\)\.unwrap\(\)\.exec\.as_mut\(\) \{\s*#\[cfg\(target_os = \"windows\"\)\]\s*return Ok\(e\.azione\(action, self\.user_token\)\);\s*#\[cfg\(not\(target_os = \"windows\"\)\)\]\s*return Ok\(e\.azione\(action, None\)\);\s*\}\s*match &action\.union \{", t):
     guai.append("%s: handle_action non passa la sessione di exec a exec.rs prima dei rami del terminale (aprirebbe la ConPTY)" % T)
 if not re.search(r"if let Some\(e\) = service\.lock\(\)\.unwrap\(\)\.exec\.as_mut\(\) \{\s*return e\.leggi\(\);\s*\}", t):
     guai.append("%s: read_outputs non legge la sessione di exec da exec.rs" % T)
+H = "src/server/terminal_helper.rs"
+h = codice(H)
+ramo = re.search(r"if args\.get\(5\)\.map\(String::as_str\) == Some\(crate::remotek::exec::ARG_HELPER\) \{\s*let codice = crate::remotek::exec::helper\(input_pipe, output_pipe\);\s*log::logger\(\)\.flush\(\);\s*std::process::exit\(codice\);\s*\}", h)
+pty = h.find("pty_system.openpty(")
+if not ramo or pty < 0 or ramo.start() > pty:
+    guai.append("%s: run_terminal_helper non esce dal modo exec prima di aprire la ConPTY" % H)
 print("\n".join(guai))
 PY
 ) || esito_exec="${esito_exec:-}"$'\n'"controllo di exec non eseguito: python3 terminato con errore"

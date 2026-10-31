@@ -611,10 +611,10 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (tx_cm, _rx_cm) = mpsc::unbounded_channel();
         let mut t = Some(Trascrizione::nuova(7, String::new(), &tx, Some(c.clone()), None));
-        let mut e = Esecuzione::nuova(false);
+        let mut e = Esecuzione::nuova();
         for azione in [apri(1), manda(1, b"echo o; echo e >&2\n"), manda(1, b"")] {
             ingresso(&mut t, 7, &tx, &tx_cm, &azione);
-            e.azione(&azione);
+            e.azione(&azione, None);
         }
         let inizio = Instant::now();
         while !rx_tutto(&mut t, &mut e) && inizio.elapsed() < Duration::from_secs(10) {

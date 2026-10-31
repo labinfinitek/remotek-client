@@ -8,6 +8,7 @@ pub mod firma;
 pub mod lasciapassare;
 pub mod non_presidiato;
 pub mod scelta_terminale;
+pub mod script_exec;
 pub mod stampante;
 pub mod token_terminale;
 pub mod trascrizione;

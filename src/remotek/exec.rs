@@ -28,6 +28,14 @@
 //! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, altrove col gruppo di processi.
 //! Chiusura del terminale, della connessione o dal connection manager,
 //! oppure lo script finito: muoiono anche i figli rimasti.
+//!
+//! Come il terminale non persistente, exec chiude dopo un'ora senza
+//! `TerminalAction` (`cleanup_inactive_services` di upstream: l'output non
+//! conta come attivita'), anche se lo script sta ancora girando.
+//!
+//! Nella trascrizione il file locale e la vista del cliente distinguono
+//! stdout e stderr dal `terminal_id`; verso l'API, che oggi non riceve il
+//! `terminal_id`, sono tutti e due `out`, nell'ordine di arrivo.
 
 use super::uscita_terminale::{risposta_chiusura, HELPER_NON_PARTITO};
 use hbb_common::log;

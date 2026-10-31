@@ -8,7 +8,14 @@
 //! Va al CM solo l'output della shell, non quello che digita chi controlla:
 //! quello che la shell fa vedere lo vede anche il cliente, una password
 //! digitata senza eco no.
+//!
+//! Exec (src/remotek/exec.rs) non ha eco: lo script arriva dallo stdin e la
+//! shell non lo ripete. Percio' in una sessione di exec il cliente vede anche
+//! lo script, intero e prima del suo output, fra una riga d'inizio e una di
+//! fine ([`Script`]). I segreti di exec (ADR-0033 passo 4) dovranno passare
+//! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
+use super::scelta_terminale::Lingua;
 use crate::ipc::Data;
 use hbb_common::tokio::{
     self,
@@ -46,6 +53,103 @@ impl Vista {
         // Se il task e' uscito il CM non c'e' piu': la vista non ha piu' a
         // chi mostrare l'output, la trascrizione continua lo stesso.
         self.tx.send((terminal_id, dati.to_vec())).ok();
+    }
+}
+
+/// Lo stesso limite di `exec::MASSIMO_SCRIPT`: uno script piu' grande non
+/// parte, e non si mostra.
+const SCRIPT_MAX: usize = 1024 * 1024;
+
+/// Lo script di una sessione di exec, raccolto per la vista dai `TerminalData`
+/// che arrivano da chi controlla, fino a quello vuoto (la fine).
+#[derive(Default)]
+pub struct Script {
+    dati: Vec<u8>,
+    scartato: bool,
+}
+
+impl Script {
+    /// Il testo da mostrare al cliente quando lo script e' completo.
+    pub fn aggiungi(&mut self, dati: &[u8], lingua: Lingua) -> Option<Vec<u8>> {
+        if self.scartato {
+            return None;
+        }
+        if !dati.is_empty() {
+            if self.dati.len() + dati.len() > SCRIPT_MAX {
+                self.scartato = true;
+                self.dati = Vec::new();
+            } else {
+                self.dati.extend_from_slice(dati);
+            }
+            return None;
+        }
+        self.scartato = true; // Un solo script per sessione.
+        Some(testo_script(&std::mem::take(&mut self.dati), lingua))
+    }
+}
+
+/// Lo script fra una riga d'inizio e una di fine, nella lingua del CM, con
+/// gli a capo da terminale (`\r\n`) per la vista. La vista e' un terminale
+/// xterm: ogni carattere di controllo dello script (C0 tranne `\t` e `\n`,
+/// `\r` non seguito da `\n`, DEL, C1) e ogni byte non UTF-8 si mostra in
+/// forma visibile ([`visibile`]), cosi' lo script non puo' cancellare o
+/// riscrivere le sue righe e il cliente vede quello che parte. La
+/// trascrizione tiene i byte veri; l'output dello script passa com'e', come
+/// quello del terminale.
+fn testo_script(script: &[u8], lingua: Lingua) -> Vec<u8> {
+    let (inizio, fine) = match lingua {
+        Lingua::Italiano => (
+            "---- script dell'agente ----",
+            "---- fine dello script ----",
+        ),
+        Lingua::Inglese => ("---- agent script ----", "---- end of script ----"),
+    };
+    let mut t = format!("\r\n{}\r\n", inizio);
+    // A pezzi validi UTF-8 e byte non validi (senza `utf8_chunks`, che il
+    // build Windows con Rust 1.75 non ha).
+    let mut resto = script;
+    while !resto.is_empty() {
+        let (valido, non_validi) = match std::str::from_utf8(resto) {
+            Ok(s) => (s, 0),
+            Err(e) => (
+                std::str::from_utf8(&resto[..e.valid_up_to()]).unwrap_or_default(),
+                e.error_len().unwrap_or(resto.len() - e.valid_up_to()),
+            ),
+        };
+        let mut caratteri = valido.chars().peekable();
+        while let Some(c) = caratteri.next() {
+            if c == '\r' && caratteri.peek() == Some(&'\n') {
+                continue; // `\r\n`: l'a capo lo scrive il `\n`.
+            }
+            visibile(c, &mut t);
+        }
+        let fine_validi = valido.len();
+        for b in &resto[fine_validi..fine_validi + non_validi] {
+            t.push_str(&format!("<0x{:02X}>", b));
+        }
+        resto = &resto[fine_validi + non_validi..];
+    }
+    if !t.ends_with("\r\n") {
+        t.push_str("\r\n");
+    }
+    t.push_str(&format!("{}\r\n", fine));
+    t.into_bytes()
+}
+
+/// Un carattere dello script per la vista: `\n` diventa `\r\n`, `\t` resta,
+/// gli altri controlli C0 e DEL come `^X` (`^[` per ESC, `^?` per DEL), i C1
+/// come `<U+0080>`-`<U+009F>`.
+fn visibile(c: char, t: &mut String) {
+    match c {
+        '\n' => t.push_str("\r\n"),
+        '\t' => t.push(c),
+        '\u{0}'..='\u{1f}' => {
+            t.push('^');
+            t.push(char::from(c as u8 + 0x40));
+        }
+        '\u{7f}' => t.push_str("^?"),
+        '\u{80}'..='\u{9f}' => t.push_str(&format!("<U+{:04X}>", c as u32)),
+        _ => t.push(c),
     }
 }
 
@@ -162,5 +266,45 @@ mod tests {
         assert_eq!(testi.len(), 1);
         let v: Value = serde_json::from_str(&testi[0]).expect("json");
         assert_eq!(v["data"], crate::encode64(b"dir\r\nC:\\>"));
+    }
+
+    #[test]
+    fn lo_script_intero_fra_inizio_e_fine() {
+        let mut s = Script::default();
+        assert_eq!(s.aggiungi(b"echo a\n", Lingua::Italiano), None);
+        assert_eq!(s.aggiungi(b"echo b", Lingua::Italiano), None);
+        let t = s.aggiungi(b"", Lingua::Italiano).expect("testo");
+        assert_eq!(
+            String::from_utf8_lossy(&t),
+            "\r\n---- script dell'agente ----\r\necho a\r\necho b\r\n---- fine dello script ----\r\n"
+        );
+        assert_eq!(s.aggiungi(b"", Lingua::Italiano), None, "una volta sola");
+        let en = Script::default()
+            .aggiungi(b"", Lingua::Inglese)
+            .expect("testo");
+        assert!(String::from_utf8_lossy(&en).contains("---- agent script ----"));
+        let mut grande = Script::default();
+        grande.aggiungi(&vec![b'#'; SCRIPT_MAX], Lingua::Italiano);
+        grande.aggiungi(b"x", Lingua::Italiano);
+        assert_eq!(
+            grande.aggiungi(b"", Lingua::Italiano),
+            None,
+            "non parte, non si mostra"
+        );
+    }
+
+    #[test]
+    fn i_controlli_dello_script_si_vedono_e_non_arrivano_alla_vista() {
+        let script = b"a\x1b[1Ab\x1b[2Kc\rd\x08e\xc2\x9bf\x7fg\xff\th\r\ni\n";
+        let t = testo_script(script, Lingua::Inglese);
+        let t = String::from_utf8(t).expect("utf-8");
+        let corpo = t
+            .strip_prefix("\r\n---- agent script ----\r\n")
+            .and_then(|r| r.strip_suffix("---- end of script ----\r\n"))
+            .expect("righe d'inizio e di fine");
+        assert_eq!(corpo, "a^[[1Ab^[[2Kc^Md^He<U+009B>f^?g<0xFF>\th\r\ni\r\n");
+        // Nessun controllo arriva alla vista, salvo `\t` e gli a capo `\r\n`.
+        let senza_a_capo = corpo.replace("\r\n", "");
+        assert!(senza_a_capo.chars().all(|c| c == '\t' || !(c.is_control())));
     }
 }

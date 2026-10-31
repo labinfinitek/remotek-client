@@ -3,9 +3,11 @@
 //!
 //! La sessione e' di exec quando il lasciapassare della connessione e' di exec
 //! (`lasciapassare::exec`); consenso, lasciapassare, trascrizione e identita'
-//! sono quelli del terminale: questo modulo non sceglie l'utente, esegue
-//! lo script nel processo del servizio del terminale, che gira gia' come
-//! l'utente deciso da `fill_terminal_user_token` (src/server/connection.rs).
+//! sono quelli del terminale: questo modulo non sceglie l'utente. Come la
+//! shell del terminale, lo script gira nel processo del servizio, che e' gia'
+//! l'utente deciso da `fill_terminal_user_token` (src/server/connection.rs),
+//! oppure, col token dell'utente della console (Windows installato),
+//! nell'helper di upstream lanciato con quel token (modulo `helper`).
 //!
 //! Il contratto col CLI:
 //! - all'`OpenTerminal` il PC risponde `TerminalOpened` con `success` e
@@ -708,6 +710,11 @@ mod helper {
         }
     }
 
+    /// Le dimensioni che `--terminal-helper` vuole sulla riga di comando: in
+    /// exec non c'e' una ConPTY, quindi non servono a niente.
+    const RIGHE_HELPER: u16 = 24;
+    const COLONNE_HELPER: u16 = 80;
+
     pub fn avvia(token: UserToken, script: Vec<u8>, terminal_id: i32) -> anyhow::Result<Processo> {
         let id = uuid::Uuid::new_v4();
         let nome_in = format!(r"\\.\pipe\rustdesk_term_in_{}", id);
@@ -719,8 +726,8 @@ mod helper {
             &nome_in,
             &nome_out,
             terminal_id,
-            24,
-            80,
+            RIGHE_HELPER,
+            COLONNE_HELPER,
             true,
         )?;
         // Da qui il Drop chiude l'helper, anche se i passi sotto falliscono.

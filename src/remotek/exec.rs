@@ -38,10 +38,11 @@
 //! `terminal_id`, sono tutti e due `out`, nell'ordine di arrivo.
 
 use super::uscita_terminale::{risposta_chiusura, HELPER_NON_PARTITO};
-use hbb_common::log;
+use crate::server::terminal_service::UserToken;
 use hbb_common::message_proto::{
     terminal_action, TerminalAction, TerminalData, TerminalError, TerminalOpened, TerminalResponse,
 };
+use hbb_common::{anyhow, log};
 use std::{
     io::{self, Read, Write},
     process::{Child, Command, ExitStatus, Stdio},
@@ -244,8 +245,7 @@ fn lettore<R: Read + Send + 'static>(mut r: R, tx: SyncSender<Uscita>, stderr: b
 
 /// Il processo dello script, in corso.
 struct Processo {
-    child: Child,
-    albero: Albero,
+    figlio: Figlio,
     uscita: Receiver<Uscita>,
     /// Il codice, e da quando, una volta finito lo script.
     finito: Option<(i32, Instant)>,
@@ -287,38 +287,93 @@ impl Processo {
             }
         });
         Ok(Self {
-            child,
-            albero,
+            figlio: Figlio::Diretto { child, albero },
             uscita,
             finito: None,
         })
     }
 
+    /// Un giro: l'output pronto e, a script finito e output letto (o dopo
+    /// [`ATTESA_OUTPUT`]), il codice.
+    fn passo(&mut self) -> (Vec<Uscita>, Option<i32>) {
+        let mut uscite = Vec::new();
+        let mut lettori_finiti = false;
+        loop {
+            match self.uscita.try_recv() {
+                Ok(u) => uscite.push(u),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    lettori_finiti = true;
+                    break;
+                }
+            }
+        }
+        if self.finito.is_none() && self.figlio.uscito() {
+            self.finito = Some((self.figlio.chiudi(), Instant::now()));
+        }
+        let fine = self
+            .finito
+            .filter(|(_, da)| lettori_finiti || da.elapsed() > ATTESA_OUTPUT)
+            .map(|(codice, _)| codice);
+        (uscite, fine)
+    }
+}
+
+/// Lo script nel processo del servizio, o nell'helper del terminale.
+enum Figlio {
+    Diretto {
+        child: Child,
+        albero: Albero,
+    },
+    #[cfg(windows)]
+    Helper(helper::Helper),
+}
+
+impl Figlio {
     /// Lo script e' finito, senza raccogliere il processo (vedi [`Albero`]).
     #[cfg(not(windows))]
     fn uscito(&mut self) -> bool {
         use hbb_common::libc;
+        let Figlio::Diretto { child, .. } = self;
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         let flag = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
-        let r = unsafe { libc::waitid(libc::P_PID, self.child.id(), &mut info, flag) };
-        r == 0 && unsafe { info.si_pid() } != 0
+        if unsafe { libc::waitid(libc::P_PID, child.id(), &mut info, flag) } != 0 {
+            log::warn!("exec: waitid non riuscita: {}", io::Error::last_os_error());
+            return false;
+        }
+        unsafe { info.si_pid() != 0 }
     }
 
     #[cfg(windows)]
     fn uscito(&mut self) -> bool {
-        // Su Windows l'handle del processo resta aperto: niente riuso.
-        matches!(self.child.try_wait(), Ok(Some(_)))
+        match self {
+            // Su Windows l'handle del processo resta aperto: niente riuso.
+            Figlio::Diretto { child, .. } => match child.try_wait() {
+                Ok(s) => s.is_some(),
+                Err(e) => {
+                    log::warn!("exec: try_wait non riuscita: {}", e);
+                    false
+                }
+            },
+            Figlio::Helper(h) => h.uscito(),
+        }
     }
 
     /// Uccide i figli rimasti e raccoglie il processo.
     fn chiudi(&mut self) -> i32 {
-        self.albero.uccidi();
-        match self.child.wait() {
-            Ok(s) => codice(s),
-            Err(e) => {
-                log::warn!("exec: attesa del processo non riuscita: {}", e);
-                -1
+        match self {
+            Figlio::Diretto { child, albero } => {
+                albero.uccidi();
+                match child.wait() {
+                    Ok(s) => codice(s),
+                    Err(e) => {
+                        log::warn!("exec: attesa del processo non riuscita: {}", e);
+                        -1
+                    }
+                }
             }
+            #[cfg(windows)]
+            Figlio::Helper(h) => h.chiudi(),
         }
     }
 }
@@ -326,17 +381,13 @@ impl Processo {
 impl Drop for Processo {
     fn drop(&mut self) {
         if self.finito.is_none() {
-            self.chiudi();
+            self.figlio.chiudi();
         }
     }
 }
 
 /// Una sessione di exec nel servizio del terminale: un solo script.
 pub struct Esecuzione {
-    /// Il servizio ha il token dell'utente della console (Windows
-    /// installato): lo script andra' nell'helper (MR 3b); fino ad allora non
-    /// parte, mai col token del servizio.
-    con_helper: bool,
     terminal_id: Option<i32>,
     script: Vec<u8>,
     processo: Option<Processo>,
@@ -364,9 +415,8 @@ fn dati(terminal_id: i32, data: Vec<u8>) -> TerminalResponse {
 }
 
 impl Esecuzione {
-    pub fn nuova(con_helper: bool) -> Self {
+    pub fn nuova() -> Self {
         Self {
-            con_helper,
             terminal_id: None,
             script: Vec::new(),
             processo: None,
@@ -374,7 +424,14 @@ impl Esecuzione {
         }
     }
 
-    pub fn azione(&mut self, azione: &TerminalAction) -> Option<TerminalResponse> {
+    /// `token`: quello del servizio del terminale. Se c'e' (Windows
+    /// installato, l'helper gira come l'utente della console) lo script va
+    /// all'helper di upstream, altrimenti gira nel processo del servizio.
+    pub fn azione(
+        &mut self,
+        azione: &TerminalAction,
+        token: Option<UserToken>,
+    ) -> Option<TerminalResponse> {
         match &azione.union {
             Some(terminal_action::Union::Open(o)) => {
                 if self.terminal_id.is_some() {
@@ -384,11 +441,6 @@ impl Esecuzione {
                     ));
                 }
                 self.terminal_id = Some(o.terminal_id);
-                if self.con_helper {
-                    log::warn!("exec: con l'helper non ancora: non parte");
-                    self.chiusa = true;
-                    return Some(risposta_chiusura(o.terminal_id, HELPER_NON_PARTITO));
-                }
                 let mut r = TerminalResponse::new();
                 r.set_opened(TerminalOpened {
                     terminal_id: o.terminal_id,
@@ -411,17 +463,19 @@ impl Esecuzione {
                         self.script = Vec::new();
                         Some(errore(d.terminal_id, TROPPO_GRANDE))
                     }
-                    Blocco::Completo => match Processo::avvia(std::mem::take(&mut self.script)) {
-                        Ok(p) => {
-                            self.processo = Some(p);
-                            None
+                    Blocco::Completo => {
+                        match avvia(std::mem::take(&mut self.script), token, d.terminal_id) {
+                            Ok(p) => {
+                                self.processo = Some(p);
+                                None
+                            }
+                            Err(e) => {
+                                log::warn!("exec: lo script non e' partito: {}", e);
+                                self.chiusa = true;
+                                Some(risposta_chiusura(d.terminal_id, HELPER_NON_PARTITO))
+                            }
                         }
-                        Err(e) => {
-                            log::warn!("exec: lo script non e' partito: {}", e);
-                            self.chiusa = true;
-                            Some(risposta_chiusura(d.terminal_id, HELPER_NON_PARTITO))
-                        }
-                    },
+                    }
                 }
             }
             Some(terminal_action::Union::Close(c)) if self.terminal_id == Some(c.terminal_id) => {
@@ -443,30 +497,284 @@ impl Esecuzione {
         let (Some(id), Some(p)) = (self.terminal_id, self.processo.as_mut()) else {
             return Vec::new();
         };
-        let mut risposte = Vec::new();
-        let mut lettori_finiti = false;
-        loop {
-            match p.uscita.try_recv() {
-                Ok(Uscita::Stdout(d)) => risposte.push(dati(id, d)),
-                Ok(Uscita::Stderr(d)) => risposte.push(dati(TERMINAL_ID_STDERR, d)),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    lettori_finiti = true;
-                    break;
-                }
-            }
-        }
-        if p.finito.is_none() && p.uscito() {
-            p.finito = Some((p.chiudi(), Instant::now()));
-        }
-        if let Some((codice, da)) = p.finito {
-            if lettori_finiti || da.elapsed() > ATTESA_OUTPUT {
-                self.processo = None;
-                self.chiusa = true;
-                risposte.push(risposta_chiusura(id, codice));
-            }
+        let (uscite, fine) = p.passo();
+        let mut risposte: Vec<_> = uscite
+            .into_iter()
+            .map(|u| match u {
+                Uscita::Stdout(d) => dati(id, d),
+                Uscita::Stderr(d) => dati(TERMINAL_ID_STDERR, d),
+            })
+            .collect();
+        if let Some(codice) = fine {
+            self.processo = None;
+            self.chiusa = true;
+            risposte.push(risposta_chiusura(id, codice));
         }
         risposte
+    }
+}
+
+#[cfg(windows)]
+fn avvia(script: Vec<u8>, token: Option<UserToken>, terminal_id: i32) -> anyhow::Result<Processo> {
+    match token {
+        Some(t) => helper::avvia(t, script, terminal_id),
+        None => Ok(Processo::avvia(script)?),
+    }
+}
+
+#[cfg(not(windows))]
+fn avvia(
+    script: Vec<u8>,
+    _token: Option<UserToken>,
+    _terminal_id: i32,
+) -> anyhow::Result<Processo> {
+    Ok(Processo::avvia(script)?)
+}
+
+/// L'argomento in piu' di `--terminal-helper` per il modo exec
+/// (`launch_terminal_helper_with_token`, src/server/terminal_helper.rs).
+pub const ARG_HELPER: &str = "exec";
+/// I messaggi della pipe dell'helper sono quelli di upstream
+/// (`encode_helper_message`: tipo u8, lunghezza u32 LE, dati). In exec lo
+/// stdout e lo script viaggiano come `MSG_TYPE_DATA`; questi due sono nuovi.
+/// La fine dello script e' un messaggio, non la chiusura della pipe: una
+/// pipe chiusa a meta' (servizio caduto) non deve far partire uno script
+/// troncato.
+pub const MSG_TYPE_FINE_SCRIPT: u8 = 0x10;
+pub const MSG_TYPE_STDERR: u8 = 0x11;
+/// `MSG_TYPE_DATA` di src/server/terminal_helper.rs (solo Windows).
+const MSG_TYPE_DATA: u8 = 0x01;
+#[cfg(windows)]
+const _: () = assert!(MSG_TYPE_DATA == crate::server::terminal_helper::MSG_TYPE_DATA);
+
+#[cfg(windows)]
+use crate::server::terminal_helper::encode_helper_message as codifica;
+
+/// Su Windows e' `encode_helper_message`; qui la stessa intestazione per i test.
+#[cfg(not(windows))]
+fn codifica(tipo: u8, dati: &[u8]) -> Vec<u8> {
+    let mut m = vec![tipo];
+    m.extend_from_slice(&(dati.len() as u32).to_le_bytes());
+    m.extend_from_slice(dati);
+    m
+}
+
+/// Decodifica i messaggi della pipe dell'helper, anche spezzati fra piu'
+/// letture. Un tipo fuori da `tipi` o una lunghezza oltre [`MASSIMO_SCRIPT`]
+/// sono un errore: la pipe non e' piu' leggibile.
+#[derive(Default)]
+pub struct Decodifica {
+    buf: Vec<u8>,
+}
+
+impl Decodifica {
+    pub fn aggiungi(&mut self, dati: &[u8], tipi: &[u8]) -> Result<Vec<(u8, Vec<u8>)>, String> {
+        self.buf.extend_from_slice(dati);
+        let mut messaggi = Vec::new();
+        while self.buf.len() >= 5 {
+            let tipo = self.buf[0];
+            let n =
+                u32::from_le_bytes([self.buf[1], self.buf[2], self.buf[3], self.buf[4]]) as usize;
+            if !tipi.contains(&tipo) {
+                return Err(format!("tipo sconosciuto {:#04x}", tipo));
+            }
+            if n > MASSIMO_SCRIPT {
+                return Err(format!("messaggio di {} byte, oltre il limite", n));
+            }
+            if self.buf.len() < 5 + n {
+                break;
+            }
+            let resto = self.buf.split_off(5 + n);
+            messaggi.push((tipo, self.buf.split_off(5)));
+            self.buf = resto;
+        }
+        Ok(messaggi)
+    }
+}
+
+/// Nell'helper: lo script dalla pipe d'ingresso, fino a [`MSG_TYPE_FINE_SCRIPT`].
+/// `None` se la pipe si chiude prima, se e' illeggibile o se lo script
+/// supera [`MASSIMO_SCRIPT`]: allora non si esegue niente.
+pub fn ricevi_script<R: Read>(ingresso: &mut R) -> Option<Vec<u8>> {
+    let (mut d, mut script, mut buf) = (Decodifica::default(), Vec::new(), [0u8; 4096]);
+    loop {
+        let n = match ingresso.read(&mut buf) {
+            Ok(0) => return None,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                log::warn!("exec: lettura dello script non riuscita: {}", e);
+                return None;
+            }
+        };
+        let messaggi = match d.aggiungi(&buf[..n], &[MSG_TYPE_DATA, MSG_TYPE_FINE_SCRIPT]) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("exec: pipe dello script: {}", e);
+                return None;
+            }
+        };
+        for (tipo, dati) in messaggi {
+            if tipo == MSG_TYPE_FINE_SCRIPT {
+                return Some(script);
+            }
+            // Un blocco vuoto non c'e': `aggiungi` lo leggerebbe come la fine.
+            if !dati.is_empty() && aggiungi(&mut script, &dati) == Blocco::TroppoGrande {
+                return None;
+            }
+        }
+    }
+}
+
+/// L'helper del terminale in modo exec (`run_terminal_helper`): niente
+/// ConPTY; riceve lo script, lo esegue con [`Processo`] (Job object
+/// compreso) e manda stdout e stderr sulla pipe d'uscita con l'intestazione
+/// di upstream. Il valore e' il codice con cui esce l'helper.
+pub fn helper<R: Read, W: Write>(mut ingresso: R, mut uscita: W) -> i32 {
+    let Some(script) = ricevi_script(&mut ingresso) else {
+        return HELPER_NON_PARTITO;
+    };
+    let mut p = match Processo::avvia(script) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("exec: lo script non e' partito: {}", e);
+            return HELPER_NON_PARTITO;
+        }
+    };
+    loop {
+        let (uscite, fine) = p.passo();
+        for u in uscite {
+            let m = match u {
+                Uscita::Stdout(d) => codifica(MSG_TYPE_DATA, &d),
+                Uscita::Stderr(d) => codifica(MSG_TYPE_STDERR, &d),
+            };
+            if let Err(e) = uscita.write_all(&m).and_then(|_| uscita.flush()) {
+                // Il servizio non legge piu': il Drop di `p` chiude lo script.
+                log::warn!("exec: scrittura dell'output non riuscita: {}", e);
+                return -1;
+            }
+        }
+        if let Some(codice) = fine {
+            return codice;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Nel servizio, con il token dell'utente: lo script va all'helper di
+/// upstream, che `launch_terminal_helper_with_token` avvia come l'utente
+/// della console, con le pipe a DACL ristretta. Questo modulo non crea
+/// processi ne' tocca token: usa le funzioni di upstream cosi' come sono.
+#[cfg(windows)]
+mod helper {
+    use super::*;
+    use crate::server::terminal_helper::{
+        create_named_pipe_server, is_helper_process_running, launch_terminal_helper_with_token,
+        wait_for_pipe_connection, OwnedHandle, SendableHandle, WinCloseHandle, WinTerminateProcess,
+        PIPE_CONNECTION_TIMEOUT_MS,
+    };
+
+    /// Il processo helper: chiuderlo (TerminateProcess) chiude il suo Job
+    /// object, che uccide lo script e i figli.
+    pub struct Helper(Option<SendableHandle>);
+
+    impl Helper {
+        pub fn uscito(&mut self) -> bool {
+            self.0
+                .as_ref()
+                .map_or(true, |h| !is_helper_process_running(h.as_raw()))
+        }
+
+        pub fn chiudi(&mut self) -> i32 {
+            let Some(h) = self.0.take() else {
+                return -1;
+            };
+            let h = h.as_raw();
+            unsafe {
+                // Gia' uscito: TerminateProcess fallisce e il codice resta.
+                let _ = WinTerminateProcess(h, 1);
+            }
+            let codice = crate::remotek::uscita_terminale::con_helper(-1, Some(h), 1000);
+            if let Err(e) = unsafe { WinCloseHandle(h) } {
+                log::warn!("exec: chiusura dell'handle dell'helper non riuscita: {}", e);
+            }
+            codice
+        }
+    }
+
+    impl Drop for Helper {
+        fn drop(&mut self) {
+            self.chiudi();
+        }
+    }
+
+    pub fn avvia(token: UserToken, script: Vec<u8>, terminal_id: i32) -> anyhow::Result<Processo> {
+        let id = uuid::Uuid::new_v4();
+        let nome_in = format!(r"\\.\pipe\rustdesk_term_in_{}", id);
+        let nome_out = format!(r"\\.\pipe\rustdesk_term_out_{}", id);
+        let pipe_in = OwnedHandle::new(create_named_pipe_server(&nome_in, false, token)?);
+        let pipe_out = OwnedHandle::new(create_named_pipe_server(&nome_out, true, token)?);
+        let info = launch_terminal_helper_with_token(
+            token,
+            &nome_in,
+            &nome_out,
+            terminal_id,
+            24,
+            80,
+            true,
+        )?;
+        // Da qui il Drop chiude l'helper, anche se i passi sotto falliscono.
+        let helper = Helper(Some(SendableHandle::new(info.handle)));
+        let mut ingresso = wait_for_pipe_connection(pipe_in, &nome_in, PIPE_CONNECTION_TIMEOUT_MS)?;
+        let mut uscita = wait_for_pipe_connection(pipe_out, &nome_out, PIPE_CONNECTION_TIMEOUT_MS)?;
+        thread::spawn(move || {
+            let mut m = Vec::with_capacity(script.len() + 16);
+            m.extend(codifica(MSG_TYPE_DATA, &script));
+            m.extend(codifica(MSG_TYPE_FINE_SCRIPT, &[]));
+            if let Err(e) = ingresso.write_all(&m).and_then(|_| ingresso.flush()) {
+                log::warn!(
+                    "exec: scrittura dello script all'helper non riuscita: {}",
+                    e
+                );
+            }
+        });
+        let (tx, rx) = sync_channel(64);
+        thread::spawn(move || {
+            let (mut d, mut buf) = (Decodifica::default(), [0u8; 4096]);
+            loop {
+                let n = match uscita.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) => {
+                        log::warn!("exec: lettura dall'helper non riuscita: {}", e);
+                        break;
+                    }
+                };
+                let messaggi = match d.aggiungi(&buf[..n], &[MSG_TYPE_DATA, MSG_TYPE_STDERR]) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::warn!("exec: pipe dell'helper: {}", e);
+                        break;
+                    }
+                };
+                for (tipo, dati) in messaggi {
+                    let u = if tipo == MSG_TYPE_STDERR {
+                        Uscita::Stderr(dati)
+                    } else {
+                        Uscita::Stdout(dati)
+                    };
+                    if tx.send(u).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        let figlio = Figlio::Helper(helper);
+        Ok(Processo {
+            figlio,
+            uscita: rx,
+            finito: None,
+        })
     }
 }
 
@@ -522,18 +830,20 @@ pub(crate) mod tests {
 
     #[test]
     fn script_in_piu_blocchi_con_flussi_separati_e_codice() {
-        let mut e = Esecuzione::nuova(false);
-        let r = e.azione(&apri(1)).expect("aperto");
+        let mut e = Esecuzione::nuova();
+        let r = e.azione(&apri(1), None).expect("aperto");
         assert!(
             matches!(r.union, Some(terminal_response::Union::Opened(ref o)) if o.success && o.message == APERTO)
         );
-        assert!(e.azione(&manda(1, b"echo fuori; ec")).is_none());
-        assert!(e.azione(&manda(1, b"ho dentro >&2; exit 7\n")).is_none());
+        assert!(e.azione(&manda(1, b"echo fuori; ec"), None).is_none());
+        assert!(e
+            .azione(&manda(1, b"ho dentro >&2; exit 7\n"), None)
+            .is_none());
         assert!(
             e.leggi().is_empty(),
             "non parte prima della fine dello script"
         );
-        assert!(e.azione(&manda(1, b"")).is_none());
+        assert!(e.azione(&manda(1, b""), None).is_none());
         assert_eq!(
             esito(&mut e),
             (b"fuori\n".to_vec(), b"dentro\n".to_vec(), Some(7))
@@ -543,17 +853,17 @@ pub(crate) mod tests {
     #[test]
     fn oltre_un_mib_rifiutato_senza_esecuzione() {
         let segno = std::env::temp_dir().join(format!("remotek-exec-{}", std::process::id()));
-        let mut e = Esecuzione::nuova(false);
-        e.azione(&apri(1));
+        let mut e = Esecuzione::nuova();
+        e.azione(&apri(1), None);
         let primo = format!("touch {}\n", segno.display());
-        assert!(e.azione(&manda(1, primo.as_bytes())).is_none());
+        assert!(e.azione(&manda(1, primo.as_bytes()), None).is_none());
         let r = e
-            .azione(&manda(1, &vec![b'#'; MASSIMO_SCRIPT]))
+            .azione(&manda(1, &vec![b'#'; MASSIMO_SCRIPT]), None)
             .expect("errore");
         assert!(
             matches!(r.union, Some(terminal_response::Union::Error(ref x)) if x.message == TROPPO_GRANDE)
         );
-        assert!(e.azione(&manda(1, b"")).is_none());
+        assert!(e.azione(&manda(1, b""), None).is_none());
         thread::sleep(Duration::from_millis(200));
         assert!(e.leggi().is_empty());
         assert!(!segno.exists());
@@ -564,10 +874,10 @@ pub(crate) mod tests {
 
     #[test]
     fn chiusura_uccide_anche_un_figlio() {
-        let mut e = Esecuzione::nuova(false);
-        e.azione(&apri(1));
-        e.azione(&manda(1, b"sleep 300 & echo $!; wait\n"));
-        e.azione(&manda(1, b""));
+        let mut e = Esecuzione::nuova();
+        e.azione(&apri(1), None);
+        e.azione(&manda(1, b"sleep 300 & echo $!; wait\n"), None);
+        e.azione(&manda(1, b""), None);
         let mut pid = Vec::new();
         let inizio = Instant::now();
         while !pid.ends_with(b"\n") && inizio.elapsed() < Duration::from_secs(10) {
@@ -587,7 +897,7 @@ pub(crate) mod tests {
             terminal_id: 1,
             ..Default::default()
         });
-        let r = e.azione(&chiudi).expect("chiuso");
+        let r = e.azione(&chiudi, None).expect("chiuso");
         assert!(
             matches!(r.union, Some(terminal_response::Union::Closed(ref c)) if c.exit_code == -1)
         );
@@ -599,5 +909,67 @@ pub(crate) mod tests {
             "figlio vivo: {}",
             stato
         );
+    }
+
+    #[test]
+    fn decodifica_blocchi_spezzati_tipo_sconosciuto_e_lunghezza() {
+        let tipi = [MSG_TYPE_DATA, MSG_TYPE_STDERR];
+        let mut tutto = codifica(MSG_TYPE_DATA, b"ciao");
+        tutto.extend(codifica(MSG_TYPE_STDERR, b""));
+        let mut d = Decodifica::default();
+        let mut visti = Vec::new();
+        for byte in tutto.chunks(3) {
+            visti.extend(d.aggiungi(byte, &tipi).expect("valido"));
+        }
+        assert_eq!(
+            visti,
+            vec![(MSG_TYPE_DATA, b"ciao".to_vec()), (MSG_TYPE_STDERR, vec![])]
+        );
+        let err = Decodifica::default().aggiungi(&codifica(0x02, b"xy"), &tipi);
+        assert!(err.is_err());
+        let mut lungo = vec![MSG_TYPE_DATA];
+        lungo.extend_from_slice(&(MASSIMO_SCRIPT as u32 + 1).to_le_bytes());
+        assert!(Decodifica::default().aggiungi(&lungo, &tipi).is_err());
+    }
+
+    #[test]
+    fn ricevi_script_solo_con_la_fine() {
+        let mut m = codifica(MSG_TYPE_DATA, b"echo ");
+        m.extend(codifica(MSG_TYPE_DATA, b"ok"));
+        assert_eq!(
+            ricevi_script(&mut m.as_slice()),
+            None,
+            "pipe chiusa prima della fine"
+        );
+        m.extend(codifica(MSG_TYPE_FINE_SCRIPT, b""));
+        assert_eq!(ricevi_script(&mut m.as_slice()), Some(b"echo ok".to_vec()));
+        let mut grande = codifica(MSG_TYPE_DATA, &vec![b'#'; MASSIMO_SCRIPT]);
+        grande.extend(codifica(MSG_TYPE_DATA, b"x"));
+        grande.extend(codifica(MSG_TYPE_FINE_SCRIPT, b""));
+        assert_eq!(ricevi_script(&mut grande.as_slice()), None);
+    }
+
+    #[test]
+    fn helper_manda_i_due_flussi_ed_esce_col_codice() {
+        let mut m = codifica(MSG_TYPE_DATA, b"echo o; echo e >&2; exit 4\n");
+        m.extend(codifica(MSG_TYPE_FINE_SCRIPT, b""));
+        let mut uscita = Vec::new();
+        assert_eq!(helper(m.as_slice(), &mut uscita), 4);
+        let mut d = Decodifica::default();
+        let mut visti = d
+            .aggiungi(&uscita, &[MSG_TYPE_DATA, MSG_TYPE_STDERR])
+            .expect("valido");
+        visti.sort();
+        assert_eq!(
+            visti,
+            vec![
+                (MSG_TYPE_DATA, b"o\n".to_vec()),
+                (MSG_TYPE_STDERR, b"e\n".to_vec())
+            ]
+        );
+        let mut niente = Vec::new();
+        let troncato = codifica(MSG_TYPE_DATA, b"touch /nonesiste\n");
+        assert_eq!(helper(troncato.as_slice(), &mut niente), HELPER_NON_PARTITO);
+        assert!(niente.is_empty());
     }
 }

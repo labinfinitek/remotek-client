@@ -30,6 +30,12 @@ rilasciate non si riscrivono.
   con Remotek non installato e dice cosa fare: rilanciare con
   `--amministratore` (il PC accetta l'agente solo come amministratore), o
   senza (li' l'amministratore non c'e'). Non rilancia da solo.
+- **Per l'agente AI**: col lasciapassare di exec il PC esegue uno script
+  intero senza pseudo-console e ne rimanda stdout, stderr e codice d'uscita
+  separati (ADR-0033). Consenso, lasciapassare, trascrizione e utente sono
+  quelli del terminale; alla chiusura muoiono anche i processi lanciati dallo
+  script. Sul PC Windows installato, dove il terminale gira con l'utente
+  della console, exec non parte ancora.
 
 ### Corretto
 - Su quel PC il terminale senza lasciapassare da amministratore si rifiutava

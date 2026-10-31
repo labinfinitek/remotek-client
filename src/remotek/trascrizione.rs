@@ -604,6 +604,54 @@ mod tests {
         assert!(v[0].get("id").is_some() && v[0].get("uuid").is_some());
     }
 
+    #[test]
+    fn exec_passa_come_il_terminale() {
+        use crate::remotek::exec::{tests::*, Esecuzione, TERMINAL_ID_STDERR};
+        let c = cartella_di_prova("exec");
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx_cm, _rx_cm) = mpsc::unbounded_channel();
+        let mut t = Some(Trascrizione::nuova(7, String::new(), &tx, Some(c.clone()), None));
+        let mut e = Esecuzione::nuova(false);
+        for azione in [apri(1), manda(1, b"echo o; echo e >&2\n"), manda(1, b"")] {
+            ingresso(&mut t, 7, &tx, &tx_cm, &azione);
+            e.azione(&azione);
+        }
+        let inizio = Instant::now();
+        while !rx_tutto(&mut t, &mut e) && inizio.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut t = t.expect("trascrizione");
+        t.chiudi();
+        t.file = None;
+        if let Some(h) = t.scrittore.take() {
+            h.join().expect("thread del file");
+        }
+        let file = fs::read_dir(&c).expect("cartella").flatten().next().expect("file");
+        let v: Vec<String> = fs::read_to_string(file.path())
+            .expect("file")
+            .lines()
+            .map(|r| serde_json::from_str::<Value>(r).expect("json"))
+            .map(|b| format!("{} {} {}", b["dir"], b["terminal_id"], b["data"]))
+            .collect();
+        assert_eq!(v[0], r#""in" 1 "ZWNobyBvOyBlY2hvIGUgPiYyCg==""#);
+        assert!(v.contains(&r#""out" 1 "bwo=""#.to_owned()));
+        assert!(v.contains(&format!(r#""out" {} "ZQo=""#, TERMINAL_ID_STDERR)));
+        drop(t);
+        fs::remove_dir_all(&c).ok();
+    }
+
+    /// Le risposte di exec passano da `uscita`, come quelle del terminale.
+    fn rx_tutto(t: &mut Option<Trascrizione>, e: &mut crate::remotek::exec::Esecuzione) -> bool {
+        let mut chiuso = false;
+        for r in e.leggi() {
+            chiuso |= matches!(r.union, Some(terminal_response::Union::Closed(_)));
+            let mut msg = Message::new();
+            msg.set_terminal_response(r);
+            uscita(t, &msg);
+        }
+        chiuso
+    }
+
     #[tokio::test]
     async fn solo_l_uscita_va_al_cm() {
         let (tx, _rx) = mpsc::unbounded_channel();

@@ -6041,13 +6041,16 @@ impl Connection {
             log::error!("Terminal user token is not set.");
             return;
         };
-        if self.terminal_service_id.is_empty() {
+        // Remotek: exec in un servizio nuovo, mai persistente (src/remotek/exec.rs).
+        let exec = crate::remotek::lasciapassare::exec(self.lasciapassare.as_ref());
+        if self.terminal_service_id.is_empty() || exec {
             self.terminal_service_id = terminal_service::generate_service_id();
         }
         let s = Box::new(terminal_service::new(
             self.terminal_service_id.clone(),
             self.terminal_persistent,
             user_token.to_terminal_service_token(),
+            exec,
         ));
         s.on_subscribe(self.inner.clone());
         self.terminal_generic_service = Some(s);

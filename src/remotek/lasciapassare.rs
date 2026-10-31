@@ -86,7 +86,9 @@ pub fn terminale_amministratore(valido: Option<&Valido>) -> bool {
     valido.is_some_and(|v| v.modo == Modo::Amministratore && v.capacita == Capacita::Terminale)
 }
 
-/// Il lasciapassare della connessione e' di exec (src/remotek/exec.rs).
+/// Il lasciapassare della connessione e' di exec: `init_terminal_service`
+/// (src/server/connection.rs) apre il servizio del terminale senza
+/// pseudo-console, con lo script di src/remotek/exec.rs.
 pub fn exec(valido: Option<&Valido>) -> bool {
     valido.is_some_and(|v| v.capacita == Capacita::Exec)
 }

@@ -391,8 +391,10 @@ impl Trascrizione {
     /// Exec non ha eco: lo script completo va alla vista prima che parta (e
     /// quindi prima del suo output, che passa dallo stesso canale). La
     /// trascrizione resta quella di `dati`.
-    fn script_alla_vista(&mut self, terminal_id: i32, dati: &[u8], lingua: Lingua) {
-        if let (Some(v), Some(testo)) = (self.vista.as_ref(), self.script.aggiungi(dati, lingua)) {
+    fn script_alla_vista(&mut self, azione: &TerminalAction, lingua: Lingua) {
+        if let (Some(v), Some((terminal_id, testo))) =
+            (self.vista.as_ref(), self.script.azione(azione, lingua))
+        {
             v.uscita(terminal_id, &testo);
         }
     }
@@ -448,10 +450,10 @@ pub fn ingresso(
     });
     if let Some(terminal_action::Union::Data(d)) = &azione.union {
         t.dati(Dir::In, d.terminal_id, &d.data);
-        if exec {
-            let lingua = super::scelta_terminale::lingua_del_cm();
-            t.script_alla_vista(d.terminal_id, &d.data, lingua);
-        }
+    }
+    if exec {
+        let lingua = super::scelta_terminale::lingua_del_cm();
+        t.script_alla_vista(azione, lingua);
     }
 }
 
@@ -670,29 +672,71 @@ mod tests {
         chiuso
     }
 
+    /// La stessa sequenza, con tre esche, va a `ingresso` (con la vista) e a
+    /// `Esecuzione::azione`: la vista mostra esattamente lo script eseguito,
+    /// poi il suo output. Senza exec la vista ha solo l'output.
     #[tokio::test]
-    async fn exec_mostra_lo_script_prima_dell_output_il_terminale_no() {
+    async fn la_vista_mostra_lo_script_che_parte_e_il_terminale_no() {
+        use crate::remotek::exec::{tests::*, Esecuzione};
+        let mut chiudi = TerminalAction::new();
+        chiudi.set_close(CloseTerminal {
+            terminal_id: 1,
+            ..Default::default()
+        });
+        let sequenza = [
+            manda(1, b"echo esca1\n"), // prima dell'Open
+            manda(1, b""),
+            apri(1),
+            manda(2, b"echo esca2\n"), // un altro terminale
+            manda(2, b""),
+            manda(1, b"echo a\n"),
+            manda(2, b""), // un vuoto di un altro terminale a meta' script
+            manda(1, b"echo b\n"),
+            manda(1, b""),
+            manda(1, b"echo dopo\n"), // dopo la fine
+            chiudi,
+        ];
         for exec in [true, false] {
             let (tx, _rx) = mpsc::unbounded_channel();
             let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
-            let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm);
-            let mut t = Trascrizione::nuova(7, String::new(), &tx, None, Some(vista));
-            for d in [&b"Get-"[..], b"Date", b""] {
-                t.dati(Dir::In, 1, d);
-                if exec {
-                    t.script_alla_vista(1, d, Lingua::Inglese);
+            let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm.clone());
+            let mut t = Some(Trascrizione::nuova(
+                7,
+                String::new(),
+                &tx,
+                None,
+                Some(vista),
+            ));
+            let mut e = Esecuzione::nuova();
+            for (k, a) in sequenza.iter().enumerate() {
+                ingresso(&mut t, 7, &tx, &tx_cm, a, exec);
+                // La chiusura solo dopo l'output: va a `Esecuzione` alla fine.
+                if k + 1 < sequenza.len() {
+                    e.azione(a, None);
                 }
             }
-            t.dati(Dir::Out, 1, b"ok");
+            let inizio = Instant::now();
+            while !rx_tutto(&mut t, &mut e) && inizio.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             drop(t);
+            drop(tx_cm);
             let mut visto = Vec::new();
             while let Some(crate::ipc::Data::FileTransferLog((_, testo))) = rx_cm.recv().await {
                 let v: Value = serde_json::from_str(&testo).expect("json");
                 visto.extend(crate::decode64(v["data"].as_str().unwrap_or("")).expect("base64"));
             }
-            let visto = String::from_utf8_lossy(&visto).into_owned();
-            let atteso = "\r\n---- agent script ----\r\nGet-Date\r\n---- end of script ----\r\nok";
-            assert_eq!(visto, if exec { atteso } else { "ok" });
+            let lingua = crate::remotek::scelta_terminale::lingua_del_cm();
+            let mut atteso = if exec {
+                crate::remotek::vista_cm::tests::testo(b"echo a\necho b\n", lingua)
+            } else {
+                Vec::new()
+            };
+            atteso.extend_from_slice(b"a\nb\n");
+            assert_eq!(
+                String::from_utf8_lossy(&visto),
+                String::from_utf8_lossy(&atteso)
+            );
         }
     }
 

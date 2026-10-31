@@ -39,6 +39,8 @@
 //! stdout e stderr dal `terminal_id`; verso l'API, che oggi non riceve il
 //! `terminal_id`, sono tutti e due `out`, nell'ordine di arrivo.
 
+pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT};
+use super::script_exec::{Passo, Raccolta};
 use super::uscita_terminale::{risposta_chiusura, HELPER_NON_PARTITO};
 use crate::server::terminal_service::UserToken;
 use hbb_common::message_proto::{
@@ -58,8 +60,6 @@ pub const APERTO: &str = "remotek-exec";
 /// Il `terminal_id` di stderr. Il client Flutter numera i terminali da 1 in
 /// su (`_nextTerminalId` di flutter/lib/desktop/pages/terminal_tab_page.dart).
 pub const TERMINAL_ID_STDERR: i32 = -2;
-/// Lo script piu' grande che si accetta: 1 MiB.
-pub const MASSIMO_SCRIPT: usize = 1024 * 1024;
 /// Il messaggio del `TerminalError` per uno script oltre [`MASSIMO_SCRIPT`].
 pub const TROPPO_GRANDE: &str = "lo script supera 1 MiB: non eseguito";
 /// Finito lo script, quanto si aspetta ancora l'output gia' scritto.
@@ -72,25 +72,6 @@ const ATTESA_OUTPUT: Duration = Duration::from_secs(2);
 const COMANDO_POWERSHELL: &str = "$u = New-Object System.Text.UTF8Encoding $false; \
 [Console]::InputEncoding = $u; [Console]::OutputEncoding = $u; $OutputEncoding = $u; \
 & ([scriptblock]::Create([Console]::In.ReadToEnd()))";
-
-#[derive(Debug, PartialEq)]
-pub enum Blocco {
-    Continua,
-    Completo,
-    TroppoGrande,
-}
-
-/// Un `TerminalData` dello script: vuoto e' la fine.
-pub fn aggiungi(script: &mut Vec<u8>, dati: &[u8]) -> Blocco {
-    if dati.is_empty() {
-        Blocco::Completo
-    } else if script.len() + dati.len() > MASSIMO_SCRIPT {
-        Blocco::TroppoGrande
-    } else {
-        script.extend_from_slice(dati);
-        Blocco::Continua
-    }
-}
 
 /// Il codice d'uscita; ucciso da un segnale: 128 + il segnale, come le shell.
 fn codice(stato: ExitStatus) -> i32 {
@@ -388,10 +369,11 @@ impl Drop for Processo {
     }
 }
 
-/// Una sessione di exec nel servizio del terminale: un solo script.
+/// Una sessione di exec nel servizio del terminale: un solo script. Quali
+/// azioni fanno parte dello script lo decide `script_exec::Raccolta`, la
+/// stessa regola della vista del cliente.
 pub struct Esecuzione {
-    terminal_id: Option<i32>,
-    script: Vec<u8>,
+    raccolta: Raccolta,
     processo: Option<Processo>,
     chiusa: bool,
 }
@@ -419,8 +401,7 @@ fn dati(terminal_id: i32, data: Vec<u8>) -> TerminalResponse {
 impl Esecuzione {
     pub fn nuova() -> Self {
         Self {
-            terminal_id: None,
-            script: Vec::new(),
+            raccolta: Raccolta::default(),
             processo: None,
             chiusa: false,
         }
@@ -434,53 +415,37 @@ impl Esecuzione {
         azione: &TerminalAction,
         token: Option<UserToken>,
     ) -> Option<TerminalResponse> {
-        match &azione.union {
-            Some(terminal_action::Union::Open(o)) => {
-                if self.terminal_id.is_some() {
-                    return Some(errore(
-                        o.terminal_id,
-                        "exec: un solo script per connessione",
-                    ));
-                }
-                self.terminal_id = Some(o.terminal_id);
+        match self.raccolta.azione(azione) {
+            Passo::Aperto(terminal_id) => {
                 let mut r = TerminalResponse::new();
                 r.set_opened(TerminalOpened {
-                    terminal_id: o.terminal_id,
+                    terminal_id,
                     success: true,
                     message: APERTO.to_owned(),
                     ..Default::default()
                 });
                 Some(r)
             }
-            Some(terminal_action::Union::Data(d)) => {
-                if self.terminal_id != Some(d.terminal_id) || self.processo.is_some() || self.chiusa
-                {
-                    log::warn!("exec: dati ignorati per il terminale {}", d.terminal_id);
-                    return None;
-                }
-                match aggiungi(&mut self.script, &d.data) {
-                    Blocco::Continua => None,
-                    Blocco::TroppoGrande => {
-                        self.chiusa = true;
-                        self.script = Vec::new();
-                        Some(errore(d.terminal_id, TROPPO_GRANDE))
-                    }
-                    Blocco::Completo => {
-                        match avvia(std::mem::take(&mut self.script), token, d.terminal_id) {
-                            Ok(p) => {
-                                self.processo = Some(p);
-                                None
-                            }
-                            Err(e) => {
-                                log::warn!("exec: lo script non e' partito: {}", e);
-                                self.chiusa = true;
-                                Some(risposta_chiusura(d.terminal_id, HELPER_NON_PARTITO))
-                            }
-                        }
-                    }
-                }
+            Passo::AltroOpen(terminal_id) => {
+                Some(errore(terminal_id, "exec: un solo script per connessione"))
             }
-            Some(terminal_action::Union::Close(c)) if self.terminal_id == Some(c.terminal_id) => {
+            Passo::Pezzo => None,
+            Passo::TroppoGrande(terminal_id) => {
+                self.chiusa = true;
+                Some(errore(terminal_id, TROPPO_GRANDE))
+            }
+            Passo::Completo(terminal_id, script) => match avvia(script, token, terminal_id) {
+                Ok(p) => {
+                    self.processo = Some(p);
+                    None
+                }
+                Err(e) => {
+                    log::warn!("exec: lo script non e' partito: {}", e);
+                    self.chiusa = true;
+                    Some(risposta_chiusura(terminal_id, HELPER_NON_PARTITO))
+                }
+            },
+            Passo::Chiuso(terminal_id) => {
                 if self.chiusa {
                     return None;
                 }
@@ -488,15 +453,20 @@ impl Esecuzione {
                 // -1: chiusura forzata, come il terminale (`handle_close`).
                 // Il Drop del processo uccide lo script e i figli.
                 self.processo = None;
-                Some(risposta_chiusura(c.terminal_id, -1))
+                Some(risposta_chiusura(terminal_id, -1))
             }
-            _ => None,
+            Passo::Scartata => {
+                if let Some(terminal_action::Union::Data(d)) = &azione.union {
+                    log::warn!("exec: dati ignorati per il terminale {}", d.terminal_id);
+                }
+                None
+            }
         }
     }
 
     /// Le risposte pronte: l'output, e alla fine la chiusura col codice.
     pub fn leggi(&mut self) -> Vec<TerminalResponse> {
-        let (Some(id), Some(p)) = (self.terminal_id, self.processo.as_mut()) else {
+        let (Some(id), Some(p)) = (self.raccolta.terminal_id(), self.processo.as_mut()) else {
             return Vec::new();
         };
         let (uscite, fine) = p.passo();

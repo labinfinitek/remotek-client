@@ -16,7 +16,9 @@
 //! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
 use super::scelta_terminale::Lingua;
+use super::script_exec::{Passo, Raccolta};
 use crate::ipc::Data;
+use hbb_common::message_proto::TerminalAction;
 use hbb_common::tokio::{
     self,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -56,35 +58,25 @@ impl Vista {
     }
 }
 
-/// Lo stesso limite di `exec::MASSIMO_SCRIPT`: uno script piu' grande non
-/// parte, e non si mostra.
-const SCRIPT_MAX: usize = 1024 * 1024;
-
-/// Lo script di una sessione di exec, raccolto per la vista dai `TerminalData`
-/// che arrivano da chi controlla, fino a quello vuoto (la fine).
+/// Lo script di una sessione di exec per la vista. Quali azioni ne fanno
+/// parte lo decide `script_exec::Raccolta`, la stessa regola di
+/// `exec::Esecuzione::azione`: la vista mostra lo script che parte, e uno
+/// script oltre 1 MiB, che non parte, non si mostra.
 #[derive(Default)]
 pub struct Script {
-    dati: Vec<u8>,
-    scartato: bool,
+    raccolta: Raccolta,
 }
 
 impl Script {
-    /// Il testo da mostrare al cliente quando lo script e' completo.
-    pub fn aggiungi(&mut self, dati: &[u8], lingua: Lingua) -> Option<Vec<u8>> {
-        if self.scartato {
-            return None;
-        }
-        if !dati.is_empty() {
-            if self.dati.len() + dati.len() > SCRIPT_MAX {
-                self.scartato = true;
-                self.dati = Vec::new();
-            } else {
-                self.dati.extend_from_slice(dati);
+    /// Il terminale e il testo da mostrare al cliente quando lo script e'
+    /// completo.
+    pub fn azione(&mut self, azione: &TerminalAction, lingua: Lingua) -> Option<(i32, Vec<u8>)> {
+        match self.raccolta.azione(azione) {
+            Passo::Completo(terminal_id, script) => {
+                Some((terminal_id, testo_script(&script, lingua)))
             }
-            return None;
+            _ => None,
         }
-        self.scartato = true; // Un solo script per sessione.
-        Some(testo_script(&std::mem::take(&mut self.dati), lingua))
     }
 }
 
@@ -215,8 +207,9 @@ async fn ciclo(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use hbb_common::message_proto::terminal_action;
     use serde_json::Value;
 
     #[test]
@@ -268,29 +261,79 @@ mod tests {
         assert_eq!(v["data"], crate::encode64(b"dir\r\nC:\\>"));
     }
 
+    /// `testo_script` per i test di trascrizione.rs.
+    pub(crate) fn testo(script: &[u8], lingua: Lingua) -> Vec<u8> {
+        testo_script(script, lingua)
+    }
+
+    fn azione(u: terminal_action::Union) -> TerminalAction {
+        let mut a = TerminalAction::new();
+        a.union = Some(u);
+        a
+    }
+
+    fn dati(id: i32, d: &[u8]) -> TerminalAction {
+        azione(terminal_action::Union::Data(
+            hbb_common::message_proto::TerminalData {
+                terminal_id: id,
+                data: d.to_vec().into(),
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn apri(id: i32) -> TerminalAction {
+        azione(terminal_action::Union::Open(
+            hbb_common::message_proto::OpenTerminal {
+                terminal_id: id,
+                ..Default::default()
+            },
+        ))
+    }
+
     #[test]
     fn lo_script_intero_fra_inizio_e_fine() {
+        let it = Lingua::Italiano;
         let mut s = Script::default();
-        assert_eq!(s.aggiungi(b"echo a\n", Lingua::Italiano), None);
-        assert_eq!(s.aggiungi(b"echo b", Lingua::Italiano), None);
-        let t = s.aggiungi(b"", Lingua::Italiano).expect("testo");
+        assert_eq!(s.azione(&apri(1), it), None);
+        assert_eq!(s.azione(&dati(1, b"echo a\n"), it), None);
+        assert_eq!(s.azione(&dati(1, b"echo b"), it), None);
+        let (id, t) = s.azione(&dati(1, b""), it).expect("testo");
+        assert_eq!(id, 1);
         assert_eq!(
             String::from_utf8_lossy(&t),
             "\r\n---- script dell'agente ----\r\necho a\r\necho b\r\n---- fine dello script ----\r\n"
         );
-        assert_eq!(s.aggiungi(b"", Lingua::Italiano), None, "una volta sola");
-        let en = Script::default()
-            .aggiungi(b"", Lingua::Inglese)
-            .expect("testo");
-        assert!(String::from_utf8_lossy(&en).contains("---- agent script ----"));
+        assert_eq!(s.azione(&dati(1, b""), it), None, "una volta sola");
+        let mut en = Script::default();
+        en.azione(&apri(1), Lingua::Inglese);
+        let (_, t) = en.azione(&dati(1, b""), Lingua::Inglese).expect("testo");
+        assert!(String::from_utf8_lossy(&t).contains("---- agent script ----"));
         let mut grande = Script::default();
-        grande.aggiungi(&vec![b'#'; SCRIPT_MAX], Lingua::Italiano);
-        grande.aggiungi(b"x", Lingua::Italiano);
+        grande.azione(&apri(1), it);
+        grande.azione(
+            &dati(1, &vec![b'#'; super::super::script_exec::MASSIMO_SCRIPT]),
+            it,
+        );
+        grande.azione(&dati(1, b"x"), it);
         assert_eq!(
-            grande.aggiungi(b"", Lingua::Italiano),
+            grande.azione(&dati(1, b""), it),
             None,
             "non parte, non si mostra"
         );
+        let mut chiuso = Script::default();
+        chiuso.azione(&apri(1), it);
+        chiuso.azione(&dati(1, b"x"), it);
+        chiuso.azione(
+            &azione(terminal_action::Union::Close(
+                hbb_common::message_proto::CloseTerminal {
+                    terminal_id: 1,
+                    ..Default::default()
+                },
+            )),
+            it,
+        );
+        assert_eq!(chiuso.azione(&dati(1, b""), it), None, "chiuso: niente");
     }
 
     #[test]

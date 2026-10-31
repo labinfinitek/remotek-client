@@ -315,6 +315,16 @@ fn corpo_lasciapassare(id: &str) -> Value {
     json!({ "id": id })
 }
 
+/// Exec (ADR-0033): `capacita` = `exec` e, senza `--amministratore`, il modo
+/// `utente` (senza il campo l'API da' l'amministratore).
+fn corpo_lasciapassare_exec(id: &str, amministratore: bool) -> Value {
+    let mut corpo = json!({ "id": id, "capacita": "exec" });
+    if !amministratore {
+        corpo["modo"] = json!("utente");
+    }
+    corpo
+}
+
 /// La risposta di `POST /api/agente/lasciapassare`: la stringa, o il motivo
 /// che l'API scrive in `error` (PC fuori dalla rubrica, funzione spenta, ...).
 /// Un 401 e' l'accesso scaduto o revocato, come in [`verifica_accesso`].
@@ -334,15 +344,20 @@ fn esito_lasciapassare(r: &Risposta) -> Result<String, Rifiuto> {
 /// Il lasciapassare dell'API per il PC `id` (ADR-0028). Va solo nel login del
 /// terminale: mai su stdout, nel log o in un file.
 pub(super) async fn lasciapassare(id: &str) -> Result<String, String> {
-    lasciapassare_su(&api()?, id).await
+    lasciapassare_su(&api()?, corpo_lasciapassare(id)).await
 }
 
-async fn lasciapassare_su(api: &str, id: &str) -> Result<String, String> {
+/// Il lasciapassare di exec per il PC `id`, col modo di `amministratore`.
+pub(super) async fn lasciapassare_exec(id: &str, amministratore: bool) -> Result<String, String> {
+    lasciapassare_su(&api()?, corpo_lasciapassare_exec(id, amministratore)).await
+}
+
+async fn lasciapassare_su(api: &str, corpo: Value) -> Result<String, String> {
     let token = LocalConfig::get_option("access_token");
     let r = richiesta(
         format!("{api}/api/agente/lasciapassare"),
         Method::POST,
-        Some(corpo_lasciapassare(id).to_string()),
+        Some(corpo.to_string()),
         Some(&token),
     )
     .await?;
@@ -498,6 +513,14 @@ mod tests {
     fn richiesta_e_risposta_del_lasciapassare() {
         assert_eq!(corpo_lasciapassare("123456789"), json!({"id": "123456789"}));
         assert_eq!(
+            corpo_lasciapassare_exec("123456789", false),
+            json!({"id": "123456789", "capacita": "exec", "modo": "utente"})
+        );
+        assert_eq!(
+            corpo_lasciapassare_exec("123456789", true),
+            json!({"id": "123456789", "capacita": "exec"})
+        );
+        assert_eq!(
             esito_lasciapassare(&risposta(200, r#"{"lasciapassare":"pay.firma"}"#)),
             Ok("pay.firma".to_owned())
         );
@@ -620,7 +643,7 @@ mod tests {
                 401,
                 r#"{"error":"Invalid token"}"#,
             )],
-            |url| async move { lasciapassare_su(&url, "123456789").await },
+            |url| async move { lasciapassare_su(&url, corpo_lasciapassare("123456789")).await },
         );
         assert_eq!(esito, Err(ACCESSO_SCADUTO.to_owned()));
         assert_eq!(chieste, ["/api/agente/lasciapassare"]);
@@ -632,7 +655,7 @@ mod tests {
                 400,
                 r#"{"error":"funzione spenta"}"#,
             )],
-            |url| async move { lasciapassare_su(&url, "123456789").await },
+            |url| async move { lasciapassare_su(&url, corpo_lasciapassare("123456789")).await },
         );
         assert_eq!(
             esito,

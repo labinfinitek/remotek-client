@@ -39,6 +39,11 @@ rilasciate non si riscrivono.
   lo script, intero e prima del suo output, fra una riga d'inizio e una di
   fine: exec non ha l'eco della shell che col terminale mostra i comandi
   (ADR-0021, regola 6). Col terminale non cambia niente.
+- **Per l'agente AI**: `remotek-cli exec <ID>` esegue sul PC lo script letto
+  da stdin (al massimo 1 MiB) e rimanda stdout e stderr separati, uscendo col
+  codice dello script; da utente o con `--amministratore`, sempre col
+  lasciapassare di exec e il clic del cliente. Con un PC che non conosce exec
+  si ferma senza mandare niente (ADR-0033).
 
 ### Corretto
 - Su quel PC il terminale senza lasciapassare da amministratore si rifiutava

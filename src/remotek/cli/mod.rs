@@ -23,6 +23,16 @@ const USO: &str = "uso:
                                terminale non e' partito sul PC (lo dice anche su stderr);
                                la fine di stdin chiude subito il terminale e la shell: per il
                                codice della shell si manda `exit` e si tiene stdin aperto
+  remotek-cli exec <ID> [--amministratore] [--attesa <secondi>]
+                               esegue sul PC lo script letto da stdin (tutto, prima di
+                               collegarsi; al massimo 1 MiB, altrimenti esce con 2) senza
+                               pseudo-console: PowerShell su Windows, sh su Linux; chiede
+                               sempre all'API un lasciapassare di exec, da utente o con
+                               --amministratore, e il cliente deve accettare; stdout e stderr
+                               del PC su stdout e stderr; esce col codice dello script, con le
+                               regole di terminal (fuori da 0-255: 255; 125 se non partito);
+                               il cliente vede lo script intero nel suo connection manager
+                               prima che parta: niente segreti nel testo dello script
 il CLI ha una cartella di configurazione sua (account, ID e chiavi), separata da quella
 del client grafico dello stesso utente;
 su Windows stdin e stdout vanno rediretti (pipe o file): su una console i byte non UTF-8
@@ -47,6 +57,11 @@ enum Comando {
         attesa: u64,
         righe: u32,
         colonne: u32,
+        amministratore: bool,
+    },
+    Exec {
+        id: String,
+        attesa: u64,
         amministratore: bool,
     },
     Aiuto,
@@ -102,6 +117,24 @@ fn leggi_argomenti(args: &[String]) -> Result<Comando, String> {
         ["logout"] => Ok(Comando::Logout),
         ["whoami"] => Ok(Comando::Whoami),
         ["terminal", id, opzioni @ ..] => leggi_terminale(id, opzioni),
+        // Le opzioni di terminal, senza righe e colonne.
+        ["exec", id, opzioni @ ..]
+            if !opzioni.iter().any(|o| *o == "--righe" || *o == "--colonne") =>
+        {
+            match leggi_terminale(id, opzioni)? {
+                Comando::Terminale {
+                    id,
+                    attesa,
+                    amministratore,
+                    ..
+                } => Ok(Comando::Exec {
+                    id,
+                    attesa,
+                    amministratore,
+                }),
+                _ => Err("argomenti non validi".to_owned()),
+            }
+        }
         [] => Err("manca il comando".to_owned()),
         // Gli argomenti non si ripetono: potrebbero contenere una password.
         _ => Err("argomenti non validi".to_owned()),
@@ -194,6 +227,35 @@ fn avvia(argomenti: impl Iterator<Item = std::ffi::OsString>) -> i32 {
                     let chiedi =
                         amministratore.then_some(|| nel_runtime(account::lasciapassare(&id)));
                     terminale::terminale(&id, attesa, righe, colonne, chiedi)
+                },
+            );
+            return match esito {
+                Ok(codice) => codice,
+                Err(e) => {
+                    eprintln!("remotek-cli: {e}");
+                    USCITA_ERRORE
+                }
+            };
+        }
+        Ok(Comando::Exec {
+            id,
+            attesa,
+            amministratore,
+        }) => {
+            // Tutto lo script prima di collegarsi.
+            let script = match terminale::leggi_script(std::io::stdin().lock()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("remotek-cli: {e}");
+                    return USCITA_USO;
+                }
+            };
+            let esito = avvia_terminale(
+                || account::whoami().and_then(|_| nel_runtime(account::verifica_accesso())),
+                || {
+                    terminale::exec(&id, attesa, amministratore, script, || {
+                        nel_runtime(account::lasciapassare_exec(&id, amministratore))
+                    })
                 },
             );
             return match esito {
@@ -409,6 +471,26 @@ mod tests {
     }
 
     #[test]
+    fn argomenti_di_exec() {
+        assert_eq!(
+            leggi(&["exec", "123456789"]),
+            Ok(Comando::Exec {
+                id: "123456789".into(),
+                attesa: 120,
+                amministratore: false
+            })
+        );
+        assert_eq!(
+            leggi(&["exec", "123456789", "--amministratore", "--attesa", "30"]),
+            Ok(Comando::Exec {
+                id: "123456789".into(),
+                attesa: 30,
+                amministratore: true
+            })
+        );
+    }
+
+    #[test]
     fn nessuna_opzione_accetta_una_password() {
         for a in [
             &["login", "agente1", "segreta"][..],
@@ -429,6 +511,13 @@ mod tests {
             &["terminal", "123456789", "--amministratore=segreta"],
             &["terminal", "123456789/r"],
             &["terminal", "123456789@server"],
+            &["exec", "123456789", "--password", "segreta"],
+            &["exec", "123456789", "segreta"],
+            &["exec", "123456789", "--righe", "10"],
+            &["exec", "123456789", "--colonne", "10"],
+            &["exec", "123456789", "--amministratore=segreta"],
+            &["exec", "123456789/r"],
+            &["exec"],
             &[],
         ] {
             assert!(leggi(a).is_err(), "{a:?}");

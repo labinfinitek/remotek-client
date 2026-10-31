@@ -4,6 +4,10 @@
 //! regola 2): nessuna password del PC; mai col modo amministratore di
 //! upstream (regola 3). L'amministratore si chiede solo col lasciapassare
 //! dell'API (`--amministratore`, ADR-0028), e decide il PC.
+//!
+//! `exec <ID>` (ADR-0033) usa la stessa sessione: lo script letto da stdin va
+//! al PC solo dopo il `TerminalOpened` con `remotek-exec`
+//! (src/remotek/exec.rs), poi stdout e stderr del PC escono separati.
 
 use crate::client::{Data, Interface, QualityStatus};
 use crate::ui_session_interface::{io_loop, InvokeUiSession, Session};
@@ -32,8 +36,11 @@ pub(super) enum Evento {
     /// Il controllato offre una connessione non cifrata da un capo all'altro.
     NonCifrata,
     Connesso,
-    Aperto,
+    /// Il PC ha aperto il terminale; il `message` del `TerminalOpened`.
+    Aperto(String),
     Dati(Vec<u8>),
+    /// stderr di exec (`exec::TERMINAL_ID_STDERR`).
+    Stderr(Vec<u8>),
     Chiuso(i32),
     /// L'helper del PC e' uscito prima che la shell partisse
     /// (`uscita_terminale::NON_PARTITO`).
@@ -121,15 +128,23 @@ pub(super) fn evento_da_msgbox(
 /// src/flutter.rs (`handle_terminal_response`).
 pub(super) fn evento_da_risposta(risposta: TerminalResponse) -> Option<Evento> {
     match risposta.union? {
-        Union::Opened(o) if o.success => Some(Evento::Aperto),
+        Union::Opened(o) if o.success => Some(Evento::Aperto(o.message)),
         Union::Opened(o) => Some(Evento::Errore(format!(
             "terminale non aperto: {}",
             o.message
         ))),
-        Union::Data(d) if d.compressed => {
-            Some(Evento::Dati(hbb_common::compress::decompress(&d.data)))
+        Union::Data(d) => {
+            let dati = if d.compressed {
+                hbb_common::compress::decompress(&d.data)
+            } else {
+                d.data.to_vec()
+            };
+            if d.terminal_id == crate::remotek::exec::TERMINAL_ID_STDERR {
+                Some(Evento::Stderr(dati))
+            } else {
+                Some(Evento::Dati(dati))
+            }
         }
-        Union::Data(d) => Some(Evento::Dati(d.data.to_vec())),
         Union::Closed(c) => Some(Evento::Chiuso(c.exit_code)),
         Union::Error(e) if e.message == crate::remotek::uscita_terminale::NON_PARTITO => {
             Some(Evento::NonPartito)
@@ -315,8 +330,25 @@ pub(super) fn terminale(
     colonne: u32,
     chiedi: Option<impl FnOnce() -> Result<String, String>>,
 ) -> Result<i32, String> {
-    let (tx, rx) = channel();
     let amministratore = chiedi.is_some();
+    con_sessione(id, amministratore, chiedi, |session, rx, tx| {
+        attendi(session, rx, tx, Duration::from_secs(attesa), righe, colonne)
+    })
+}
+
+/// Collega la sessione (controlli locali, poi il lasciapassare), fa girare
+/// `corpo` sugli eventi e chiude.
+fn con_sessione(
+    id: &str,
+    amministratore: bool,
+    chiedi: Option<impl FnOnce() -> Result<String, String>>,
+    corpo: impl FnOnce(
+        &Session<Gestore>,
+        &std::sync::mpsc::Receiver<Evento>,
+        Sender<Evento>,
+    ) -> Result<i32, String>,
+) -> Result<i32, String> {
+    let (tx, rx) = channel();
     let (session, lasciapassare) = prepara(
         || {
             sessione(
@@ -351,14 +383,7 @@ pub(super) fn terminale(
         };
         io_loop(ciclo, round);
     });
-    let esito = attendi(
-        &session,
-        &rx,
-        tx,
-        Duration::from_secs(attesa),
-        righe,
-        colonne,
-    );
+    let esito = corpo(&session, &rx, tx);
     session.close();
     // handle_peer_info salva la configurazione del PC (src/client.rs): il CLI
     // non ne tiene.
@@ -432,12 +457,12 @@ fn attendi(
                 return Err("connessione non cifrata da un capo all'altro: rifiutata".to_owned());
             }
             Evento::Connesso => session.open_terminal(ID_TERMINALE, righe, colonne),
-            Evento::Aperto if scadenza.is_some() && !chiusura => {
+            Evento::Aperto(_) if scadenza.is_some() && !chiusura => {
                 scadenza = None;
                 leggi_stdin(session.clone(), tx.clone());
             }
-            Evento::Aperto => {}
-            Evento::Dati(dati) => {
+            Evento::Aperto(_) => {}
+            Evento::Dati(dati) | Evento::Stderr(dati) => {
                 stdout
                     .write_all(&dati)
                     .and_then(|()| stdout.flush())
@@ -492,6 +517,133 @@ fn leggi_stdin(session: Session<Gestore>, tx: Sender<Evento>) {
         // Fallisce solo se il CLI sta gia' uscendo.
         tx.send(Evento::FineInput).ok();
     });
+}
+
+/// Lo script piu' grande che il PC accetta (`exec::MASSIMO_SCRIPT`).
+pub(super) const MASSIMO_SCRIPT: usize = crate::remotek::exec::MASSIMO_SCRIPT;
+
+/// Tutto stdin, prima di collegarsi: al massimo [`MASSIMO_SCRIPT`] byte.
+pub(super) fn leggi_script(r: impl Read) -> Result<Vec<u8>, String> {
+    let mut script = Vec::new();
+    r.take(MASSIMO_SCRIPT as u64 + 1)
+        .read_to_end(&mut script)
+        .map_err(|e| format!("stdin: {e}"))?;
+    if script.len() > MASSIMO_SCRIPT {
+        return Err("lo script supera 1 MiB".to_owned());
+    }
+    Ok(script)
+}
+
+/// Il lasciapassare e' di exec: `v` = 2 con `capacita` = `exec`. Si legge
+/// solo il payload; la firma la verifica il PC (src/remotek/lasciapassare.rs).
+pub(super) fn lasciapassare_di_exec(lasciapassare: &str) -> bool {
+    use hbb_common::base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    lasciapassare
+        .split_once('.')
+        .and_then(|(p, _)| URL_SAFE_NO_PAD.decode(p).ok())
+        .and_then(|p| serde_json::from_slice::<serde_json::Value>(&p).ok())
+        .is_some_and(|p| p["v"] == 2 && p["capacita"] == "exec")
+}
+
+/// Esegue `script` sul PC `id` e restituisce il codice d'uscita. Il
+/// lasciapassare (sempre, `chiedi`) si chiede dopo i controlli locali.
+pub(super) fn exec(
+    id: &str,
+    attesa: u64,
+    amministratore: bool,
+    script: Vec<u8>,
+    chiedi: impl FnOnce() -> Result<String, String>,
+) -> Result<i32, String> {
+    let chiedi = || {
+        let l = chiedi()?;
+        if lasciapassare_di_exec(&l) {
+            Ok(l)
+        } else {
+            Err("l'API non conosce exec".to_owned())
+        }
+    };
+    con_sessione(id, amministratore, Some(chiedi), |session, rx, _| {
+        let (mut out, mut err) = (std::io::stdout().lock(), std::io::stderr().lock());
+        attendi_exec(
+            session,
+            rx,
+            Duration::from_secs(attesa),
+            &script,
+            &mut out,
+            &mut err,
+        )
+    })
+}
+
+/// Il ciclo di exec: lo script parte solo dopo il `TerminalOpened` con
+/// `exec::APERTO`; stdout e stderr del PC vanno a `out` e `err`, byte per
+/// byte; si esce col codice del `TerminalClosed`.
+fn attendi_exec(
+    session: &Session<Gestore>,
+    rx: &std::sync::mpsc::Receiver<Evento>,
+    attesa: Duration,
+    script: &[u8],
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<i32, String> {
+    let mut scadenza = Some(Instant::now() + attesa);
+    let mut avvisato = false;
+    loop {
+        let evento = match scadenza {
+            Some(s) => match rx.recv_timeout(s.saturating_duration_since(Instant::now())) {
+                Ok(e) => e,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(format!(
+                        "nessuna risposta entro {} secondi",
+                        attesa.as_secs()
+                    ))
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err("sessione chiusa".to_owned()),
+            },
+            None => rx.recv().map_err(|_| "sessione chiusa".to_owned())?,
+        };
+        let scrivi = |w: &mut dyn Write, d: &[u8], nome: &str| {
+            w.write_all(d)
+                .and_then(|()| w.flush())
+                .map_err(|e| format!("{nome}: {e}"))
+        };
+        match evento {
+            Evento::Attesa if !avvisato => {
+                eprintln!("remotek-cli: in attesa che il cliente accetti");
+                avvisato = true;
+            }
+            Evento::Attesa | Evento::FineInput => {}
+            Evento::NonCifrata => {
+                session.send(Data::RejectInsecureConnection);
+                return Err("connessione non cifrata da un capo all'altro: rifiutata".to_owned());
+            }
+            Evento::Connesso => session.open_terminal(ID_TERMINALE, 24, 80),
+            Evento::Aperto(m) if m != crate::remotek::exec::APERTO => {
+                session.close_terminal(ID_TERMINALE);
+                return Err("il PC non esegue exec (client vecchio?)".to_owned());
+            }
+            Evento::Aperto(_) if scadenza.is_some() => {
+                scadenza = None;
+                for blocco in script.chunks(64 * 1024) {
+                    session.send(Data::Message(messaggio_dati(blocco)));
+                }
+                // Il `TerminalData` vuoto: la fine dello script.
+                session.send(Data::Message(messaggio_dati(&[])));
+            }
+            Evento::Aperto(_) => {}
+            Evento::Dati(d) => scrivi(out, &d, "stdout")?,
+            Evento::Stderr(d) => scrivi(err, &d, "stderr")?,
+            Evento::Chiuso(codice) => return Ok(codice_uscita(codice)),
+            Evento::NonPartito => {
+                eprintln!(
+                    "remotek-cli: {}",
+                    crate::remotek::uscita_terminale::NON_PARTITO
+                );
+                return Ok(super::USCITA_NON_PARTITO);
+            }
+            Evento::Errore(e) => return Err(e),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -892,5 +1044,129 @@ mod tests {
             ("", "pay.firma")
         );
         assert!(lr.has_terminal());
+    }
+
+    /// Il ciclo di exec su eventi gia' in coda: esito, cio' che va a io_loop,
+    /// stdout e stderr.
+    fn ciclo_exec(eventi: Vec<Evento>) -> (Result<i32, String>, Vec<Data>, Vec<u8>, Vec<u8>) {
+        let session = Session::<Gestore>::default();
+        let (tx_io, mut rx_io) = unbounded_channel();
+        *session.sender.write().unwrap() = Some(tx_io);
+        let (tx, rx) = channel();
+        for e in eventi {
+            tx.send(e).unwrap();
+        }
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let script = vec![b'x'; 64 * 1024 + 1];
+        let esito = attendi_exec(
+            &session,
+            &rx,
+            Duration::from_secs(5),
+            &script,
+            &mut out,
+            &mut err,
+        );
+        let mut inviati = Vec::new();
+        while let Ok(d) = rx_io.try_recv() {
+            inviati.push(d);
+        }
+        (esito, inviati, out, err)
+    }
+
+    /// I `TerminalData` mandati, in ordine.
+    fn dati_mandati(inviati: &[Data]) -> Vec<Vec<u8>> {
+        inviati
+            .iter()
+            .filter_map(|d| match d {
+                Data::Message(m) => match &m.terminal_action().union {
+                    Some(terminal_action::Union::Data(d)) => Some(d.data.to_vec()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn script_letto_tutto_al_massimo_un_mib() {
+        assert_eq!(leggi_script(&b"Get-Date"[..]), Ok(b"Get-Date".to_vec()));
+        let esatto = vec![b'#'; MASSIMO_SCRIPT];
+        assert_eq!(
+            leggi_script(&esatto[..]).map(|s| s.len()),
+            Ok(MASSIMO_SCRIPT)
+        );
+        let oltre = vec![b'#'; MASSIMO_SCRIPT + 1];
+        assert!(leggi_script(&oltre[..]).is_err());
+    }
+
+    #[test]
+    fn solo_il_lasciapassare_di_exec() {
+        use hbb_common::base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let con = |p: &str| format!("{}.firma", URL_SAFE_NO_PAD.encode(p));
+        // Il vettore v2 del README di remotek-api (5eec81f): capacita' tunnel.
+        let tunnel = "eyJ2IjoyLCJwYyI6Ijk5OTAwMDExMSIsImFnZW50ZSI6ImFnZW50ZS1tYXJpbyIsInRlY25pY28iOiJtYXJpbyIsIm1vZG8iOiJhbW1pbmlzdHJhdG9yZSIsImNhcGFjaXRhIjoidHVubmVsIiwicG9ydGUiOlsyMiwzMzg5XSwiZHVyYXRhIjozNjAwLCJlbWVzc28iOjE3OTEwMDAwMDAsInNjYWRlIjoxNzkxMDAwMDYwLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.kahITkYNGYmo1y2rCRX08LPvdZjiMCzrQPrcvZExTBF3g_eAAAYyPqPjjgl4pImNa-rcg5LmhkH_yqGFu_hOAw";
+        assert!(!lasciapassare_di_exec(tunnel));
+        assert!(lasciapassare_di_exec(&con(
+            r#"{"v":2,"modo":"utente","capacita":"exec"}"#
+        )));
+        assert!(!lasciapassare_di_exec(&con(
+            r#"{"v":1,"modo":"amministratore"}"#
+        )));
+        assert!(!lasciapassare_di_exec("non-un-lasciapassare"));
+        // Un payload non exec ferma tutto prima di collegarsi.
+        let _ambiente = AMBIENTE.lock().unwrap();
+        let fermato = exec("123456789", 1, false, Vec::new(), || Ok(tunnel.to_owned()));
+        assert_eq!(fermato, Err("l'API non conosce exec".to_owned()));
+    }
+
+    #[test]
+    fn niente_script_senza_remotek_exec() {
+        let vecchio = Evento::Aperto("Terminal opened (helper mode)".into());
+        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Connesso, vecchio]);
+        assert_eq!(
+            esito,
+            Err("il PC non esegue exec (client vecchio?)".to_owned())
+        );
+        assert!(dati_mandati(&inviati).is_empty(), "nessuno script mandato");
+        // open_terminal e close_terminal.
+        assert_eq!(inviati.len(), 2);
+    }
+
+    #[test]
+    fn exec_manda_lo_script_e_separa_i_due_flussi() {
+        let aperto = risposta(Union::Opened(TerminalOpened {
+            success: true,
+            message: crate::remotek::exec::APERTO.into(),
+            ..Default::default()
+        }));
+        let evento = evento_da_risposta(aperto).unwrap();
+        let errore = risposta(Union::Data(TerminalData {
+            terminal_id: crate::remotek::exec::TERMINAL_ID_STDERR,
+            data: b"e\n".to_vec().into(),
+            ..Default::default()
+        }));
+        assert_eq!(
+            evento_da_risposta(errore),
+            Some(Evento::Stderr(b"e\n".to_vec()))
+        );
+        let (esito, inviati, out, err) = ciclo_exec(vec![
+            Evento::Connesso,
+            evento,
+            Evento::Dati(b"o\n".to_vec()),
+            Evento::Stderr(vec![0xff, b'\n']),
+            Evento::Chiuso(300),
+        ]);
+        assert_eq!(esito, Ok(255));
+        assert_eq!((out, err), (b"o\n".to_vec(), vec![0xff, b'\n']));
+        let mandati = dati_mandati(&inviati);
+        // Lo script in due blocchi, poi il blocco vuoto: la fine.
+        assert_eq!(
+            mandati.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![64 * 1024, 1, 0]
+        );
+        let (esito, _, _, _) = ciclo_exec(vec![Evento::Connesso, Evento::NonPartito]);
+        assert_eq!(esito, Ok(super::super::USCITA_NON_PARTITO));
+        let (esito, _, _, _) = ciclo_exec(vec![Evento::Chiuso(7)]);
+        assert_eq!(esito, Ok(7));
     }
 }

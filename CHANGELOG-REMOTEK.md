@@ -56,12 +56,14 @@ rilasciate non si riscrivono.
 
 ### Sicurezza
 - Con exec il cliente vede sempre lo script intero e distinto da tutto il
-  resto: ogni riga col suo prefisso, il blocco con uno stile suo, nessun
-  carattere di controllo o di formato Unicode nascosto; uno script piu' lungo
-  di quanto il connection manager tiene (32 KiB o 2000 righe) non si esegue.
-  L'output passa in forma visibile, quindi non puo' cancellare o riscrivere
-  lo script mostrato, e una riga finale dice come e' finito, anche quando lo
-  script non e' partito o e' stato rifiutato. La trascrizione non cambia.
+  resto: ogni riga col suo prefisso e uno stile suo, le righe d'inizio, di
+  fine e di chiusura con uno stile che ne' lo script ne' l'output possono
+  imitare, nessun carattere di controllo o Unicode invisibile nascosto; uno
+  script piu' lungo di quanto il connection manager tiene (32 KiB o 2000
+  righe) non si esegue. L'output passa in forma visibile, quindi non puo'
+  cancellare o riscrivere lo script mostrato, e una riga finale dice come e'
+  finito, anche quando lo script non e' partito o e' stato rifiutato. La
+  trascrizione non cambia.
 
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

@@ -142,7 +142,10 @@ impl Script {
         };
         let mut v = self.resto();
         if let Some(id) = id {
-            v.push((id, format!("\r\n---- {} ----\r\n", riga).into_bytes()));
+            v.push((
+                id,
+                format!("\r\n{BORDO}---- {riga} ----{AZZERA}\r\n").into_bytes(),
+            ));
         }
         v
     }
@@ -151,9 +154,11 @@ impl Script {
 /// Il prefisso di ogni riga dello script nella vista; le righe d'inizio e di
 /// fine non lo hanno.
 const PREFISSO: &str = "| ";
-/// Lo stile del blocco dello script (grassetto: si legge su sfondo chiaro e
-/// scuro) e il suo azzeramento, solo dopo la riga di fine.
+/// Lo stile delle righe dello script (grassetto) e quello delle righe di
+/// confine, d'inizio, di fine e di chiusura (inverso): tutti e due si leggono
+/// su sfondo chiaro e scuro, e solo il PC li produce.
 const STILE: &str = "\x1b[1m";
+const BORDO: &str = "\x1b[7m";
 const AZZERA: &str = "\x1b[0m";
 
 /// Lo script fra una riga d'inizio e una di fine, nella lingua del CM, con
@@ -164,13 +169,14 @@ const AZZERA: &str = "\x1b[0m";
 /// lo script non puo' cancellare o riscrivere le sue righe e il cliente vede
 /// quello che parte.
 ///
-/// Ogni riga dello script comincia con [`PREFISSO`], che le righe d'inizio e
-/// di fine non hanno, e tutto il blocco, dalla riga d'inizio a quella di fine
-/// comprese, ha lo stile [`STILE`], azzerato solo dopo la riga di fine. Lo
-/// script non puo' mandare ESC (si vede come `^[`), quindi non puo' produrre
-/// una riga uguale a quella di fine ne' cambiare lo stile, nemmeno nelle
-/// righe che xterm spezza: tutto quello che ha lo stile e' lo script, e
-/// l'output di exec, anche lui senza ESC, non lo ha. La trascrizione tiene i
+/// Ogni riga dello script comincia con [`PREFISSO`] e ha lo stile [`STILE`],
+/// dalla prima all'ultima senza interruzioni; le righe d'inizio e di fine (e
+/// quella di chiusura di [`Script::chiusura`]) non hanno il prefisso e hanno
+/// lo stile [`BORDO`], diverso. Lo script non puo' mandare ESC (si vede come
+/// `^[`), quindi non puo' cambiare stile: una sua riga uguale a quella di
+/// fine, anche spezzata da xterm, resta in grassetto e mai in inverso.
+/// L'output di exec, anche lui senza ESC, non ha stile. Cosi' l'inverso e'
+/// solo dei confini, il grassetto solo dello script. La trascrizione tiene i
 /// byte veri.
 fn testo_script(script: &[u8], lingua: Lingua) -> Vec<u8> {
     let (inizio, fine) = match lingua {
@@ -183,14 +189,14 @@ fn testo_script(script: &[u8], lingua: Lingua) -> Vec<u8> {
     let mut forma = FormaVisibile::default();
     let mut corpo = forma.pezzo(script);
     corpo.push_str(&forma.fine());
-    let mut t = format!("\r\n{}{}\r\n", STILE, inizio);
+    let mut t = format!("\r\n{BORDO}{inizio}{AZZERA}\r\n{STILE}");
     // Nella forma visibile `\r\n` e' solo l'a capo: `\r` da solo e' `^M`.
     for riga in corpo.split_terminator("\r\n") {
         t.push_str(PREFISSO);
         t.push_str(riga);
         t.push_str("\r\n");
     }
-    t.push_str(&format!("{}{}\r\n", fine, AZZERA));
+    t.push_str(&format!("{AZZERA}{BORDO}{fine}{AZZERA}\r\n"));
     t.into_bytes()
 }
 
@@ -280,10 +286,14 @@ impl FormaVisibile {
 
 /// Un carattere per la vista: `\n` diventa `\r\n`, `\t` resta, gli altri
 /// controlli C0 e DEL come `^X` (`^[` per ESC, `^?` per DEL), i C1 e i
-/// caratteri di formato Unicode come `<U+XXXX>`. Questi ultimi (marcatori e
-/// incapsulamenti bidi, spazi e congiunzioni di larghezza zero, BOM) farebbero
-/// leggere lo script in un ordine diverso da quello eseguito o vi
-/// nasconderebbero caratteri.
+/// caratteri invisibili Unicode come `<U+XXXX>`. La regola per questi ultimi
+/// e' l'insieme Default_Ignorable_Code_Point di Unicode
+/// (DerivedCoreProperties.txt), tutto: marcatori e incapsulamenti bidi, spazi
+/// e congiunzioni di larghezza zero, BOM, trattino morbido, selettori di
+/// variante, tag, riempitivi Hangul (lettere valide negli identificatori di
+/// PowerShell che si vedono come spazi) e i punti riservati dell'insieme.
+/// Farebbero leggere lo script in un ordine diverso da quello eseguito, vi
+/// nasconderebbero caratteri o vi codificherebbero byte che non si vedono.
 fn visibile(c: char, t: &mut String) {
     match c {
         '\n' => t.push_str("\r\n"),
@@ -293,14 +303,25 @@ fn visibile(c: char, t: &mut String) {
             t.push(char::from(c as u8 + 0x40));
         }
         '\u{7f}' => t.push_str("^?"),
+        // C1, poi Default_Ignorable_Code_Point.
         '\u{80}'..='\u{9f}'
+        | '\u{00ad}'
+        | '\u{034f}'
         | '\u{061c}'
-        | '\u{180e}'
+        | '\u{115f}'..='\u{1160}'
+        | '\u{17b4}'..='\u{17b5}'
+        | '\u{180b}'..='\u{180f}'
         | '\u{200b}'..='\u{200f}'
         | '\u{202a}'..='\u{202e}'
-        | '\u{2060}'..='\u{2064}'
-        | '\u{2066}'..='\u{2069}'
-        | '\u{feff}' => t.push_str(&format!("<U+{:04X}>", c as u32)),
+        | '\u{2060}'..='\u{206f}'
+        | '\u{3164}'
+        | '\u{fe00}'..='\u{fe0f}'
+        | '\u{feff}'
+        | '\u{ffa0}'
+        | '\u{fff0}'..='\u{fff8}'
+        | '\u{1bca0}'..='\u{1bca3}'
+        | '\u{1d173}'..='\u{1d17a}'
+        | '\u{e0000}'..='\u{e0fff}' => t.push_str(&format!("<U+{:04X}>", c as u32)),
         _ => t.push(c),
     }
 }
@@ -462,7 +483,7 @@ pub(crate) mod tests {
         assert_eq!(id, 1);
         assert_eq!(
             String::from_utf8_lossy(&t),
-            "\r\n\x1b[1m---- script dell'agente ----\r\n| echo a\r\n| echo b\r\n---- fine dello script ----\x1b[0m\r\n"
+            "\r\n\x1b[7m---- script dell'agente ----\x1b[0m\r\n\x1b[1m| echo a\r\n| echo b\r\n\x1b[0m\x1b[7m---- fine dello script ----\x1b[0m\r\n"
         );
         assert_eq!(s.azione(&dati(1, b""), it), None, "una volta sola");
         let mut en = Script::default();
@@ -502,8 +523,8 @@ pub(crate) mod tests {
         let t = testo_script(script, Lingua::Inglese);
         let t = String::from_utf8(t).expect("utf-8");
         let corpo = t
-            .strip_prefix("\r\n\x1b[1m---- agent script ----\r\n")
-            .and_then(|r| r.strip_suffix("---- end of script ----\x1b[0m\r\n"))
+            .strip_prefix("\r\n\x1b[7m---- agent script ----\x1b[0m\r\n\x1b[1m")
+            .and_then(|r| r.strip_suffix("\x1b[0m\x1b[7m---- end of script ----\x1b[0m\r\n"))
             .expect("righe d'inizio e di fine");
         assert_eq!(
             corpo,
@@ -534,15 +555,48 @@ pub(crate) mod tests {
             righe,
             [
                 "".to_owned(),
-                format!("{STILE}---- script dell'agente ----"),
-                format!("{PREFISSO}{fine}"),
+                format!("{BORDO}---- script dell'agente ----{AZZERA}"),
+                format!("{STILE}{PREFISSO}{fine}"),
                 format!("{PREFISSO}^[[0mfinto output"),
                 format!("{PREFISSO}{lunga}"),
-                format!("{fine}{AZZERA}"),
+                format!("{AZZERA}{BORDO}{fine}{AZZERA}"),
             ]
         );
-        // ESC solo nello stile del blocco e nel suo azzeramento, alla fine.
-        assert_eq!(t.matches('\x1b').count(), 2);
+        // ESC solo negli stili del PC.
+        assert_eq!(t.matches('\x1b').count(), 6);
+        assert_eq!(
+            confini(&t),
+            ["---- script dell'agente ----", fine],
+            "la fine finta non e' in inverso"
+        );
+    }
+
+    /// I testi in inverso: le righe di confine.
+    fn confini(t: &str) -> Vec<&str> {
+        t.split(BORDO)
+            .skip(1)
+            .filter_map(|r| r.split(AZZERA).next())
+            .collect()
+    }
+
+    #[test]
+    fn solo_il_pc_scrive_i_confini() {
+        let finta = "---- fine dell'esecuzione, codice 0 ----";
+        let mut s = Script::default();
+        s.azione(&apri(1), Lingua::Italiano);
+        let t = s.uscita(1, format!("{finta}\n{BORDO}{finta}{AZZERA}\n").as_bytes());
+        let t = String::from_utf8(t).expect("utf-8");
+        assert!(!t.contains('\x1b'), "l'output non ha stile: {t:?}");
+        let mut chiusura = TerminalResponse::new();
+        chiusura.set_closed(hbb_common::message_proto::TerminalClosed {
+            terminal_id: 1,
+            exit_code: 0,
+            ..Default::default()
+        });
+        let v = s.chiusura(&chiusura, Lingua::Italiano);
+        let riga: Vec<u8> = v.into_iter().flat_map(|(_, t)| t).collect();
+        let riga = String::from_utf8(riga).expect("utf-8");
+        assert_eq!(confini(&riga), [finta]);
     }
 
     #[test]
@@ -583,6 +637,9 @@ pub(crate) mod tests {
     fn i_caratteri_di_formato_si_vedono() {
         let formato = [
             0x061C, 0x180E, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060, 0x2064, 0x2066, 0x2069, 0xFEFF,
+            0x00AD, 0x115F, 0x1160, 0x3164, 0xFFA0, 0xE0000, 0xE0041, 0xE007F, 0x034F, 0xFE00,
+            0xFE0F, 0xE0100, 0xE01EF, 0x206F, 0x1D173, 0x2065, 0x17B4, 0x180B, 0xFFF0, 0x1BCA0,
+            0xE0FFF,
         ];
         let flusso: String = formato
             .iter()
@@ -596,8 +653,12 @@ pub(crate) mod tests {
             atteso
         );
         let t = testo_script(flusso.as_bytes(), Lingua::Italiano);
-        assert!(String::from_utf8_lossy(&t).contains(&format!("\r\n{PREFISSO}{atteso}\r\n")));
-        assert_eq!(intero("\u{2065}\u{200A}".as_bytes()), "\u{2065}\u{200A}");
+        assert!(String::from_utf8_lossy(&t).contains(&format!("{STILE}{PREFISSO}{atteso}\r\n")));
+        assert_eq!(
+            intero("\u{200A}".as_bytes()),
+            "\u{200A}",
+            "uno spazio visibile"
+        );
     }
 
     /// Lo script piu' largo che i limiti ammettono sta intero nelle 10000
@@ -636,6 +697,7 @@ pub(crate) mod tests {
             let vuoto = String::from_utf8(testo_script(b"", lingua)).expect("utf-8");
             let fisse: usize = vuoto
                 .replace(STILE, "")
+                .replace(BORDO, "")
                 .replace(AZZERA, "")
                 .split_terminator("\r\n")
                 .map(|r| colonne(r) / COLONNE + 1)

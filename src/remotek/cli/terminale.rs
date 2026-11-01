@@ -1101,7 +1101,12 @@ mod tests {
             Ok(MASSIMO_SCRIPT)
         );
         let oltre = vec![b'#'; MASSIMO_SCRIPT + 1];
-        assert!(leggi_script(&oltre[..]).is_err());
+        let limiti = format!(
+            "{} KiB o {} righe",
+            MASSIMO_SCRIPT / 1024,
+            crate::remotek::script_exec::MASSIMO_RIGHE
+        );
+        assert!(leggi_script(&oltre[..]).is_err_and(|e| e.contains(&limiti)));
         let righe = "a\n".repeat(2000);
         assert!(leggi_script(righe.as_bytes()).is_ok());
         assert!(leggi_script(format!("{righe}a").as_bytes()).is_err());

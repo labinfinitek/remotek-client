@@ -788,7 +788,7 @@ mod tests {
             Lingua::Italiano => format!("fine dell'esecuzione, codice {codice}"),
             Lingua::Inglese => format!("execution finished, exit code {codice}"),
         };
-        format!("\r\n---- {riga} ----\r\n")
+        format!("\r\n\x1b[7m---- {riga} ----\x1b[0m\r\n")
     }
 
     fn messaggio(r: TerminalResponse) -> Message {
@@ -809,7 +809,12 @@ mod tests {
         grande.azione(&manda(1, &[b'\n'; 2001]), None);
         grande.azione(&manda(1, b""), None);
         let rifiuto = grande.leggi().pop().expect("rifiuto");
-        let riga = |it_: &str, en: &str| format!("\r\n---- {} ----\r\n", if it { it_ } else { en });
+        let riga = |it_: &str, en: &str| {
+            format!(
+                "\r\n\x1b[7m---- {} ----\x1b[0m\r\n",
+                if it { it_ } else { en }
+            )
+        };
         let non_partito = riga("lo script non e' partito", "the script did not start");
         let rifiutato = riga(
             "script rifiutato: oltre 32 KiB o 2000 righe, non eseguito",
@@ -895,7 +900,7 @@ mod tests {
         };
         assert_eq!(
             String::from_utf8_lossy(&visto),
-            format!("\r\n---- {riga} ----\r\n")
+            format!("\r\n\x1b[7m---- {riga} ----\x1b[0m\r\n")
         );
     }
 

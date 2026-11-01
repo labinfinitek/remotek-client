@@ -522,14 +522,15 @@ fn leggi_stdin(session: Session<Gestore>, tx: Sender<Evento>) {
 /// Lo script piu' grande che il PC accetta (`exec::MASSIMO_SCRIPT`).
 pub(super) const MASSIMO_SCRIPT: usize = crate::remotek::exec::MASSIMO_SCRIPT;
 
-/// Tutto stdin, prima di collegarsi: al massimo [`MASSIMO_SCRIPT`] byte.
+/// Tutto stdin, prima di collegarsi: dentro i limiti del PC
+/// (`script_exec::oltre_i_limiti`).
 pub(super) fn leggi_script(r: impl Read) -> Result<Vec<u8>, String> {
     let mut script = Vec::new();
     r.take(MASSIMO_SCRIPT as u64 + 1)
         .read_to_end(&mut script)
         .map_err(|e| format!("stdin: {e}"))?;
-    if script.len() > MASSIMO_SCRIPT {
-        return Err("lo script supera 1 MiB".to_owned());
+    if crate::remotek::script_exec::oltre_i_limiti(&script) {
+        return Err("lo script supera 32 KiB o 2000 righe".to_owned());
     }
     Ok(script)
 }
@@ -1088,7 +1089,7 @@ mod tests {
     }
 
     #[test]
-    fn script_letto_tutto_al_massimo_un_mib() {
+    fn script_letto_tutto_dentro_i_limiti() {
         assert_eq!(leggi_script(&b"Get-Date"[..]), Ok(b"Get-Date".to_vec()));
         let esatto = vec![b'#'; MASSIMO_SCRIPT];
         assert_eq!(
@@ -1097,6 +1098,9 @@ mod tests {
         );
         let oltre = vec![b'#'; MASSIMO_SCRIPT + 1];
         assert!(leggi_script(&oltre[..]).is_err());
+        let righe = "a\n".repeat(2000);
+        assert!(leggi_script(righe.as_bytes()).is_ok());
+        assert!(leggi_script(format!("{righe}a").as_bytes()).is_err());
     }
 
     #[test]

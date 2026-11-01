@@ -17,7 +17,8 @@
 //!   manda mai dati vuoti (`send_terminal_input` di src/ui_session_interface.rs
 //!   porta l'input di xterm, mai vuoto), e una sessione di exec esiste solo
 //!   col lasciapassare di exec, che chiede solo `remotek-cli`;
-//! - oltre [`MASSIMO_SCRIPT`] byte: `TerminalError` con [`TROPPO_GRANDE`],
+//! - oltre [`MASSIMO_SCRIPT`] byte o `script_exec::MASSIMO_RIGHE` righe:
+//!   `TerminalError` con [`TROPPO_GRANDE`],
 //!   la sessione si chiude e non si esegue niente;
 //! - stdout va nei `TerminalData` del `terminal_id` aperto, stderr in quelli
 //!   di [`TERMINAL_ID_STDERR`]; l'ordine fra i due flussi non e' garantito;
@@ -39,7 +40,7 @@
 //! stdout e stderr dal `terminal_id`; verso l'API, che oggi non riceve il
 //! `terminal_id`, sono tutti e due `out`, nell'ordine di arrivo.
 
-pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT};
+pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT, TROPPO_GRANDE};
 use super::script_exec::{Passo, Raccolta};
 use super::uscita_terminale::{risposta_chiusura, HELPER_NON_PARTITO};
 use crate::server::terminal_service::UserToken;
@@ -60,8 +61,6 @@ pub const APERTO: &str = "remotek-exec";
 /// Il `terminal_id` di stderr. Il client Flutter numera i terminali da 1 in
 /// su (`_nextTerminalId` di flutter/lib/desktop/pages/terminal_tab_page.dart).
 pub const TERMINAL_ID_STDERR: i32 = -2;
-/// Il messaggio del `TerminalError` per uno script oltre [`MASSIMO_SCRIPT`].
-pub const TROPPO_GRANDE: &str = "lo script supera 1 MiB: non eseguito";
 /// Finito lo script, quanto si aspetta ancora l'output gia' scritto.
 const ATTESA_OUTPUT: Duration = Duration::from_secs(2);
 
@@ -566,7 +565,8 @@ impl Decodifica {
 
 /// Nell'helper: lo script dalla pipe d'ingresso, fino a [`MSG_TYPE_FINE_SCRIPT`].
 /// `None` se la pipe si chiude prima, se e' illeggibile o se lo script
-/// supera [`MASSIMO_SCRIPT`]: allora non si esegue niente.
+/// e' oltre i limiti (`script_exec::oltre_i_limiti`): allora non si esegue
+/// niente.
 pub fn ricevi_script<R: Read>(ingresso: &mut R) -> Option<Vec<u8>> {
     let (mut d, mut script, mut buf) = (Decodifica::default(), Vec::new(), [0u8; 4096]);
     loop {
@@ -588,7 +588,7 @@ pub fn ricevi_script<R: Read>(ingresso: &mut R) -> Option<Vec<u8>> {
         };
         for (tipo, dati) in messaggi {
             if tipo == MSG_TYPE_FINE_SCRIPT {
-                return Some(script);
+                return (aggiungi(&mut script, &[]) == Blocco::Completo).then_some(script);
             }
             // Un blocco vuoto non c'e': `aggiungi` lo leggerebbe come la fine.
             if !dati.is_empty() && aggiungi(&mut script, &dati) == Blocco::TroppoGrande {
@@ -828,7 +828,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn oltre_un_mib_rifiutato_senza_esecuzione() {
+    fn oltre_i_limiti_rifiutato_senza_esecuzione() {
         let segno = std::env::temp_dir().join(format!("remotek-exec-{}", std::process::id()));
         let mut e = Esecuzione::nuova();
         e.azione(&apri(1), None);
@@ -844,6 +844,16 @@ pub(crate) mod tests {
         thread::sleep(Duration::from_millis(200));
         assert!(e.leggi().is_empty());
         assert!(!segno.exists());
+        let mut righe = Esecuzione::nuova();
+        righe.azione(&apri(1), None);
+        let troppe = format!("{}touch {}\n", "\n".repeat(2000), segno.display());
+        righe.azione(&manda(1, troppe.as_bytes()), None);
+        let r = righe.azione(&manda(1, b""), None).expect("errore");
+        assert!(
+            matches!(r.union, Some(terminal_response::Union::Error(ref x)) if x.message == TROPPO_GRANDE)
+        );
+        thread::sleep(Duration::from_millis(200));
+        assert!(righe.leggi().is_empty() && !segno.exists());
         let mut s = Vec::new();
         assert_eq!(aggiungi(&mut s, &vec![0; MASSIMO_SCRIPT]), Blocco::Continua);
         assert_eq!(aggiungi(&mut s, b"x"), Blocco::TroppoGrande);

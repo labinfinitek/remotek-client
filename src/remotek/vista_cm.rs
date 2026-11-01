@@ -12,20 +12,22 @@
 //! Exec (src/remotek/exec.rs) non ha eco: lo script arriva dallo stdin e la
 //! shell non lo ripete. Percio' in una sessione di exec il cliente vede anche
 //! lo script, intero e prima del suo output, fra una riga d'inizio e una di
-//! fine ([`Script`]). I segreti di exec (ADR-0033 passo 4) dovranno passare
+//! fine ([`Script`]); e il suo output passa in forma visibile
+//! ([`FormaVisibile`]). I segreti di exec (ADR-0033 passo 4) dovranno passare
 //! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
 use super::scelta_terminale::Lingua;
-use super::script_exec::{Passo, Raccolta};
+use super::script_exec::{Passo, Raccolta, MASSIMO_RIGHE, MASSIMO_SCRIPT, TROPPO_GRANDE};
+use super::uscita_terminale::NON_PARTITO;
 use crate::ipc::Data;
-use hbb_common::message_proto::TerminalAction;
+use hbb_common::message_proto::{terminal_response, TerminalAction, TerminalResponse};
 use hbb_common::tokio::{
     self,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time,
 };
 use serde_json::json;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 /// La chiave dell'evento `cm_file_transfer_log` che Flutter manda al modello
 /// del terminale (e che `CmFileModel.onFileTransferLog` ignora).
@@ -61,10 +63,13 @@ impl Vista {
 /// Lo script di una sessione di exec per la vista. Quali azioni ne fanno
 /// parte lo decide `script_exec::Raccolta`, la stessa regola di
 /// `exec::Esecuzione::azione`: la vista mostra lo script che parte, e uno
-/// script oltre 1 MiB, che non parte, non si mostra.
+/// script oltre i limiti (`script_exec::oltre_i_limiti`), che non parte, non
+/// si mostra. Tiene anche la forma visibile dell'output, una per
+/// `terminal_id`.
 #[derive(Default)]
 pub struct Script {
     raccolta: Raccolta,
+    uscite: HashMap<i32, FormaVisibile>,
 }
 
 impl Script {
@@ -78,16 +83,95 @@ impl Script {
             _ => None,
         }
     }
+
+    /// Un pezzo dell'output di exec per la vista. Senza questo l'output
+    /// cancellerebbe o riscriverebbe lo script appena mostrato (`ESC[2J`,
+    /// `ESC[3J`, movimenti del cursore); exec non ha pseudo-console, quindi
+    /// il suo output non ha bisogno di sequenze di controllo. Un carattere
+    /// UTF-8 o un `\r\n` spezzato fra due pezzi esce come in un pezzo solo.
+    pub fn uscita(&mut self, terminal_id: i32, dati: &[u8]) -> Vec<u8> {
+        self.uscite
+            .entry(terminal_id)
+            .or_default()
+            .pezzo(dati)
+            .into_bytes()
+    }
+
+    /// Quello che resta dell'output, alla chiusura, in forma visibile.
+    pub fn resto(&mut self) -> Vec<(i32, Vec<u8>)> {
+        let mut v: Vec<_> = self
+            .uscite
+            .iter_mut()
+            .map(|(id, f)| (*id, f.fine().into_bytes()))
+            .filter(|(_, t)| !t.is_empty())
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// La chiusura del terminale dello script, partita dal PC: quello che
+    /// resta dell'output e poi una riga finale nella lingua del CM, che dice
+    /// al cliente come e' finita (anche uno script rifiutato, che la vista non
+    /// ha mostrato). Fuori da exec o per un altro `terminal_id` niente.
+    pub fn chiusura(&mut self, r: &TerminalResponse, lingua: Lingua) -> Vec<(i32, Vec<u8>)> {
+        let id = self.raccolta.terminal_id();
+        let it = lingua == Lingua::Italiano;
+        let riga = match &r.union {
+            Some(terminal_response::Union::Closed(c)) if id == Some(c.terminal_id) => {
+                if it {
+                    format!("fine dell'esecuzione, codice {}", c.exit_code)
+                } else {
+                    format!("execution finished, exit code {}", c.exit_code)
+                }
+            }
+            Some(terminal_response::Union::Error(e)) if id == Some(e.terminal_id) => {
+                let (kib, righe) = (MASSIMO_SCRIPT / 1024, MASSIMO_RIGHE);
+                match (e.message.as_str(), it) {
+                    (NON_PARTITO, true) => "lo script non e' partito".to_owned(),
+                    (NON_PARTITO, false) => "the script did not start".to_owned(),
+                    (TROPPO_GRANDE, true) => {
+                        format!("script rifiutato: oltre {kib} KiB o {righe} righe, non eseguito")
+                    }
+                    (TROPPO_GRANDE, false) => {
+                        format!("script refused: over {kib} KiB or {righe} lines, not run")
+                    }
+                    _ => return Vec::new(),
+                }
+            }
+            _ => return Vec::new(),
+        };
+        let mut v = self.resto();
+        if let Some(id) = id {
+            v.push((id, format!("\r\n---- {} ----\r\n", riga).into_bytes()));
+        }
+        v
+    }
 }
+
+/// Il prefisso di ogni riga dello script nella vista; le righe d'inizio e di
+/// fine non lo hanno.
+const PREFISSO: &str = "| ";
+/// Lo stile del blocco dello script (grassetto: si legge su sfondo chiaro e
+/// scuro) e il suo azzeramento, solo dopo la riga di fine.
+const STILE: &str = "\x1b[1m";
+const AZZERA: &str = "\x1b[0m";
 
 /// Lo script fra una riga d'inizio e una di fine, nella lingua del CM, con
 /// gli a capo da terminale (`\r\n`) per la vista. La vista e' un terminale
 /// xterm: ogni carattere di controllo dello script (C0 tranne `\t` e `\n`,
-/// `\r` non seguito da `\n`, DEL, C1) e ogni byte non UTF-8 si mostra in
-/// forma visibile ([`visibile`]), cosi' lo script non puo' cancellare o
-/// riscrivere le sue righe e il cliente vede quello che parte. La
-/// trascrizione tiene i byte veri; l'output dello script passa com'e', come
-/// quello del terminale.
+/// `\r` non seguito da `\n`, DEL, C1), ogni carattere di formato Unicode e
+/// ogni byte non UTF-8 si mostra in forma visibile ([`FormaVisibile`]), cosi'
+/// lo script non puo' cancellare o riscrivere le sue righe e il cliente vede
+/// quello che parte.
+///
+/// Ogni riga dello script comincia con [`PREFISSO`], che le righe d'inizio e
+/// di fine non hanno, e tutto il blocco, dalla riga d'inizio a quella di fine
+/// comprese, ha lo stile [`STILE`], azzerato solo dopo la riga di fine. Lo
+/// script non puo' mandare ESC (si vede come `^[`), quindi non puo' produrre
+/// una riga uguale a quella di fine ne' cambiare lo stile, nemmeno nelle
+/// righe che xterm spezza: tutto quello che ha lo stile e' lo script, e
+/// l'output di exec, anche lui senza ESC, non lo ha. La trascrizione tiene i
+/// byte veri.
 fn testo_script(script: &[u8], lingua: Lingua) -> Vec<u8> {
     let (inizio, fine) = match lingua {
         Lingua::Italiano => (
@@ -96,41 +180,110 @@ fn testo_script(script: &[u8], lingua: Lingua) -> Vec<u8> {
         ),
         Lingua::Inglese => ("---- agent script ----", "---- end of script ----"),
     };
-    let mut t = format!("\r\n{}\r\n", inizio);
-    // A pezzi validi UTF-8 e byte non validi (senza `utf8_chunks`, che il
-    // build Windows con Rust 1.75 non ha).
-    let mut resto = script;
-    while !resto.is_empty() {
-        let (valido, non_validi) = match std::str::from_utf8(resto) {
-            Ok(s) => (s, 0),
-            Err(e) => (
-                std::str::from_utf8(&resto[..e.valid_up_to()]).unwrap_or_default(),
-                e.error_len().unwrap_or(resto.len() - e.valid_up_to()),
-            ),
-        };
-        let mut caratteri = valido.chars().peekable();
-        while let Some(c) = caratteri.next() {
-            if c == '\r' && caratteri.peek() == Some(&'\n') {
-                continue; // `\r\n`: l'a capo lo scrive il `\n`.
-            }
-            visibile(c, &mut t);
-        }
-        let fine_validi = valido.len();
-        for b in &resto[fine_validi..fine_validi + non_validi] {
-            t.push_str(&format!("<0x{:02X}>", b));
-        }
-        resto = &resto[fine_validi + non_validi..];
-    }
-    if !t.ends_with("\r\n") {
+    let mut forma = FormaVisibile::default();
+    let mut corpo = forma.pezzo(script);
+    corpo.push_str(&forma.fine());
+    let mut t = format!("\r\n{}{}\r\n", STILE, inizio);
+    // Nella forma visibile `\r\n` e' solo l'a capo: `\r` da solo e' `^M`.
+    for riga in corpo.split_terminator("\r\n") {
+        t.push_str(PREFISSO);
+        t.push_str(riga);
         t.push_str("\r\n");
     }
-    t.push_str(&format!("{}\r\n", fine));
+    t.push_str(&format!("{}{}\r\n", fine, AZZERA));
     t.into_bytes()
 }
 
-/// Un carattere dello script per la vista: `\n` diventa `\r\n`, `\t` resta,
-/// gli altri controlli C0 e DEL come `^X` (`^[` per ESC, `^?` per DEL), i C1
-/// come `<U+0080>`-`<U+009F>`.
+/// Un flusso di byte (lo script, o l'output di exec) in forma visibile per
+/// la vista, a pezzi: `\n` e `\r\n` diventano `\r\n`, `\t` resta, gli altri
+/// controlli, i caratteri di formato e i byte non UTF-8 come in [`visibile`].
+/// Fra un pezzo e l'altro tiene un carattere UTF-8 non finito e un `\r`
+/// finale, cosi' i pezzi danno lo stesso testo del flusso intero.
+#[derive(Default)]
+pub struct FormaVisibile {
+    /// L'inizio di un carattere UTF-8 alla fine dell'ultimo pezzo.
+    sospesi: Vec<u8>,
+    /// Un `\r` alla fine dell'ultimo pezzo: con un `\n` dopo e' l'a capo.
+    cr: bool,
+}
+
+impl FormaVisibile {
+    pub fn pezzo(&mut self, dati: &[u8]) -> String {
+        let mut t = String::new();
+        let mut byte = std::mem::take(&mut self.sospesi);
+        byte.extend_from_slice(dati);
+        // A pezzi validi UTF-8 e byte non validi (senza `utf8_chunks`, che il
+        // build Windows con Rust 1.75 non ha).
+        let mut resto = &byte[..];
+        while !resto.is_empty() {
+            let (valido, errore) = match std::str::from_utf8(resto) {
+                Ok(s) => (s, None),
+                Err(e) => (
+                    std::str::from_utf8(&resto[..e.valid_up_to()]).unwrap_or_default(),
+                    Some(e.error_len()),
+                ),
+            };
+            valido.chars().for_each(|c| self.carattere(c, &mut t));
+            resto = &resto[valido.len()..];
+            match errore {
+                None => break,
+                // Un carattere non finito: forse lo finisce il pezzo dopo.
+                Some(None) => {
+                    self.sospesi = resto.to_vec();
+                    break;
+                }
+                Some(Some(n)) => {
+                    resto[..n].iter().for_each(|b| self.non_valido(*b, &mut t));
+                    resto = &resto[n..];
+                }
+            }
+        }
+        t
+    }
+
+    /// Alla chiusura: quello che resta.
+    pub fn fine(&mut self) -> String {
+        let mut t = String::new();
+        std::mem::take(&mut self.sospesi)
+            .iter()
+            .for_each(|b| self.non_valido(*b, &mut t));
+        self.cr_sospeso(&mut t);
+        t
+    }
+
+    fn carattere(&mut self, c: char, t: &mut String) {
+        if self.cr && c == '\n' {
+            self.cr = false;
+            t.push_str("\r\n");
+            return;
+        }
+        self.cr_sospeso(t);
+        if c == '\r' {
+            self.cr = true;
+        } else {
+            visibile(c, t);
+        }
+    }
+
+    fn non_valido(&mut self, b: u8, t: &mut String) {
+        self.cr_sospeso(t);
+        t.push_str(&format!("<0x{:02X}>", b));
+    }
+
+    /// Un `\r` non seguito da `\n`: `^M`.
+    fn cr_sospeso(&mut self, t: &mut String) {
+        if std::mem::take(&mut self.cr) {
+            visibile('\r', t);
+        }
+    }
+}
+
+/// Un carattere per la vista: `\n` diventa `\r\n`, `\t` resta, gli altri
+/// controlli C0 e DEL come `^X` (`^[` per ESC, `^?` per DEL), i C1 e i
+/// caratteri di formato Unicode come `<U+XXXX>`. Questi ultimi (marcatori e
+/// incapsulamenti bidi, spazi e congiunzioni di larghezza zero, BOM) farebbero
+/// leggere lo script in un ordine diverso da quello eseguito o vi
+/// nasconderebbero caratteri.
 fn visibile(c: char, t: &mut String) {
     match c {
         '\n' => t.push_str("\r\n"),
@@ -140,7 +293,14 @@ fn visibile(c: char, t: &mut String) {
             t.push(char::from(c as u8 + 0x40));
         }
         '\u{7f}' => t.push_str("^?"),
-        '\u{80}'..='\u{9f}' => t.push_str(&format!("<U+{:04X}>", c as u32)),
+        '\u{80}'..='\u{9f}'
+        | '\u{061c}'
+        | '\u{180e}'
+        | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{2069}'
+        | '\u{feff}' => t.push_str(&format!("<U+{:04X}>", c as u32)),
         _ => t.push(c),
     }
 }
@@ -302,7 +462,7 @@ pub(crate) mod tests {
         assert_eq!(id, 1);
         assert_eq!(
             String::from_utf8_lossy(&t),
-            "\r\n---- script dell'agente ----\r\necho a\r\necho b\r\n---- fine dello script ----\r\n"
+            "\r\n\x1b[1m---- script dell'agente ----\r\n| echo a\r\n| echo b\r\n---- fine dello script ----\x1b[0m\r\n"
         );
         assert_eq!(s.azione(&dati(1, b""), it), None, "una volta sola");
         let mut en = Script::default();
@@ -342,12 +502,149 @@ pub(crate) mod tests {
         let t = testo_script(script, Lingua::Inglese);
         let t = String::from_utf8(t).expect("utf-8");
         let corpo = t
-            .strip_prefix("\r\n---- agent script ----\r\n")
-            .and_then(|r| r.strip_suffix("---- end of script ----\r\n"))
+            .strip_prefix("\r\n\x1b[1m---- agent script ----\r\n")
+            .and_then(|r| r.strip_suffix("---- end of script ----\x1b[0m\r\n"))
             .expect("righe d'inizio e di fine");
-        assert_eq!(corpo, "a^[[1Ab^[[2Kc^Md^He<U+009B>f^?g<0xFF>\th\r\ni\r\n");
+        assert_eq!(
+            corpo,
+            "| a^[[1Ab^[[2Kc^Md^He<U+009B>f^?g<0xFF>\th\r\n| i\r\n"
+        );
         // Nessun controllo arriva alla vista, salvo `\t` e gli a capo `\r\n`.
         let senza_a_capo = corpo.replace("\r\n", "");
         assert!(senza_a_capo.chars().all(|c| c == '\t' || !(c.is_control())));
+    }
+
+    /// La forma visibile di un flusso in un pezzo solo.
+    fn intero(flusso: &[u8]) -> String {
+        let mut f = FormaVisibile::default();
+        let mut t = f.pezzo(flusso);
+        t.push_str(&f.fine());
+        t
+    }
+
+    #[test]
+    fn lo_script_resta_nel_suo_blocco() {
+        let fine = "---- fine dello script ----";
+        let lunga = "x".repeat(5000);
+        let script = format!("{fine}\n\x1b[0mfinto output\n{lunga}\n");
+        let t =
+            String::from_utf8(testo_script(script.as_bytes(), Lingua::Italiano)).expect("utf-8");
+        let righe: Vec<&str> = t.split_terminator("\r\n").collect();
+        assert_eq!(
+            righe,
+            [
+                "".to_owned(),
+                format!("{STILE}---- script dell'agente ----"),
+                format!("{PREFISSO}{fine}"),
+                format!("{PREFISSO}^[[0mfinto output"),
+                format!("{PREFISSO}{lunga}"),
+                format!("{fine}{AZZERA}"),
+            ]
+        );
+        // ESC solo nello stile del blocco e nel suo azzeramento, alla fine.
+        assert_eq!(t.matches('\x1b').count(), 2);
+    }
+
+    #[test]
+    fn l_output_di_exec_in_forma_visibile() {
+        let mut s = Script::default();
+        let t = s.uscita(1, b"\x1b[2J\x1b[3J\x1b[Hok\rx\xff\t.\n");
+        assert_eq!(
+            String::from_utf8_lossy(&t),
+            "^[[2J^[[3J^[[Hok^Mx<0xFF>\t.\r\n"
+        );
+        // Un `\r` e un carattere a meta' restano per il pezzo dopo, o per la
+        // chiusura; ogni terminale ha il suo stato.
+        assert_eq!(s.uscita(1, b"a\r"), b"a");
+        assert_eq!(s.uscita(-2, b"\xf0\x9f"), b"");
+        assert_eq!(s.uscita(1, b"\n"), b"\r\n");
+        assert_eq!(s.resto(), vec![(-2, b"<0xF0><0x9F>".to_vec())]);
+        assert!(s.resto().is_empty());
+    }
+
+    #[test]
+    fn i_pezzi_danno_lo_stesso_testo_del_flusso_intero() {
+        for flusso in ["a\u{1F600}b\r\nc".as_bytes(), b"x\xf0\x9fy\r", b"\r\r\n"] {
+            let tutto = intero(flusso);
+            for k in 0..=flusso.len() {
+                let mut f = FormaVisibile::default();
+                let mut t = f.pezzo(&flusso[..k]);
+                t.push_str(&f.pezzo(&flusso[k..]));
+                t.push_str(&f.fine());
+                assert_eq!(t, tutto, "{flusso:?} spezzato a {k}");
+            }
+        }
+        assert_eq!(intero("a\u{1F600}b\r\nc".as_bytes()), "a\u{1F600}b\r\nc");
+        assert_eq!(intero(b"x\xf0\x9fy\r"), "x<0xF0><0x9F>y^M");
+        assert_eq!(intero(b"\r\r\n"), "^M\r\n");
+    }
+
+    #[test]
+    fn i_caratteri_di_formato_si_vedono() {
+        let formato = [
+            0x061C, 0x180E, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060, 0x2064, 0x2066, 0x2069, 0xFEFF,
+        ];
+        let flusso: String = formato
+            .iter()
+            .filter_map(|c| char::from_u32(*c))
+            .flat_map(|c| [c, '.'])
+            .collect();
+        let atteso: String = formato.iter().map(|c| format!("<U+{c:04X}>.")).collect();
+        let mut s = Script::default();
+        assert_eq!(
+            String::from_utf8_lossy(&s.uscita(1, flusso.as_bytes())),
+            atteso
+        );
+        let t = testo_script(flusso.as_bytes(), Lingua::Italiano);
+        assert!(String::from_utf8_lossy(&t).contains(&format!("\r\n{PREFISSO}{atteso}\r\n")));
+        assert_eq!(intero("\u{2065}\u{200A}".as_bytes()), "\u{2065}\u{200A}");
+    }
+
+    /// Lo script piu' largo che i limiti ammettono sta intero nelle 10000
+    /// righe dell'xterm del CM (`maxLines` di remotek_terminale_cm.dart)
+    /// anche a 40 colonne: una riga di c colonne ne occupa al piu' c/40 + 1.
+    #[test]
+    fn il_caso_peggiore_sta_nell_xterm_del_cm() {
+        const RIGHE_XTERM: usize = 10000;
+        const COLONNE: usize = 40;
+        // Per eccesso: la tabulazione fino a 8 colonne, ogni carattere fuori
+        // dall'ASCII 2 (i caratteri larghi).
+        let colonne = |t: &str| -> usize {
+            t.replace("\r\n", "")
+                .chars()
+                .map(|c| match c {
+                    '\t' => 8,
+                    ' '..='~' => 1,
+                    _ => 2,
+                })
+                .sum()
+        };
+        // Le colonne per byte della forma visibile piu' larga: ogni carattere
+        // e ogni byte non UTF-8 da solo.
+        let caratteri = (0..=0x10FFFF)
+            .filter_map(char::from_u32)
+            .map(|c| c.to_string().into_bytes());
+        let per_byte = caratteri
+            .chain((0x80..=0xFF).map(|b| vec![b]))
+            .map(|b| colonne(&intero(&b)).div_ceil(b.len()))
+            .max()
+            .unwrap_or_default();
+        assert_eq!(per_byte, 8, "oggi la tabulazione");
+        let corpo =
+            (per_byte * MASSIMO_SCRIPT + PREFISSO.len() * MASSIMO_RIGHE) / COLONNE + MASSIMO_RIGHE;
+        for lingua in [Lingua::Italiano, Lingua::Inglese] {
+            let vuoto = String::from_utf8(testo_script(b"", lingua)).expect("utf-8");
+            let fisse: usize = vuoto
+                .replace(STILE, "")
+                .replace(AZZERA, "")
+                .split_terminator("\r\n")
+                .map(|r| colonne(r) / COLONNE + 1)
+                .sum();
+            let peggiore = corpo + fisse;
+            assert!(
+                peggiore * 10 <= RIGHE_XTERM * 9,
+                "{peggiore} righe: senza margine"
+            );
+        }
     }
 }

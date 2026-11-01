@@ -6,8 +6,30 @@
 
 use hbb_common::message_proto::{terminal_action, TerminalAction};
 
-/// Lo script piu' grande che exec accetta.
-pub const MASSIMO_SCRIPT: usize = 1024 * 1024;
+/// Lo script piu' grande che exec accetta: 32 KiB e [`MASSIMO_RIGHE`] righe.
+/// Il cliente vede lo script nella sua forma visibile (`vista_cm`) in un
+/// xterm del connection manager che tiene 10000 righe: entro questi limiti
+/// lo script ci sta intero anche a 40 colonne (il test
+/// `il_caso_peggiore_sta_nell_xterm_del_cm` di `vista_cm` fa il conto).
+pub const MASSIMO_SCRIPT: usize = 32 * 1024;
+/// Le righe dello script: i `\n`, piu' una se l'ultimo byte non e' `\n`.
+pub const MASSIMO_RIGHE: usize = 2000;
+
+/// Il messaggio del `TerminalError` per uno script oltre i limiti: il PC non
+/// lo esegue e la vista non lo mostra.
+pub const TROPPO_GRANDE: &str = "lo script supera 32 KiB o 2000 righe: non eseguito";
+
+/// Le righe dello script, come le conta [`MASSIMO_RIGHE`].
+pub fn righe(script: &[u8]) -> usize {
+    let a_capo = script.iter().filter(|b| **b == b'\n').count();
+    a_capo + usize::from(script.last().is_some_and(|b| *b != b'\n'))
+}
+
+/// Il controllo dei limiti, l'unico: per chi esegue e mostra lo script
+/// ([`Raccolta`]) e per `remotek-cli exec`, prima di collegarsi.
+pub fn oltre_i_limiti(script: &[u8]) -> bool {
+    script.len() > MASSIMO_SCRIPT || righe(script) > MASSIMO_RIGHE
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Blocco {
@@ -16,10 +38,16 @@ pub enum Blocco {
     TroppoGrande,
 }
 
-/// Un `TerminalData` dello script: vuoto e' la fine.
+/// Un `TerminalData` dello script: vuoto e' la fine, e solo li' si contano
+/// le righe ([`oltre_i_limiti`]); prima si guarda solo la lunghezza, per non
+/// tenere in memoria piu' di [`MASSIMO_SCRIPT`] byte.
 pub fn aggiungi(script: &mut Vec<u8>, dati: &[u8]) -> Blocco {
     if dati.is_empty() {
-        Blocco::Completo
+        if oltre_i_limiti(script) {
+            Blocco::TroppoGrande
+        } else {
+            Blocco::Completo
+        }
     } else if script.len() + dati.len() > MASSIMO_SCRIPT {
         Blocco::TroppoGrande
     } else {
@@ -39,21 +67,21 @@ pub enum Passo {
     Pezzo,
     /// Il `TerminalData` vuoto: lo script intero, una volta sola.
     Completo(i32, Vec<u8>),
-    /// Oltre [`MASSIMO_SCRIPT`]: lo script non c'e' piu'.
+    /// Oltre [`MASSIMO_SCRIPT`] o [`MASSIMO_RIGHE`]: lo script non c'e' piu'.
     TroppoGrande(i32),
     /// Il `CloseTerminal` del terminale dello script.
     Chiuso(i32),
     /// Un'azione che non tocca lo script: un `TerminalData` prima
     /// dell'`OpenTerminal`, di un altro terminale o dopo la fine (lo script
-    /// completo, oltre 1 MiB o chiuso), e ogni altra azione.
+    /// completo, oltre i limiti o chiuso), e ogni altra azione.
     Scartata,
 }
 
 /// Lo script di una sessione di exec, raccolto dalle azioni di chi controlla:
 /// conta solo dal primo `OpenTerminal` e col suo `terminal_id`; prende i
 /// `TerminalData` di quel terminale fino a quello vuoto (la fine); dopo la
-/// fine, il `CloseTerminal` di quel terminale o oltre 1 MiB non prende piu'
-/// niente.
+/// fine, il `CloseTerminal` di quel terminale o oltre i limiti
+/// ([`oltre_i_limiti`]) non prende piu' niente.
 #[derive(Default)]
 pub struct Raccolta {
     terminal_id: Option<i32>,
@@ -136,11 +164,27 @@ mod tests {
     }
 
     #[test]
-    fn aggiungi_fino_a_1_mib() {
+    fn aggiungi_fino_a_32_kib_e_2000_righe() {
         let mut s = Vec::new();
         assert_eq!(aggiungi(&mut s, &vec![0; MASSIMO_SCRIPT]), Blocco::Continua);
         assert_eq!(aggiungi(&mut s, b"x"), Blocco::TroppoGrande);
         assert_eq!(aggiungi(&mut s, b""), Blocco::Completo);
+        for (script, oltre) in [
+            ("a\n".repeat(MASSIMO_RIGHE), false),
+            (format!("{}a", "a\n".repeat(MASSIMO_RIGHE - 1)), false),
+            ("\n".repeat(MASSIMO_RIGHE + 1), true),
+            (format!("{}a", "a\n".repeat(MASSIMO_RIGHE)), true),
+        ] {
+            assert_eq!(oltre_i_limiti(script.as_bytes()), oltre, "{}", script.len());
+            let mut s = script.into_bytes();
+            let atteso = if oltre {
+                Blocco::TroppoGrande
+            } else {
+                Blocco::Completo
+            };
+            assert_eq!(aggiungi(&mut s, b""), atteso);
+        }
+        assert_eq!((righe(b""), righe(b"\r"), righe(b"a\nb")), (0, 1, 2));
     }
 
     #[test]
@@ -166,12 +210,16 @@ mod tests {
     }
 
     #[test]
-    fn oltre_1_mib_o_chiuso_niente_script() {
+    fn oltre_i_limiti_o_chiuso_niente_script() {
         let mut grande = Raccolta::default();
         grande.azione(&apri(1));
         grande.azione(&dati(1, &vec![b'#'; MASSIMO_SCRIPT]));
         assert_eq!(grande.azione(&dati(1, b"x")), Passo::TroppoGrande(1));
         assert_eq!(grande.azione(&dati(1, b"")), Passo::Scartata);
+        let mut lungo = Raccolta::default();
+        lungo.azione(&apri(1));
+        lungo.azione(&dati(1, &vec![b'\n'; MASSIMO_RIGHE + 1]));
+        assert_eq!(lungo.azione(&dati(1, b"")), Passo::TroppoGrande(1));
         let mut chiusa = Raccolta::default();
         chiusa.azione(&apri(1));
         chiusa.azione(&dati(1, b"x"));

@@ -185,6 +185,9 @@ mod tests {
             assert_eq!(aggiungi(&mut s, b""), atteso);
         }
         assert_eq!((righe(b""), righe(b"\r"), righe(b"a\nb")), (0, 1, 2));
+        // Il testo del rifiuto dice i limiti veri.
+        let limiti = format!("{} KiB o {} righe", MASSIMO_SCRIPT / 1024, MASSIMO_RIGHE);
+        assert!(TROPPO_GRANDE.contains(&limiti));
     }
 
     #[test]

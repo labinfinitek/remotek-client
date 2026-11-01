@@ -530,7 +530,11 @@ pub(super) fn leggi_script(r: impl Read) -> Result<Vec<u8>, String> {
         .read_to_end(&mut script)
         .map_err(|e| format!("stdin: {e}"))?;
     if crate::remotek::script_exec::oltre_i_limiti(&script) {
-        return Err("lo script supera 32 KiB o 2000 righe".to_owned());
+        use crate::remotek::script_exec::MASSIMO_RIGHE;
+        let kib = MASSIMO_SCRIPT / 1024;
+        return Err(format!(
+            "lo script supera {kib} KiB o {MASSIMO_RIGHE} righe"
+        ));
     }
     Ok(script)
 }

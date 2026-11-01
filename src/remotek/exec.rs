@@ -18,7 +18,7 @@
 //!   porta l'input di xterm, mai vuoto), e una sessione di exec esiste solo
 //!   col lasciapassare di exec, che chiede solo `remotek-cli`;
 //! - oltre [`MASSIMO_SCRIPT`] byte o `script_exec::MASSIMO_RIGHE` righe:
-//!   `TerminalError` con [`TROPPO_GRANDE`],
+//!   `TerminalError` con [`TROPPO_GRANDE`] (da [`Esecuzione::leggi`]),
 //!   la sessione si chiude e non si esegue niente;
 //! - stdout va nei `TerminalData` del `terminal_id` aperto, stderr in quelli
 //!   di [`TERMINAL_ID_STDERR`]; l'ordine fra i due flussi non e' garantito;
@@ -375,6 +375,8 @@ pub struct Esecuzione {
     raccolta: Raccolta,
     processo: Option<Processo>,
     chiusa: bool,
+    /// La fine di uno script rifiutato o non partito, per [`Esecuzione::leggi`].
+    fine: Option<TerminalResponse>,
 }
 
 fn errore(terminal_id: i32, message: &str) -> TerminalResponse {
@@ -403,6 +405,7 @@ impl Esecuzione {
             raccolta: Raccolta::default(),
             processo: None,
             chiusa: false,
+            fine: None,
         }
     }
 
@@ -429,9 +432,15 @@ impl Esecuzione {
                 Some(errore(terminal_id, "exec: un solo script per connessione"))
             }
             Passo::Pezzo => None,
+            // Rifiutato o non partito: la risposta esce da `leggi`, come la
+            // fine di uno script partito, perche' solo le risposte di
+            // `read_outputs` passano da `trascrizione::uscita`
+            // (src/server/connection.rs), che ne da' la riga alla vista del
+            // cliente; quelle di `azione` vanno dritte al controllante.
             Passo::TroppoGrande(terminal_id) => {
                 self.chiusa = true;
-                Some(errore(terminal_id, TROPPO_GRANDE))
+                self.fine = Some(errore(terminal_id, TROPPO_GRANDE));
+                None
             }
             Passo::Completo(terminal_id, script) => match avvia(script, token, terminal_id) {
                 Ok(p) => {
@@ -441,7 +450,8 @@ impl Esecuzione {
                 Err(e) => {
                     log::warn!("exec: lo script non e' partito: {}", e);
                     self.chiusa = true;
-                    Some(risposta_chiusura(terminal_id, HELPER_NON_PARTITO))
+                    self.fine = Some(risposta_chiusura(terminal_id, HELPER_NON_PARTITO));
+                    None
                 }
             },
             Passo::Chiuso(terminal_id) => {
@@ -463,19 +473,18 @@ impl Esecuzione {
         }
     }
 
-    /// Le risposte pronte: l'output, e alla fine la chiusura col codice.
+    /// Le risposte pronte: l'output, e alla fine la chiusura col codice;
+    /// oppure, una volta, il rifiuto o la mancata partenza dello script.
     pub fn leggi(&mut self) -> Vec<TerminalResponse> {
+        let mut risposte: Vec<_> = self.fine.take().into_iter().collect();
         let (Some(id), Some(p)) = (self.raccolta.terminal_id(), self.processo.as_mut()) else {
-            return Vec::new();
+            return risposte;
         };
         let (uscite, fine) = p.passo();
-        let mut risposte: Vec<_> = uscite
-            .into_iter()
-            .map(|u| match u {
-                Uscita::Stdout(d) => dati(id, d),
-                Uscita::Stderr(d) => dati(TERMINAL_ID_STDERR, d),
-            })
-            .collect();
+        risposte.extend(uscite.into_iter().map(|u| match u {
+            Uscita::Stdout(d) => dati(id, d),
+            Uscita::Stderr(d) => dati(TERMINAL_ID_STDERR, d),
+        }));
         if let Some(codice) = fine {
             self.processo = None;
             self.chiusa = true;
@@ -834,12 +843,17 @@ pub(crate) mod tests {
         e.azione(&apri(1), None);
         let primo = format!("touch {}\n", segno.display());
         assert!(e.azione(&manda(1, primo.as_bytes()), None).is_none());
-        let r = e
+        let rifiuto = |e: &mut Esecuzione| {
+            let r = e.leggi();
+            assert!(
+                matches!(&r[..], [TerminalResponse { union: Some(terminal_response::Union::Error(x)), .. }] if x.message == TROPPO_GRANDE),
+                "il rifiuto esce da leggi, una volta"
+            );
+        };
+        assert!(e
             .azione(&manda(1, &vec![b'#'; MASSIMO_SCRIPT]), None)
-            .expect("errore");
-        assert!(
-            matches!(r.union, Some(terminal_response::Union::Error(ref x)) if x.message == TROPPO_GRANDE)
-        );
+            .is_none());
+        rifiuto(&mut e);
         assert!(e.azione(&manda(1, b""), None).is_none());
         thread::sleep(Duration::from_millis(200));
         assert!(e.leggi().is_empty());
@@ -848,10 +862,8 @@ pub(crate) mod tests {
         righe.azione(&apri(1), None);
         let troppe = format!("{}touch {}\n", "\n".repeat(2000), segno.display());
         righe.azione(&manda(1, troppe.as_bytes()), None);
-        let r = righe.azione(&manda(1, b""), None).expect("errore");
-        assert!(
-            matches!(r.union, Some(terminal_response::Union::Error(ref x)) if x.message == TROPPO_GRANDE)
-        );
+        assert!(righe.azione(&manda(1, b""), None).is_none());
+        rifiuto(&mut righe);
         thread::sleep(Duration::from_millis(200));
         assert!(righe.leggi().is_empty() && !segno.exists());
         let mut s = Vec::new();
@@ -934,6 +946,13 @@ pub(crate) mod tests {
         grande.extend(codifica(MSG_TYPE_DATA, b"x"));
         grande.extend(codifica(MSG_TYPE_FINE_SCRIPT, b""));
         assert_eq!(ricevi_script(&mut grande.as_slice()), None);
+        let mut righe = codifica(MSG_TYPE_DATA, &[b'\n'; 2001]);
+        righe.extend(codifica(MSG_TYPE_FINE_SCRIPT, b""));
+        assert_eq!(
+            ricevi_script(&mut righe.as_slice()),
+            None,
+            "oltre 2000 righe"
+        );
     }
 
     #[test]

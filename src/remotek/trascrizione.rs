@@ -807,7 +807,8 @@ mod tests {
         let mut grande = Esecuzione::nuova();
         grande.azione(&apri(1), None);
         grande.azione(&manda(1, &[b'\n'; 2001]), None);
-        let rifiuto = grande.azione(&manda(1, b""), None).expect("rifiuto");
+        grande.azione(&manda(1, b""), None);
+        let rifiuto = grande.leggi().pop().expect("rifiuto");
         let riga = |it_: &str, en: &str| format!("\r\n---- {} ----\r\n", if it { it_ } else { en });
         let non_partito = riga("lo script non e' partito", "the script did not start");
         let rifiutato = riga(
@@ -855,6 +856,47 @@ mod tests {
             };
             assert_eq!(visto, atteso, "{}", String::from_utf8_lossy(&visto));
         }
+    }
+
+    /// Il rifiuto arriva alla vista sul percorso vero: le risposte di
+    /// `Esecuzione::leggi` passano da `uscita` (`read_outputs`), quelle di
+    /// `Esecuzione::azione` vanno dritte al controllante.
+    #[tokio::test]
+    async fn lo_script_rifiutato_si_vede_dalla_lettura() {
+        use crate::remotek::exec::{tests::*, Esecuzione};
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+        let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm.clone());
+        let mut t = Some(Trascrizione::nuova(
+            7,
+            String::new(),
+            &tx,
+            None,
+            Some(vista),
+        ));
+        let mut e = Esecuzione::nuova();
+        for a in [apri(1), manda(1, &[b'\n'; 2001]), manda(1, b"")] {
+            ingresso(&mut t, 7, &tx, &tx_cm, &a, true);
+            if let Some(r) = e.azione(&a, None) {
+                assert!(matches!(r.union, Some(terminal_response::Union::Opened(_))));
+            }
+        }
+        rx_tutto(&mut t, &mut e);
+        drop(t);
+        drop(tx_cm);
+        let mut visto = Vec::new();
+        while let Some(crate::ipc::Data::FileTransferLog((_, testo))) = rx_cm.recv().await {
+            let v: Value = serde_json::from_str(&testo).expect("json");
+            visto.extend(crate::decode64(v["data"].as_str().unwrap_or("")).expect("base64"));
+        }
+        let riga = match crate::remotek::scelta_terminale::lingua_del_cm() {
+            Lingua::Italiano => "script rifiutato: oltre 32 KiB o 2000 righe, non eseguito",
+            Lingua::Inglese => "script refused: over 32 KiB or 2000 lines, not run",
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&visto),
+            format!("\r\n---- {riga} ----\r\n")
+        );
     }
 
     #[tokio::test]

@@ -2571,6 +2571,8 @@ fi
 # prima di `openpty`. Su Windows lo script e i suoi figli stanno in un Job object
 # con KILL_ON_JOB_CLOSE; exec non avvia processi con un token ne' sospesi:
 # l'identita' resta quella del servizio o dell'helper di upstream.
+# La chiave del riquadro dello script (vista_cm.rs e remotek_terminale_cm.dart)
+# e' la stessa nei due file.
 esito_exec=$(python3 - <<'PY'
 import re
 def codice(f):
@@ -2595,11 +2597,17 @@ ramo = re.search(r"if args\.get\(5\)\.map\(String::as_str\) == Some\(crate::remo
 pty = h.find("pty_system.openpty(")
 if not ramo or pty < 0 or ramo.start() > pty:
     guai.append("%s: run_terminal_helper non esce dal modo exec prima di aprire la ConPTY" % H)
+# Il riquadro dello script ha la stessa chiave in Rust e in Dart, fuori dagli
+# int32 del terminal_id: se una cambia senza l'altra, lo script non si vede.
+for f, riga in (("src/remotek/vista_cm.rs", "pub const RIQUADRO_SCRIPT: i64 = i32::MIN as i64 - 1;"),
+                ("flutter/lib/desktop/pages/remotek_terminale_cm.dart", "const _riquadroScript = -2147483649;")):
+    if riga not in open(f, encoding="utf-8").read().splitlines():
+        guai.append("%s: manca `%s` (la chiave del riquadro dello script deve restare uguale in vista_cm.rs e remotek_terminale_cm.dart)" % (f, riga))
 print("\n".join(guai))
 PY
 ) || esito_exec="${esito_exec:-}"$'\n'"controllo di exec non eseguito: python3 terminato con errore"
 if [ -z "$esito_exec" ]; then
-  ok "exec non apre la ConPTY e chiude i figli col Job object, senza token ne' partenze sospese (ADR-0033)"
+  ok "exec non apre la ConPTY e chiude i figli col Job object, senza token ne' partenze sospese; riquadro dello script uguale in Rust e Dart (ADR-0033)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"

@@ -42,6 +42,19 @@ pub fn codice_dello_script(c: i32) -> i32 {
     }
 }
 
+/// Il codice dell'helper di exec, per il servizio: se l'helper ha detto che
+/// lo script e' partito (`exec::MSG_TYPE_PARTITO`), il codice passa da
+/// [`codice_dello_script`], cosi' uno script che chiude a forza il proprio
+/// helper con [`HELPER_NON_PARTITO`] non sembra "non partito"; senza
+/// "partito" l'helper e' uscito prima dello script e il codice resta com'e'.
+pub fn codice_dall_helper(codice: i32, partito: bool) -> i32 {
+    if partito {
+        codice_dello_script(codice)
+    } else {
+        codice
+    }
+}
+
 /// Il messaggio del `TerminalError` al controllante quando l'helper esce con
 /// [`HELPER_NON_PARTITO`]; `remotek-cli` lo riconosce
 /// (src/remotek/cli/terminale.rs).
@@ -211,6 +224,20 @@ mod tests {
         for c in [0, 3, 255, -1, HELPER_NON_PARTITO - 1] {
             assert_eq!(codice_dello_script(c), c);
         }
+    }
+
+    #[test]
+    fn il_codice_dall_helper_dipende_da_partito() {
+        assert_eq!(
+            codice_dall_helper(HELPER_NON_PARTITO, true),
+            CODICE_SCRIPT_SOSTITUITO
+        );
+        assert_eq!(
+            codice_dall_helper(HELPER_NON_PARTITO, false),
+            HELPER_NON_PARTITO
+        );
+        assert_eq!(codice_dall_helper(4, true), 4);
+        assert_eq!(codice_dall_helper(-1, false), -1);
     }
 
     #[test]

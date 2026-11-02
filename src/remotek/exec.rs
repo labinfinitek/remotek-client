@@ -42,7 +42,9 @@
 
 pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT, TROPPO_GRANDE};
 use super::script_exec::{Passo, Raccolta};
-use super::uscita_terminale::{codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO};
+use super::uscita_terminale::{
+    codice_dall_helper, codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO,
+};
 use crate::server::terminal_service::UserToken;
 use hbb_common::message_proto::{
     terminal_action, TerminalAction, TerminalData, TerminalError, TerminalOpened, TerminalResponse,
@@ -50,7 +52,7 @@ use hbb_common::message_proto::{
 use hbb_common::{anyhow, log};
 use std::{
     io::{self, Read, Write},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError},
     thread,
     time::{Duration, Instant},
@@ -77,10 +79,20 @@ const COMANDO_POWERSHELL: &str = "$u = New-Object System.Text.UTF8Encoding $fals
 /// deve sembrare `HELPER_NON_PARTITO`.
 fn codice(stato: ExitStatus) -> i32 {
     #[cfg(unix)]
-    if let Some(s) = std::os::unix::process::ExitStatusExt::signal(&stato) {
-        return codice_dello_script(128 + s);
+    let segnale = std::os::unix::process::ExitStatusExt::signal(&stato);
+    #[cfg(not(unix))]
+    let segnale = None;
+    codice_da(stato.code(), segnale)
+}
+
+/// [`codice`] senza il processo, per provarlo su Linux, dove un processo non
+/// esce con `HELPER_NON_PARTITO`: 128 + il segnale se c'e', altrimenti il
+/// codice (`None`: -1), passati da `codice_dello_script`.
+fn codice_da(codice: Option<i32>, segnale: Option<i32>) -> i32 {
+    match segnale {
+        Some(s) => codice_dello_script(128 + s),
+        None => codice_dello_script(codice.unwrap_or(-1)),
     }
-    codice_dello_script(stato.code().unwrap_or(-1))
 }
 
 #[cfg(windows)]
@@ -195,9 +207,13 @@ impl Drop for Albero {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum Uscita {
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
+    /// L'helper ha avviato lo script e non gli ha ancora dato un byte dello
+    /// script ([`MSG_TYPE_PARTITO`]). La consuma [`Processo::passo`].
+    Partito,
 }
 
 fn lettore<R: Read + Send + 'static>(mut r: R, tx: SyncSender<Uscita>, stderr: bool) {
@@ -231,12 +247,26 @@ fn lettore<R: Read + Send + 'static>(mut r: R, tx: SyncSender<Uscita>, stderr: b
 struct Processo {
     figlio: Figlio,
     uscita: Receiver<Uscita>,
-    /// Il codice, e da quando, una volta finito lo script.
+    /// Il codice del processo, e da quando, una volta finito lo script.
     finito: Option<(i32, Instant)>,
+    /// L'helper ha detto che lo script e' partito ([`Uscita::Partito`]).
+    /// Nella strada diretta resta `false`.
+    partito: bool,
 }
 
 impl Processo {
+    /// Avvio, Job, script: la strada diretta.
     fn avvia(script: Vec<u8>) -> io::Result<Self> {
+        let (processo, stdin) = Self::avvia_senza_script()?;
+        scrivi_script(stdin, script);
+        Ok(processo)
+    }
+
+    /// Avvia il processo e lo assegna al Job, senza scrivere lo script: chi
+    /// chiama riceve lo stdin e lo da' a [`scrivi_script`]. Finche' lo
+    /// script non e' nello stdin il processo non esegue niente; se lo stdin
+    /// si chiude senza script, esegue uno script vuoto.
+    fn avvia_senza_script() -> io::Result<(Self, ChildStdin)> {
         let mut child = comando()?
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -255,7 +285,7 @@ impl Processo {
                 return Err(e);
             }
         };
-        let (Some(mut stdin), Some(stdout), Some(stderr)) =
+        let (Some(stdin), Some(stdout), Some(stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
             return Err(io::Error::other("pipe del processo mancanti"));
@@ -263,18 +293,13 @@ impl Processo {
         let (tx, uscita) = sync_channel(64);
         lettore(stdout, tx.clone(), false);
         lettore(stderr, tx, true);
-        // In un thread: uno script che non legge lo stdin non blocca il
-        // servizio. Lo stdin si chiude a fine thread.
-        thread::spawn(move || {
-            if let Err(e) = stdin.write_all(&script) {
-                log::warn!("exec: scrittura dello script non riuscita: {}", e);
-            }
-        });
-        Ok(Self {
+        let processo = Self {
             figlio: Figlio::Diretto { child, albero },
             uscita,
             finito: None,
-        })
+            partito: false,
+        };
+        Ok((processo, stdin))
     }
 
     /// Un giro: l'output pronto e, a script finito e output letto (o dopo
@@ -284,6 +309,7 @@ impl Processo {
         let mut lettori_finiti = false;
         loop {
             match self.uscita.try_recv() {
+                Ok(Uscita::Partito) => self.partito = true,
                 Ok(u) => uscite.push(u),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -295,12 +321,26 @@ impl Processo {
         if self.finito.is_none() && self.figlio.uscito() {
             self.finito = Some((self.figlio.chiudi(), Instant::now()));
         }
+        // Qui "partito" e' gia' letto: e' il primo messaggio dell'helper,
+        // scritto prima che lo script giri.
+        let partito = self.partito;
         let fine = self
             .finito
             .filter(|(_, da)| lettori_finiti || da.elapsed() > ATTESA_OUTPUT)
-            .map(|(codice, _)| codice);
+            .map(|(codice, _)| codice_dall_helper(codice, partito));
         (uscite, fine)
     }
+}
+
+/// Scrive lo script nello stdin del processo, in un thread: uno script che
+/// non legge lo stdin non blocca il servizio. Lo stdin si chiude a fine
+/// thread.
+fn scrivi_script(mut stdin: ChildStdin, script: Vec<u8>) {
+    thread::spawn(move || {
+        if let Err(e) = stdin.write_all(&script) {
+            log::warn!("exec: scrittura dello script non riuscita: {}", e);
+        }
+    });
 }
 
 /// Lo script nel processo del servizio, o nell'helper del terminale.
@@ -483,9 +523,11 @@ impl Esecuzione {
             return risposte;
         };
         let (uscite, fine) = p.passo();
-        risposte.extend(uscite.into_iter().map(|u| match u {
-            Uscita::Stdout(d) => dati(id, d),
-            Uscita::Stderr(d) => dati(TERMINAL_ID_STDERR, d),
+        risposte.extend(uscite.into_iter().filter_map(|u| match u {
+            Uscita::Stdout(d) => Some(dati(id, d)),
+            Uscita::Stderr(d) => Some(dati(TERMINAL_ID_STDERR, d)),
+            // La consuma `passo`.
+            Uscita::Partito => None,
         }));
         if let Some(codice) = fine {
             self.processo = None;
@@ -524,6 +566,13 @@ pub const ARG_HELPER: &str = "exec";
 /// troncato.
 pub const MSG_TYPE_FINE_SCRIPT: u8 = 0x10;
 pub const MSG_TYPE_STDERR: u8 = 0x11;
+/// "Lo script e' partito", senza dati: il primo messaggio della pipe
+/// d'uscita dell'helper, scritto dopo l'assegnazione al Job e prima di un
+/// solo byte dello script nello stdin. Lo script non lo puo' scrivere prima
+/// ne' cancellare dopo. Col "partito" il servizio passa il codice
+/// dell'helper da `codice_dello_script` (`codice_dall_helper`); senza,
+/// l'helper e' uscito prima dello script.
+pub const MSG_TYPE_PARTITO: u8 = 0x12;
 /// `MSG_TYPE_DATA` di src/server/terminal_helper.rs (solo Windows).
 const MSG_TYPE_DATA: u8 = 0x01;
 #[cfg(windows)]
@@ -610,26 +659,38 @@ pub fn ricevi_script<R: Read>(ingresso: &mut R) -> Option<Vec<u8>> {
 }
 
 /// L'helper del terminale in modo exec (`run_terminal_helper`): niente
-/// ConPTY; riceve lo script, lo esegue con [`Processo`] (Job object
-/// compreso) e manda stdout e stderr sulla pipe d'uscita con l'intestazione
-/// di upstream. Il valore e' il codice con cui esce l'helper.
+/// ConPTY; riceve lo script, avvia il processo nel Job ([`Processo`]),
+/// manda [`MSG_TYPE_PARTITO`] e solo dopo da' lo script al processo; poi
+/// manda stdout e stderr sulla pipe d'uscita con l'intestazione di upstream.
+/// Il valore e' il codice con cui esce l'helper: dopo "partito" mai
+/// `HELPER_NON_PARTITO`.
 pub fn helper<R: Read, W: Write>(mut ingresso: R, mut uscita: W) -> i32 {
     let Some(script) = ricevi_script(&mut ingresso) else {
         return HELPER_NON_PARTITO;
     };
-    let mut p = match Processo::avvia(script) {
+    let (mut p, stdin) = match Processo::avvia_senza_script() {
         Ok(p) => p,
         Err(e) => {
             log::warn!("exec: lo script non e' partito: {}", e);
             return HELPER_NON_PARTITO;
         }
     };
+    let partito = codifica(MSG_TYPE_PARTITO, &[]);
+    if let Err(e) = uscita.write_all(&partito).and_then(|_| uscita.flush()) {
+        // Lo script non si scrive: il Drop di `p` chiude il processo, che
+        // non ha eseguito niente.
+        log::warn!("exec: scrittura di \"partito\" non riuscita: {}", e);
+        return HELPER_NON_PARTITO;
+    }
+    scrivi_script(stdin, script);
     loop {
         let (uscite, fine) = p.passo();
         for u in uscite {
             let m = match u {
                 Uscita::Stdout(d) => codifica(MSG_TYPE_DATA, &d),
                 Uscita::Stderr(d) => codifica(MSG_TYPE_STDERR, &d),
+                // Nella strada diretta non arriva, e la consuma `passo`.
+                Uscita::Partito => continue,
             };
             if let Err(e) = uscita.write_all(&m).and_then(|_| uscita.flush()) {
                 // Il servizio non legge piu': il Drop di `p` chiude lo script.
@@ -641,6 +702,48 @@ pub fn helper<R: Read, W: Write>(mut ingresso: R, mut uscita: W) -> i32 {
             return codice;
         }
         thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Nel servizio: legge la pipe d'uscita dell'helper fino alla sua chiusura e
+/// manda stdout, stderr e "partito" a `tx`. "Partito" conta solo come primo
+/// messaggio (l'helper lo scrive prima di dare lo script al processo); uno
+/// che arriva dopo si scarta.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn leggi_helper<R: Read>(mut r: R, tx: SyncSender<Uscita>) {
+    let (mut d, mut buf, mut primo) = (Decodifica::default(), [0u8; 4096], true);
+    let tipi = [MSG_TYPE_DATA, MSG_TYPE_STDERR, MSG_TYPE_PARTITO];
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                log::warn!("exec: lettura dall'helper non riuscita: {}", e);
+                break;
+            }
+        };
+        let messaggi = match d.aggiungi(&buf[..n], &tipi) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("exec: pipe dell'helper: {}", e);
+                break;
+            }
+        };
+        for (tipo, dati) in messaggi {
+            let u = match tipo {
+                MSG_TYPE_PARTITO if primo => Uscita::Partito,
+                MSG_TYPE_PARTITO => {
+                    log::warn!("exec: \"partito\" dall'helper non come primo messaggio, scartato");
+                    continue;
+                }
+                MSG_TYPE_STDERR => Uscita::Stderr(dati),
+                _ => Uscita::Stdout(dati),
+            };
+            primo = false;
+            if tx.send(u).is_err() {
+                return;
+            }
+        }
     }
 }
 
@@ -727,41 +830,13 @@ mod helper {
             }
         });
         let (tx, rx) = sync_channel(64);
-        thread::spawn(move || {
-            let (mut d, mut buf) = (Decodifica::default(), [0u8; 4096]);
-            loop {
-                let n = match uscita.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) => {
-                        log::warn!("exec: lettura dall'helper non riuscita: {}", e);
-                        break;
-                    }
-                };
-                let messaggi = match d.aggiungi(&buf[..n], &[MSG_TYPE_DATA, MSG_TYPE_STDERR]) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        log::warn!("exec: pipe dell'helper: {}", e);
-                        break;
-                    }
-                };
-                for (tipo, dati) in messaggi {
-                    let u = if tipo == MSG_TYPE_STDERR {
-                        Uscita::Stderr(dati)
-                    } else {
-                        Uscita::Stdout(dati)
-                    };
-                    if tx.send(u).is_err() {
-                        return;
-                    }
-                }
-            }
-        });
+        thread::spawn(move || leggi_helper(uscita, tx));
         let figlio = Figlio::Helper(helper);
         Ok(Processo {
             figlio,
             uscita: rx,
             finito: None,
+            partito: false,
         })
     }
 }
@@ -965,8 +1040,14 @@ pub(crate) mod tests {
         assert_eq!(helper(m.as_slice(), &mut uscita), 4);
         let mut d = Decodifica::default();
         let mut visti = d
-            .aggiungi(&uscita, &[MSG_TYPE_DATA, MSG_TYPE_STDERR])
+            .aggiungi(&uscita, &[MSG_TYPE_DATA, MSG_TYPE_STDERR, MSG_TYPE_PARTITO])
             .expect("valido");
+        assert_eq!(
+            visti.first(),
+            Some(&(MSG_TYPE_PARTITO, vec![])),
+            "\"partito\" e' il primo messaggio"
+        );
+        let mut visti = visti.split_off(1);
         visti.sort();
         assert_eq!(
             visti,
@@ -978,6 +1059,80 @@ pub(crate) mod tests {
         let mut niente = Vec::new();
         let troncato = codifica(MSG_TYPE_DATA, b"touch /nonesiste\n");
         assert_eq!(helper(troncato.as_slice(), &mut niente), HELPER_NON_PARTITO);
-        assert!(niente.is_empty());
+        assert!(niente.is_empty(), "senza script neanche \"partito\"");
+    }
+
+    #[test]
+    fn il_codice_dello_script_passa_da_codice_dello_script() {
+        use crate::remotek::uscita_terminale::CODICE_SCRIPT_SOSTITUITO;
+        assert_eq!(
+            codice_da(Some(HELPER_NON_PARTITO), None),
+            CODICE_SCRIPT_SOSTITUITO
+        );
+        assert_eq!(codice_da(Some(3), None), 3);
+        assert_eq!(codice_da(None, None), -1);
+        assert_eq!(codice_da(None, Some(9)), 137);
+    }
+
+    /// Una pipe d'uscita che il servizio non legge piu'.
+    struct PipeRotta;
+
+    impl Write for PipeRotta {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn partito_arriva_prima_dello_script() {
+        let cartella =
+            std::env::temp_dir().join(format!("remotek-exec-partito-{}", std::process::id()));
+        std::fs::create_dir_all(&cartella).expect("cartella temporanea");
+        let segno = cartella.join("segno");
+        let mut m = codifica(
+            MSG_TYPE_DATA,
+            format!("touch {}\n", segno.display()).as_bytes(),
+        );
+        m.extend(codifica(MSG_TYPE_FINE_SCRIPT, b""));
+        // "partito" non si scrive: lo script non arriva al processo.
+        assert_eq!(helper(m.as_slice(), PipeRotta), HELPER_NON_PARTITO);
+        assert!(!segno.exists(), "lo script e' girato senza \"partito\"");
+        // Controprova: con la pipe che accetta, lo stesso script gira.
+        assert_eq!(helper(m.as_slice(), Vec::new()), 0);
+        assert!(segno.exists());
+        std::fs::remove_dir_all(&cartella).expect("pulizia");
+    }
+
+    #[test]
+    fn il_servizio_accetta_partito_solo_come_primo_messaggio() {
+        let leggi = |pipe: Vec<u8>| {
+            let (tx, rx) = sync_channel(64);
+            leggi_helper(pipe.as_slice(), tx);
+            rx.try_iter().collect::<Vec<_>>()
+        };
+        let mut primo = codifica(MSG_TYPE_PARTITO, &[]);
+        primo.extend(codifica(MSG_TYPE_DATA, b"a"));
+        primo.extend(codifica(MSG_TYPE_STDERR, b"b"));
+        primo.extend(codifica(MSG_TYPE_DATA, b"c"));
+        assert_eq!(
+            leggi(primo),
+            vec![
+                Uscita::Partito,
+                Uscita::Stdout(b"a".to_vec()),
+                Uscita::Stderr(b"b".to_vec()),
+                Uscita::Stdout(b"c".to_vec())
+            ]
+        );
+        let mut dopo = codifica(MSG_TYPE_DATA, b"a");
+        dopo.extend(codifica(MSG_TYPE_PARTITO, &[]));
+        dopo.extend(codifica(MSG_TYPE_DATA, b"b"));
+        assert_eq!(
+            leggi(dopo),
+            vec![Uscita::Stdout(b"a".to_vec()), Uscita::Stdout(b"b".to_vec())],
+            "\"partito\" dopo i dati si scarta"
+        );
     }
 }

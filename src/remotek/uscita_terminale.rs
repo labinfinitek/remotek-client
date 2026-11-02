@@ -24,6 +24,24 @@ use std::{
 /// codici NTSTATUS di un crash (0xC0000000 e oltre) e da STILL_ACTIVE (259).
 pub const HELPER_NON_PARTITO: i32 = 0x5254_4B01;
 
+/// Il codice che riporta uno script di exec partito e uscito con
+/// [`HELPER_NON_PARTITO`]: uno script partito non deve mai sembrare "non
+/// partito". Uno script uscito con questo codice e uno uscito con
+/// [`HELPER_NON_PARTITO`] si riportano allo stesso modo, ed e' giusto: tutti e
+/// due sono girati.
+pub const CODICE_SCRIPT_SOSTITUITO: i32 = HELPER_NON_PARTITO + 1;
+
+/// Il codice d'uscita di uno script di exec partito: [`HELPER_NON_PARTITO`]
+/// diventa [`CODICE_SCRIPT_SOSTITUITO`], gli altri restano come sono. Il "non
+/// partito" vero non passa di qui (src/remotek/exec.rs).
+pub fn codice_dello_script(c: i32) -> i32 {
+    if c == HELPER_NON_PARTITO {
+        CODICE_SCRIPT_SOSTITUITO
+    } else {
+        c
+    }
+}
+
 /// Il messaggio del `TerminalError` al controllante quando l'helper esce con
 /// [`HELPER_NON_PARTITO`]; `remotek-cli` lo riconosce
 /// (src/remotek/cli/terminale.rs).
@@ -180,6 +198,18 @@ mod tests {
                 }
                 altro => panic!("attesa una TerminalClosed, arrivata {:?}", altro),
             }
+        }
+    }
+
+    #[test]
+    fn lo_script_partito_non_sembra_non_partito() {
+        assert_eq!(
+            codice_dello_script(HELPER_NON_PARTITO),
+            CODICE_SCRIPT_SOSTITUITO
+        );
+        assert_eq!(CODICE_SCRIPT_SOSTITUITO, 0x5254_4B02);
+        for c in [0, 3, 255, -1, HELPER_NON_PARTITO - 1] {
+            assert_eq!(codice_dello_script(c), c);
         }
     }
 

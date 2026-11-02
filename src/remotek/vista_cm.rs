@@ -14,7 +14,8 @@
 //! lo script, intero e prima del suo output, fra una riga d'inizio e una di
 //! fine ([`Script`]), in un riquadro suo ([`RIQUADRO_SCRIPT`]) che nessun
 //! output raggiunge; il suo output passa in forma visibile
-//! ([`FormaVisibile`]), nei riquadri dei suoi `terminal_id`. I segreti di exec (ADR-0033 passo 4) dovranno passare
+//! ([`FormaVisibile`]), nei riquadri dei suoi `terminal_id`. I segreti di
+//! exec (ADR-0033 passo 4) dovranno passare
 //! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
 use super::scelta_terminale::Lingua;

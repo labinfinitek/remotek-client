@@ -42,7 +42,7 @@
 
 pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT, TROPPO_GRANDE};
 use super::script_exec::{Passo, Raccolta};
-use super::uscita_terminale::{risposta_chiusura, HELPER_NON_PARTITO};
+use super::uscita_terminale::{codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO};
 use crate::server::terminal_service::UserToken;
 use hbb_common::message_proto::{
     terminal_action, TerminalAction, TerminalData, TerminalError, TerminalOpened, TerminalResponse,
@@ -73,12 +73,14 @@ const COMANDO_POWERSHELL: &str = "$u = New-Object System.Text.UTF8Encoding $fals
 & ([scriptblock]::Create([Console]::In.ReadToEnd()))";
 
 /// Il codice d'uscita; ucciso da un segnale: 128 + il segnale, come le shell.
+/// Passa da `codice_dello_script`: lo script e' partito, e il suo codice non
+/// deve sembrare `HELPER_NON_PARTITO`.
 fn codice(stato: ExitStatus) -> i32 {
     #[cfg(unix)]
     if let Some(s) = std::os::unix::process::ExitStatusExt::signal(&stato) {
-        return 128 + s;
+        return codice_dello_script(128 + s);
     }
-    stato.code().unwrap_or(-1)
+    codice_dello_script(stato.code().unwrap_or(-1))
 }
 
 #[cfg(windows)]

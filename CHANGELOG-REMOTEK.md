@@ -65,7 +65,9 @@ rilasciate non si riscrivono.
   cancellare, riscrivere o spingere fuori lo script mostrato; oltre circa
   10000 righe un riquadro di output perde il suo inizio, che resta nella
   trascrizione. Una riga finale dice come e' finito lo script, anche quando
-  non e' partito o e' stato rifiutato. La trascrizione non cambia.
+  non e' partito o e' stato rifiutato. Uno script partito non sembra mai
+  "non partito": se esce col codice riservato a quel caso (1381255937) si
+  riporta 1381255938. La trascrizione non cambia.
 
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

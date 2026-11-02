@@ -818,12 +818,15 @@ mod tests {
         msg
     }
 
-    /// Le tre righe di chiusura passano da `uscita` con le risposte vere,
+    /// Le tre righe di chiusura passano da `uscita` con le risposte vere
+    /// (uno script uscito con `HELPER_NON_PARTITO` ha la riga del codice),
     /// dopo tutto l'output; senza exec, o per un altro terminale, niente.
     #[tokio::test]
     async fn la_riga_di_chiusura_dopo_l_output() {
         use crate::remotek::exec::{tests::*, Esecuzione};
-        use crate::remotek::uscita_terminale::{risposta_chiusura, HELPER_NON_PARTITO};
+        use crate::remotek::uscita_terminale::{
+            codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO,
+        };
         let it = crate::remotek::scelta_terminale::lingua_del_cm() == Lingua::Italiano;
         let mut grande = Esecuzione::nuova();
         grande.azione(&apri(1), None);
@@ -844,6 +847,11 @@ mod tests {
         let casi = [
             (true, risposta_chiusura(1, 3), riga_di_chiusura(3)),
             (true, risposta_chiusura(1, HELPER_NON_PARTITO), non_partito),
+            (
+                true,
+                risposta_chiusura(1, codice_dello_script(HELPER_NON_PARTITO)),
+                riga_di_chiusura(1381255938),
+            ),
             (true, rifiuto, rifiutato),
             (true, risposta_chiusura(2, 3), String::new()),
             (false, risposta_chiusura(1, 3), String::new()),

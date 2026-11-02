@@ -53,6 +53,13 @@ rilasciate non si riscrivono.
 - Dove Remotek non e' installato e gira senza permessi di amministratore, chi
   chiedeva l'amministratore riceveva la shell da utente: ora il collegamento
   si rifiuta subito, senza finestra.
+- **Per l'agente AI**: `remotek-cli exec` usciva col codice del PC anche
+  quando il PC chiudeva il terminale prima che lo script partisse, come se
+  lo script fosse finito: ora e' un errore ("il PC ha chiuso il terminale
+  prima dello script") ed esce con 1.
+- **Per l'agente AI**: `remotek-cli exec` usciva con 2, come per uno script
+  oltre i limiti, anche quando stdin non si leggeva: ora esce con 1, il
+  codice degli errori; lo script oltre i limiti resta 2.
 
 ### Sicurezza
 - Con exec il cliente vede sempre lo script intero e distinto da tutto il

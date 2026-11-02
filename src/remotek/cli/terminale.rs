@@ -28,6 +28,12 @@ use std::time::{Duration, Instant};
 const ID_TERMINALE: i32 = 0;
 /// Dopo la fine di stdin, quanto si aspetta il `TerminalClosed` del PC.
 const ATTESA_CHIUSURA: Duration = Duration::from_secs(5);
+/// Le righe e le colonne di default di `terminal`, e quelle con cui exec
+/// apre il suo terminale (senza pseudo-console non contano).
+pub(super) const RIGHE_PREDEFINITE: u32 = 24;
+pub(super) const COLONNE_PREDEFINITE: u32 = 80;
+/// I `TerminalData` dello script di exec: al massimo 64 KiB l'uno.
+const BLOCCO_SCRIPT: usize = 64 * 1024;
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Evento {
@@ -522,19 +528,43 @@ fn leggi_stdin(session: Session<Gestore>, tx: Sender<Evento>) {
 /// Lo script piu' grande che il PC accetta (`exec::MASSIMO_SCRIPT`).
 pub(super) const MASSIMO_SCRIPT: usize = crate::remotek::exec::MASSIMO_SCRIPT;
 
+/// Perche' lo script non si legge: il codice d'uscita e il messaggio.
+#[derive(Debug, PartialEq)]
+pub(super) enum ScriptNonLetto {
+    /// stdin non si legge: un errore, come la rete o la configurazione.
+    Stdin(String),
+    /// Oltre i limiti del PC: un uso sbagliato, come gli argomenti.
+    OltreILimiti(String),
+}
+
+impl ScriptNonLetto {
+    pub(super) fn codice(&self) -> i32 {
+        match self {
+            Self::Stdin(_) => super::USCITA_ERRORE,
+            Self::OltreILimiti(_) => super::USCITA_USO,
+        }
+    }
+
+    pub(super) fn messaggio(&self) -> &str {
+        match self {
+            Self::Stdin(m) | Self::OltreILimiti(m) => m,
+        }
+    }
+}
+
 /// Tutto stdin, prima di collegarsi: dentro i limiti del PC
 /// (`script_exec::oltre_i_limiti`).
-pub(super) fn leggi_script(r: impl Read) -> Result<Vec<u8>, String> {
+pub(super) fn leggi_script(r: impl Read) -> Result<Vec<u8>, ScriptNonLetto> {
     let mut script = Vec::new();
     r.take(MASSIMO_SCRIPT as u64 + 1)
         .read_to_end(&mut script)
-        .map_err(|e| format!("stdin: {e}"))?;
+        .map_err(|e| ScriptNonLetto::Stdin(format!("stdin: {e}")))?;
     if crate::remotek::script_exec::oltre_i_limiti(&script) {
         use crate::remotek::script_exec::MASSIMO_RIGHE;
         let kib = MASSIMO_SCRIPT / 1024;
-        return Err(format!(
+        return Err(ScriptNonLetto::OltreILimiti(format!(
             "lo script supera {kib} KiB o {MASSIMO_RIGHE} righe"
-        ));
+        )));
     }
     Ok(script)
 }
@@ -582,7 +612,8 @@ pub(super) fn exec(
 
 /// Il ciclo di exec: lo script parte solo dopo il `TerminalOpened` con
 /// `exec::APERTO`; stdout e stderr del PC vanno a `out` e `err`, byte per
-/// byte; si esce col codice del `TerminalClosed`.
+/// byte; si esce col codice del `TerminalClosed`. Un `TerminalClosed` prima
+/// dello script e' un errore: il codice non e' dello script.
 fn attendi_exec(
     session: &Session<Gestore>,
     rx: &std::sync::mpsc::Receiver<Evento>,
@@ -622,14 +653,16 @@ fn attendi_exec(
                 session.send(Data::RejectInsecureConnection);
                 return Err("connessione non cifrata da un capo all'altro: rifiutata".to_owned());
             }
-            Evento::Connesso => session.open_terminal(ID_TERMINALE, 24, 80),
+            Evento::Connesso => {
+                session.open_terminal(ID_TERMINALE, RIGHE_PREDEFINITE, COLONNE_PREDEFINITE)
+            }
             Evento::Aperto(m) if m != crate::remotek::exec::APERTO => {
                 session.close_terminal(ID_TERMINALE);
                 return Err("il PC non esegue exec (client vecchio?)".to_owned());
             }
             Evento::Aperto(_) if scadenza.is_some() => {
                 scadenza = None;
-                for blocco in script.chunks(64 * 1024) {
+                for blocco in script.chunks(BLOCCO_SCRIPT) {
                     session.send(Data::Message(messaggio_dati(blocco)));
                 }
                 // Il `TerminalData` vuoto: la fine dello script.
@@ -638,6 +671,10 @@ fn attendi_exec(
             Evento::Aperto(_) => {}
             Evento::Dati(d) => scrivi(out, &d, "stdout")?,
             Evento::Stderr(d) => scrivi(err, &d, "stderr")?,
+            // `scadenza` c'e' finche' lo script non e' partito.
+            Evento::Chiuso(_) if scadenza.is_some() => {
+                return Err("il PC ha chiuso il terminale prima dello script".to_owned())
+            }
             Evento::Chiuso(codice) => return Ok(codice_uscita(codice)),
             Evento::NonPartito => {
                 eprintln!(
@@ -1062,7 +1099,7 @@ mod tests {
             tx.send(e).unwrap();
         }
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let script = vec![b'x'; 64 * 1024 + 1];
+        let script = vec![b'x'; BLOCCO_SCRIPT + 1];
         let esito = attendi_exec(
             &session,
             &rx,
@@ -1106,15 +1143,36 @@ mod tests {
             MASSIMO_SCRIPT / 1024,
             crate::remotek::script_exec::MASSIMO_RIGHE
         );
-        assert!(leggi_script(&oltre[..]).is_err_and(|e| e.contains(&limiti)));
+        let rifiuto = leggi_script(&oltre[..]).unwrap_err();
+        assert!(rifiuto.messaggio().contains(&limiti));
+        assert_eq!(rifiuto.codice(), super::super::USCITA_USO);
         let righe = "a\n".repeat(2000);
         assert!(leggi_script(righe.as_bytes()).is_ok());
-        assert!(leggi_script(format!("{righe}a").as_bytes()).is_err());
+        assert_eq!(
+            leggi_script(format!("{righe}a").as_bytes()).map_err(|e| e.codice()),
+            Err(super::super::USCITA_USO)
+        );
+    }
+
+    #[test]
+    fn stdin_illeggibile_esce_con_errore() {
+        struct Rotto;
+        impl Read for Rotto {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("rotto"))
+            }
+        }
+        let e = leggi_script(Rotto).unwrap_err();
+        assert_eq!(e, ScriptNonLetto::Stdin("stdin: rotto".to_owned()));
+        assert_eq!(e.codice(), super::super::USCITA_ERRORE);
     }
 
     #[test]
     fn solo_il_lasciapassare_di_exec() {
-        use hbb_common::base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        use hbb_common::base64::{
+            engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD},
+            Engine as _,
+        };
         let con = |p: &str| format!("{}.firma", URL_SAFE_NO_PAD.encode(p));
         // Il vettore v2 del README di remotek-api (5eec81f): capacita' tunnel.
         let tunnel = "eyJ2IjoyLCJwYyI6Ijk5OTAwMDExMSIsImFnZW50ZSI6ImFnZW50ZS1tYXJpbyIsInRlY25pY28iOiJtYXJpbyIsIm1vZG8iOiJhbW1pbmlzdHJhdG9yZSIsImNhcGFjaXRhIjoidHVubmVsIiwicG9ydGUiOlsyMiwzMzg5XSwiZHVyYXRhIjozNjAwLCJlbWVzc28iOjE3OTEwMDAwMDAsInNjYWRlIjoxNzkxMDAwMDYwLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.kahITkYNGYmo1y2rCRX08LPvdZjiMCzrQPrcvZExTBF3g_eAAAYyPqPjjgl4pImNa-rcg5LmhkH_yqGFu_hOAw";
@@ -1126,6 +1184,18 @@ mod tests {
             r#"{"v":1,"modo":"amministratore"}"#
         )));
         assert!(!lasciapassare_di_exec("non-un-lasciapassare"));
+        // Payload non base64url (base64 standard, con `/`, di un payload exec),
+        // base64 non JSON, `v` = 1, altra capacita'.
+        let standard = r#"{"v":2,"modo":"utente","capacita":"exec","n":"??"}"#;
+        assert!(lasciapassare_di_exec(&con(standard)));
+        let standard = STANDARD_NO_PAD.encode(standard);
+        assert!(standard.contains('/'));
+        assert!(!lasciapassare_di_exec(&format!("{standard}.firma")));
+        assert!(!lasciapassare_di_exec(&con("non e' JSON")));
+        assert!(!lasciapassare_di_exec(&con(r#"{"v":1,"capacita":"exec"}"#)));
+        assert!(!lasciapassare_di_exec(&con(
+            r#"{"v":2,"modo":"utente","capacita":"terminale"}"#
+        )));
         // Un payload non exec ferma tutto prima di collegarsi.
         let _ambiente = AMBIENTE.lock().unwrap();
         let fermato = exec("123456789", 1, false, Vec::new(), || Ok(tunnel.to_owned()));
@@ -1175,11 +1245,21 @@ mod tests {
         // Lo script in due blocchi, poi il blocco vuoto: la fine.
         assert_eq!(
             mandati.iter().map(Vec::len).collect::<Vec<_>>(),
-            vec![64 * 1024, 1, 0]
+            vec![BLOCCO_SCRIPT, 1, 0]
         );
         let (esito, _, _, _) = ciclo_exec(vec![Evento::Connesso, Evento::NonPartito]);
         assert_eq!(esito, Ok(super::super::USCITA_NON_PARTITO));
-        let (esito, _, _, _) = ciclo_exec(vec![Evento::Chiuso(7)]);
-        assert_eq!(esito, Ok(7));
+    }
+
+    #[test]
+    fn chiuso_prima_dello_script_e_un_errore() {
+        let prima = Err("il PC ha chiuso il terminale prima dello script".to_owned());
+        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Chiuso(7)]);
+        assert_eq!(esito, prima);
+        assert!(dati_mandati(&inviati).is_empty(), "nessuno script mandato");
+        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Connesso, Evento::Chiuso(0)]);
+        assert_eq!(esito, prima);
+        assert!(dati_mandati(&inviati).is_empty(), "nessuno script mandato");
+        // Il CLI ne esce con 1 (`USCITA_ERRORE`), come per ogni `Err`.
     }
 }

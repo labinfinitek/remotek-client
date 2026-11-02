@@ -36,8 +36,8 @@ const USO: &str = "uso:
                                dello script
 il CLI ha una cartella di configurazione sua (account, ID e chiavi), separata da quella
 del client grafico dello stesso utente;
-su Windows stdin e stdout vanno rediretti (pipe o file): su una console i byte non UTF-8
-sono rifiutati";
+su Windows stdin, stdout e, con exec, stderr vanno rediretti (pipe o file): su una
+console i byte non UTF-8 sono rifiutati";
 
 /// Uscita per un errore dell'API, di rete o di configurazione.
 pub(crate) const USCITA_ERRORE: i32 = 1;
@@ -76,7 +76,11 @@ fn leggi_terminale(id: &str, opzioni: &[&str]) -> Result<Comando, String> {
     if id.is_empty() || id.starts_with('-') || !id.chars().all(valido) {
         return Err("ID del PC non valido".to_owned());
     }
-    let (mut attesa, mut righe, mut colonne) = (120, 24, 80);
+    let (mut attesa, mut righe, mut colonne) = (
+        120,
+        terminale::RIGHE_PREDEFINITE,
+        terminale::COLONNE_PREDEFINITE,
+    );
     let mut amministratore = false;
     let mut resto = opzioni.iter();
     while let Some(opzione) = resto.next() {
@@ -247,8 +251,8 @@ fn avvia(argomenti: impl Iterator<Item = std::ffi::OsString>) -> i32 {
             let script = match terminale::leggi_script(std::io::stdin().lock()) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("remotek-cli: {e}");
-                    return USCITA_USO;
+                    eprintln!("remotek-cli: {}", e.messaggio());
+                    return e.codice();
                 }
             };
             let esito = avvia_terminale(

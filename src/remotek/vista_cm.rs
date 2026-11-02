@@ -12,8 +12,9 @@
 //! Exec (src/remotek/exec.rs) non ha eco: lo script arriva dallo stdin e la
 //! shell non lo ripete. Percio' in una sessione di exec il cliente vede anche
 //! lo script, intero e prima del suo output, fra una riga d'inizio e una di
-//! fine ([`Script`]); e il suo output passa in forma visibile
-//! ([`FormaVisibile`]). I segreti di exec (ADR-0033 passo 4) dovranno passare
+//! fine ([`Script`]), in un riquadro suo ([`RIQUADRO_SCRIPT`]) che nessun
+//! output raggiunge; il suo output passa in forma visibile
+//! ([`FormaVisibile`]), nei riquadri dei suoi `terminal_id`. I segreti di exec (ADR-0033 passo 4) dovranno passare
 //! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
 use super::scelta_terminale::Lingua;
@@ -37,8 +38,18 @@ const OGNI: Duration = Duration::from_millis(100);
 /// Un messaggio porta al massimo 64 KiB di output.
 const PEZZO_MAX: usize = 64 * 1024;
 
+/// La chiave del riquadro dello script nella vista del CM. Il `terminal_id`
+/// del protocollo e' `int32`, quindi nessun controllante puo' aprire exec o un
+/// terminale su questa chiave e scriverci: nel riquadro c'e' solo quello che
+/// afferma il PC (righe d'inizio e di fine, script, riga di chiusura) e nessun
+/// output lo raggiunge. Una chiave `i32` riservata non basterebbe, perche' il
+/// controllante sceglie liberamente il `terminal_id` dell'`OpenTerminal`. Per
+/// questo il canale della vista porta chiavi `i64`. La stessa costante sta in
+/// flutter/lib/desktop/pages/remotek_terminale_cm.dart (`_riquadroScript`).
+pub const RIQUADRO_SCRIPT: i64 = i32::MIN as i64 - 1;
+
 pub struct Vista {
-    tx: UnboundedSender<(i32, Vec<u8>)>,
+    tx: UnboundedSender<(i64, Vec<u8>)>,
 }
 
 impl Vista {
@@ -50,13 +61,14 @@ impl Vista {
         Self { tx }
     }
 
-    pub fn uscita(&self, terminal_id: i32, dati: &[u8]) {
+    /// `riquadro`: il `terminal_id` (`i64::from`) o [`RIQUADRO_SCRIPT`].
+    pub fn uscita(&self, riquadro: i64, dati: &[u8]) {
         if dati.is_empty() {
             return;
         }
         // Se il task e' uscito il CM non c'e' piu': la vista non ha piu' a
         // chi mostrare l'output, la trascrizione continua lo stesso.
-        self.tx.send((terminal_id, dati.to_vec())).ok();
+        self.tx.send((riquadro, dati.to_vec())).ok();
     }
 }
 
@@ -73,13 +85,11 @@ pub struct Script {
 }
 
 impl Script {
-    /// Il terminale e il testo da mostrare al cliente quando lo script e'
-    /// completo.
-    pub fn azione(&mut self, azione: &TerminalAction, lingua: Lingua) -> Option<(i32, Vec<u8>)> {
+    /// Il testo da mostrare al cliente, nel riquadro [`RIQUADRO_SCRIPT`],
+    /// quando lo script e' completo.
+    pub fn azione(&mut self, azione: &TerminalAction, lingua: Lingua) -> Option<Vec<u8>> {
         match self.raccolta.azione(azione) {
-            Passo::Completo(terminal_id, script) => {
-                Some((terminal_id, testo_script(&script, lingua)))
-            }
+            Passo::Completo(_, script) => Some(testo_script(&script, lingua)),
             _ => None,
         }
     }
@@ -97,12 +107,13 @@ impl Script {
             .into_bytes()
     }
 
-    /// Quello che resta dell'output, alla chiusura, in forma visibile.
-    pub fn resto(&mut self) -> Vec<(i32, Vec<u8>)> {
+    /// Quello che resta dell'output, alla chiusura, in forma visibile, sul
+    /// riquadro di ogni `terminal_id`.
+    pub fn resto(&mut self) -> Vec<(i64, Vec<u8>)> {
         let mut v: Vec<_> = self
             .uscite
             .iter_mut()
-            .map(|(id, f)| (*id, f.fine().into_bytes()))
+            .map(|(id, f)| (i64::from(*id), f.fine().into_bytes()))
             .filter(|(_, t)| !t.is_empty())
             .collect();
         v.sort_unstable();
@@ -110,10 +121,11 @@ impl Script {
     }
 
     /// La chiusura del terminale dello script, partita dal PC: quello che
-    /// resta dell'output e poi una riga finale nella lingua del CM, che dice
-    /// al cliente come e' finita (anche uno script rifiutato, che la vista non
-    /// ha mostrato). Fuori da exec o per un altro `terminal_id` niente.
-    pub fn chiusura(&mut self, r: &TerminalResponse, lingua: Lingua) -> Vec<(i32, Vec<u8>)> {
+    /// resta dell'output, sui suoi riquadri, e poi una riga finale nella lingua
+    /// del CM nel riquadro dello script, che dice al cliente come e' finita
+    /// (anche uno script rifiutato, che la vista non ha mostrato). Fuori da
+    /// exec o per un altro `terminal_id` niente.
+    pub fn chiusura(&mut self, r: &TerminalResponse, lingua: Lingua) -> Vec<(i64, Vec<u8>)> {
         let id = self.raccolta.terminal_id();
         let it = lingua == Lingua::Italiano;
         let riga = match &r.union {
@@ -141,12 +153,10 @@ impl Script {
             _ => return Vec::new(),
         };
         let mut v = self.resto();
-        if let Some(id) = id {
-            v.push((
-                id,
-                format!("\r\n{BORDO}---- {riga} ----{AZZERA}\r\n").into_bytes(),
-            ));
-        }
+        v.push((
+            RIQUADRO_SCRIPT,
+            format!("\r\n{BORDO}---- {riga} ----{AZZERA}\r\n").into_bytes(),
+        ));
         v
     }
 }
@@ -327,7 +337,7 @@ fn visibile(c: char, t: &mut String) {
 }
 
 /// Unisce i pezzi consecutivi dello stesso terminale.
-fn accoda(attesa: &mut Vec<(i32, Vec<u8>)>, terminal_id: i32, dati: Vec<u8>) {
+fn accoda(attesa: &mut Vec<(i64, Vec<u8>)>, terminal_id: i64, dati: Vec<u8>) {
     match attesa.last_mut() {
         Some((t, d)) if *t == terminal_id => d.extend_from_slice(&dati),
         _ => attesa.push((terminal_id, dati)),
@@ -335,7 +345,7 @@ fn accoda(attesa: &mut Vec<(i32, Vec<u8>)>, terminal_id: i32, dati: Vec<u8>) {
 }
 
 /// I testi JSON dei pezzi in attesa, al massimo `PEZZO_MAX` byte l'uno.
-fn messaggi(conn_id: i32, attesa: &mut Vec<(i32, Vec<u8>)>) -> Vec<String> {
+fn messaggi(conn_id: i32, attesa: &mut Vec<(i64, Vec<u8>)>) -> Vec<String> {
     let mut v = Vec::new();
     for (terminal_id, dati) in attesa.drain(..) {
         for pezzo in dati.chunks(PEZZO_MAX) {
@@ -354,7 +364,7 @@ fn messaggi(conn_id: i32, attesa: &mut Vec<(i32, Vec<u8>)>) -> Vec<String> {
 }
 
 /// Manda i pezzi in attesa; `false` se il CM non c'e' piu'.
-fn manda(conn_id: i32, attesa: &mut Vec<(i32, Vec<u8>)>, tx_cm: &UnboundedSender<Data>) -> bool {
+fn manda(conn_id: i32, attesa: &mut Vec<(i64, Vec<u8>)>, tx_cm: &UnboundedSender<Data>) -> bool {
     messaggi(conn_id, attesa).into_iter().all(|m| {
         tx_cm
             .send(Data::FileTransferLog((AZIONE.to_owned(), m)))
@@ -364,7 +374,7 @@ fn manda(conn_id: i32, attesa: &mut Vec<(i32, Vec<u8>)>, tx_cm: &UnboundedSender
 
 async fn ciclo(
     conn_id: i32,
-    mut rx: UnboundedReceiver<(i32, Vec<u8>)>,
+    mut rx: UnboundedReceiver<(i64, Vec<u8>)>,
     tx_cm: UnboundedSender<Data>,
 ) {
     let mut attesa = Vec::new();
@@ -417,6 +427,11 @@ pub(crate) mod tests {
         assert_eq!(v["terminal_id"], 3);
         assert_eq!(v["dir"], "out");
         assert_eq!(v["data"], "eA==");
+        // Il riquadro dello script: fuori dagli `int32` del `terminal_id`.
+        let mut a = vec![(RIQUADRO_SCRIPT, b"x".to_vec())];
+        let v: Value = serde_json::from_str(&messaggi(9, &mut a)[0]).expect("json");
+        assert_eq!(v["terminal_id"].as_i64(), Some(-2_147_483_649));
+        assert!(i32::try_from(RIQUADRO_SCRIPT).is_err());
     }
 
     #[tokio::test]
@@ -479,8 +494,7 @@ pub(crate) mod tests {
         assert_eq!(s.azione(&apri(1), it), None);
         assert_eq!(s.azione(&dati(1, b"echo a\n"), it), None);
         assert_eq!(s.azione(&dati(1, b"echo b"), it), None);
-        let (id, t) = s.azione(&dati(1, b""), it).expect("testo");
-        assert_eq!(id, 1);
+        let t = s.azione(&dati(1, b""), it).expect("testo");
         assert_eq!(
             String::from_utf8_lossy(&t),
             "\r\n\x1b[7m---- script dell'agente ----\x1b[0m\r\n\x1b[1m| echo a\r\n| echo b\r\n\x1b[0m\x1b[7m---- fine dello script ----\x1b[0m\r\n"
@@ -488,7 +502,7 @@ pub(crate) mod tests {
         assert_eq!(s.azione(&dati(1, b""), it), None, "una volta sola");
         let mut en = Script::default();
         en.azione(&apri(1), Lingua::Inglese);
-        let (_, t) = en.azione(&dati(1, b""), Lingua::Inglese).expect("testo");
+        let t = en.azione(&dati(1, b""), Lingua::Inglese).expect("testo");
         assert!(String::from_utf8_lossy(&t).contains("---- agent script ----"));
         let mut grande = Script::default();
         grande.azione(&apri(1), it);
@@ -693,16 +707,46 @@ pub(crate) mod tests {
         assert_eq!(per_byte, 8, "oggi la tabulazione");
         let corpo =
             (per_byte * MASSIMO_SCRIPT + PREFISSO.len() * MASSIMO_RIGHE) / COLONNE + MASSIMO_RIGHE;
-        for lingua in [Lingua::Italiano, Lingua::Inglese] {
-            let vuoto = String::from_utf8(testo_script(b"", lingua)).expect("utf-8");
-            let fisse: usize = vuoto
-                .replace(STILE, "")
+        let righe = |t: &str| -> usize {
+            t.replace(STILE, "")
                 .replace(BORDO, "")
                 .replace(AZZERA, "")
                 .split_terminator("\r\n")
                 .map(|r| colonne(r) / COLONNE + 1)
-                .sum();
-            let peggiore = corpo + fisse;
+                .sum()
+        };
+        for lingua in [Lingua::Italiano, Lingua::Inglese] {
+            let vuoto = String::from_utf8(testo_script(b"", lingua)).expect("utf-8");
+            // Nel riquadro dello script c'e' anche la riga di chiusura: la
+            // piu' lunga delle tre.
+            let mut finito = TerminalResponse::new();
+            finito.set_closed(hbb_common::message_proto::TerminalClosed {
+                terminal_id: 1,
+                exit_code: i32::MIN,
+                ..Default::default()
+            });
+            let errore = |m: &str| {
+                let mut r = TerminalResponse::new();
+                r.set_error(hbb_common::message_proto::TerminalError {
+                    terminal_id: 1,
+                    message: m.to_owned(),
+                    ..Default::default()
+                });
+                r
+            };
+            let chiusura = [finito, errore(NON_PARTITO), errore(TROPPO_GRANDE)]
+                .iter()
+                .map(|r| {
+                    let mut s = Script::default();
+                    s.azione(&apri(1), lingua);
+                    let v = s.chiusura(r, lingua);
+                    assert_eq!(v.len(), 1);
+                    assert_eq!(v[0].0, RIQUADRO_SCRIPT);
+                    righe(&String::from_utf8_lossy(&v[0].1))
+                })
+                .max()
+                .unwrap_or_default();
+            let peggiore = corpo + righe(&vuoto) + chiusura;
             assert!(
                 peggiore * 10 <= RIGHE_XTERM * 9,
                 "{peggiore} righe: senza margine"

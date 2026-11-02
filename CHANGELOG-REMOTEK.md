@@ -41,10 +41,10 @@ rilasciate non si riscrivono.
   (ADR-0021, regola 6). Col terminale non cambia niente.
 - **Per l'agente AI**: `remotek-cli exec <ID>` esegue sul PC lo script letto
   da stdin (al massimo 32 KiB e 2000 righe, controllati prima di collegarsi)
-  e rimanda stdout e stderr separati, uscendo col
-  codice dello script; da utente o con `--amministratore`, sempre col
-  lasciapassare di exec e il clic del cliente. Con un PC che non conosce exec
-  si ferma senza mandare niente (ADR-0033).
+  e rimanda stdout e stderr separati, uscendo col codice dello script; da
+  utente o con `--amministratore`, sempre col lasciapassare di exec e il clic
+  del cliente. Con un PC che non conosce exec si ferma senza mandare niente
+  (ADR-0033).
 
 ### Corretto
 - Su quel PC il terminale senza lasciapassare da amministratore si rifiutava
@@ -65,12 +65,13 @@ rilasciate non si riscrivono.
   cancellare, riscrivere o spingere fuori lo script mostrato; oltre circa
   10000 righe un riquadro di output perde il suo inizio, che resta nella
   trascrizione. Una riga finale dice come e' finito lo script, anche quando
-  non e' partito o e' stato rifiutato. Uno script partito che esce col
-  codice riservato al "non partito" (1381255937) si riporta 1381255938.
-  Anche su Windows, col servizio installato, uno script che chiude a forza il
-  proprio helper con quel codice si riporta 1381255938: l'helper dice al
-  servizio che lo script e' partito prima di dargli lo script. La
-  trascrizione non cambia.
+  non e' partito o e' stato rifiutato; non c'e' quando lo chiude il
+  controllante, quando la connessione cade o quando si chiude dopo un'ora
+  senza attivita'. Uno script partito che esce col codice riservato al "non
+  partito" (1381255937) si riporta 1381255938. Anche su Windows, col
+  servizio installato, uno script che chiude a forza il proprio helper con
+  quel codice si riporta 1381255938: l'helper dice al servizio che lo script
+  e' partito prima di dargli lo script. La trascrizione non cambia.
 
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

@@ -1814,6 +1814,8 @@ impl Connection {
         }
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        crate::remotek::dichiarazione::aggiungi(&mut platform_additions);
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
             pi.platform_additions = serde_json::to_string(&platform_additions).unwrap_or("".into());
         }

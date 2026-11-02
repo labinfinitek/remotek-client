@@ -62,6 +62,11 @@ rilasciate non si riscrivono.
   codice degli errori; lo script oltre i limiti resta 2.
 
 ### Sicurezza
+- Il PC dichiara al controllante che trascrive la sessione terminale e la
+  mostra al cliente nel connection manager (ADR-0034): sono due voci nelle
+  informazioni che il PC manda all'inizio della connessione, che il client
+  grafico ignora. Servono a `remotek-cli`, che con un client vecchio non
+  sapeva se la sessione sarebbe stata trascritta.
 - Con exec il cliente vede sempre lo script intero e distinto da tutto il
   resto, in un riquadro suo che nessun output raggiunge: ogni riga col suo
   prefisso e uno stile suo, le righe d'inizio, di fine e di chiusura con uno

@@ -66,12 +66,11 @@ rilasciate non si riscrivono.
   10000 righe un riquadro di output perde il suo inizio, che resta nella
   trascrizione. Una riga finale dice come e' finito lo script, anche quando
   non e' partito o e' stato rifiutato. Uno script partito che esce col
-  codice riservato al "non partito" (1381255937) si riporta 1381255938. Su
-  Windows, col servizio installato, lo script gira dentro l'helper con lo
-  stesso utente: uno script che chiude a forza il proprio helper con quel
-  codice fa ancora scrivere "non partito". Il suo testo resta intero nel
-  riquadro dello script e nella trascrizione; la chiusura arriva in una MR
-  successiva. La trascrizione non cambia.
+  codice riservato al "non partito" (1381255937) si riporta 1381255938.
+  Anche su Windows, col servizio installato, uno script che chiude a forza il
+  proprio helper con quel codice si riporta 1381255938: l'helper dice al
+  servizio che lo script e' partito prima di dargli lo script. La
+  trascrizione non cambia.
 
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

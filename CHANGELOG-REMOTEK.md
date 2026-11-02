@@ -11,6 +11,26 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-7] - 2026-11-02
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-7`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`, lo stesso del
+-6). Nello stesso build c'e' `remotek-cli.exe` per Windows, attestato come
+l'exe e come lui non firmato. Porta exec per l'agente AI (ADR-0033): lo
+script intero col suo lasciapassare, mostrato al cliente nel connection
+manager prima che parta, con stdout, stderr e codice d'uscita separati.
+Porta anche l'ingresso dell'agente sul PC dove Remotek non e' installato e
+gira come amministratore (ADR-0028), e la dichiarazione di trascrizione e
+vista del terminale al controllante (ADR-0034).
+**Per chi installa**: come per il -6 (API `api-v0.8.0` o seguente con la
+chiave dei lasciapassare accesa per l'agente, orologio entro 5 minuti ed
+entro 30 secondi per il lasciapassare); per exec serve l'API `api-v0.14.0`
+o seguente, che da' il lasciapassare con la capacita' `exec`. Si installa
+sopra la versione precedente.
+**Per l'agente AI**: `remotek-cli` del -7 non apre ne' terminale ne' exec su
+un PC con un client che non dichiara trascrizione e vista, cioe' ogni client
+fino al -6: esce con 126. Prima di usarlo, i PC vanno aggiornati al -7.
+
 ### Aggiunto
 - **Per l'agente AI**: il PC accetta il lasciapassare dell'API per eseguire
   script (`v` = 2, capacita' `exec`), da amministratore o da utente

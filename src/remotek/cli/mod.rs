@@ -21,6 +21,9 @@ const USO: &str = "uso:
                                esce col codice del terminale (fuori da 0-255: 255); 0 anche
                                quando il PC non conosce il codice della shell; 125 se il
                                terminale non e' partito sul PC (lo dice anche su stderr);
+                               126 se il PC non dichiara la trascrizione e la vista del
+                               terminale (va aggiornato; lo dice anche su stderr): sul PC
+                               non si apre niente;
                                la fine di stdin chiude subito il terminale e la shell: per il
                                codice della shell si manda `exit` e si tiene stdin aperto
   remotek-cli exec <ID> [--amministratore] [--attesa <secondi>]
@@ -31,9 +34,9 @@ const USO: &str = "uso:
                                utente o con --amministratore, e il cliente deve accettare;
                                stdout e stderr del PC su stdout e stderr; esce col codice
                                dello script, con le regole di terminal (fuori da 0-255: 255;
-                               125 se non partito); il cliente vede lo script intero nel suo
-                               connection manager prima che parta: niente segreti nel testo
-                               dello script
+                               125 se non partito, 126 se il PC non dichiara); il cliente
+                               vede lo script intero nel suo connection manager prima che
+                               parta: niente segreti nel testo dello script
 il CLI ha una cartella di configurazione sua (account, ID e chiavi), separata da quella
 del client grafico dello stesso utente;
 su Windows stdin, stdout e, con exec, stderr vanno rediretti (pipe o file): su una
@@ -47,6 +50,11 @@ pub(crate) const USCITA_USO: i32 = 2;
 /// della shell): 125, come `env` e i lanciatori quando il comando non parte.
 /// Una shell che esce da se' con 125 si distingue solo da stderr.
 pub(crate) const USCITA_NON_PARTITO: i32 = 125;
+/// Uscita quando il PC non dichiara la trascrizione e la vista del terminale
+/// (ADR-0034, src/remotek/dichiarazione.rs): ne' terminale ne' exec si aprono.
+/// 126, il codice dei comandi che non si possono eseguire. Una shell o uno
+/// script che esce da se' con 126 si distingue solo da stderr, come per il 125.
+pub(crate) const USCITA_NON_DICHIARA: i32 = 126;
 
 #[derive(Debug, PartialEq)]
 enum Comando {

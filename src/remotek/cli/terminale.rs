@@ -18,7 +18,7 @@ use hbb_common::{
 };
 use std::io::{Read, Write};
 use std::sync::{
-    atomic::AtomicUsize,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc::{channel, RecvTimeoutError, Sender},
     Arc, RwLock,
 };
@@ -41,7 +41,9 @@ pub(super) enum Evento {
     Attesa,
     /// Il controllato offre una connessione non cifrata da un capo all'altro.
     NonCifrata,
-    Connesso,
+    /// La connessione e' su; `true` se il PC dichiara trascrizione e vista
+    /// del terminale (`dichiarazione::dichiara_il_terminale`, ADR-0034).
+    Connesso(bool),
     /// Il PC ha aperto il terminale; il `message` del `TerminalOpened`.
     Aperto(String),
     Dati(Vec<u8>),
@@ -63,6 +65,9 @@ pub(super) struct Gestore {
     eventi: Option<Sender<Evento>>,
     /// Il login porta il lasciapassare (`--amministratore`).
     amministratore: bool,
+    /// La `PeerInfo` del PC dichiara trascrizione e vista del terminale.
+    /// `set_peer_info` la scrive, `on_connected`, che viene dopo, la legge.
+    pc_dichiara: Arc<AtomicBool>,
 }
 
 impl Gestore {
@@ -180,12 +185,15 @@ impl InvokeUiSession for Gestore {
     fn set_cursor_position(&self, _: CursorPosition) {}
     fn set_display(&self, _: i32, _: i32, _: i32, _: i32, _: bool, _: f64) {}
     fn switch_display(&self, _: &SwitchDisplay) {}
-    fn set_peer_info(&self, _: &PeerInfo) {}
+    fn set_peer_info(&self, pi: &PeerInfo) {
+        let dichiara = crate::remotek::dichiarazione::dichiara_il_terminale(&pi.platform_additions);
+        self.pc_dichiara.store(dichiara, Ordering::SeqCst);
+    }
     fn set_displays(&self, _: &Vec<DisplayInfo>) {}
     fn set_platform_additions(&self, _: &str) {}
     fn on_connected(&self, conn_type: ConnType) {
         if conn_type == ConnType::TERMINAL {
-            self.invia(Evento::Connesso);
+            self.invia(Evento::Connesso(self.pc_dichiara.load(Ordering::SeqCst)));
         }
     }
     fn update_privacy_mode(&self) {}
@@ -362,6 +370,7 @@ fn con_sessione(
                 Gestore {
                     eventi: Some(tx.clone()),
                     amministratore,
+                    pc_dichiara: Arc::new(AtomicBool::new(false)),
                 },
             )
         },
@@ -462,7 +471,10 @@ fn attendi(
                 session.send(Data::RejectInsecureConnection);
                 return Err("connessione non cifrata da un capo all'altro: rifiutata".to_owned());
             }
-            Evento::Connesso => session.open_terminal(ID_TERMINALE, righe, colonne),
+            Evento::Connesso(false) => {
+                return Ok(rifiuta_il_pc_che_non_dichiara(&mut std::io::stderr()))
+            }
+            Evento::Connesso(true) => session.open_terminal(ID_TERMINALE, righe, colonne),
             Evento::Aperto(_) if scadenza.is_some() && !chiusura => {
                 scadenza = None;
                 leggi_stdin(session.clone(), tx.clone());
@@ -490,6 +502,21 @@ fn attendi(
             }
         }
     }
+}
+
+/// Cosa dice il CLI quando il PC non dichiara trascrizione e vista.
+const NON_DICHIARA: &str = "il PC non dichiara la trascrizione e la vista del terminale: aggiornare Remotek sul PC (remotek-1.4.9-7 o seguente)";
+
+/// Il PC non dichiara trascrizione e vista del terminale (ADR-0034): il CLI
+/// non gli manda niente, lo scrive su `avvisi` (stderr) e restituisce
+/// `USCITA_NON_DICHIARA`. Non c'e' modo di forzare. La sessione la chiude
+/// `con_sessione`.
+fn rifiuta_il_pc_che_non_dichiara(avvisi: &mut impl Write) -> i32 {
+    // Se stderr non si scrive, il codice d'uscita dice comunque il motivo.
+    writeln!(avvisi, "remotek-cli: {NON_DICHIARA}")
+        .and_then(|()| avvisi.flush())
+        .ok();
+    super::USCITA_NON_DICHIARA
 }
 
 /// Il codice del terminale come codice d'uscita del CLI: Linux tiene solo
@@ -653,7 +680,8 @@ fn attendi_exec(
                 session.send(Data::RejectInsecureConnection);
                 return Err("connessione non cifrata da un capo all'altro: rifiutata".to_owned());
             }
-            Evento::Connesso => {
+            Evento::Connesso(false) => return Ok(rifiuta_il_pc_che_non_dichiara(err)),
+            Evento::Connesso(true) => {
                 session.open_terminal(ID_TERMINALE, RIGHE_PREDEFINITE, COLONNE_PREDEFINITE)
             }
             Evento::Aperto(m) if m != crate::remotek::exec::APERTO => {
@@ -764,7 +792,7 @@ mod tests {
             ..Default::default()
         }));
         assert_eq!(evento_da_risposta(chiuso), Some(Evento::Chiuso(3)));
-        let (esito, inviati) = ciclo(vec![Evento::Connesso, Evento::Chiuso(3)], 5);
+        let (esito, inviati) = ciclo(vec![Evento::Connesso(true), Evento::Chiuso(3)], 5);
         assert_eq!(esito, Ok(3));
         // Connesso: `open_terminal` con righe e colonne.
         assert!(matches!(&inviati[..], [Data::Message(m)] if m.has_terminal_action()));
@@ -777,7 +805,7 @@ mod tests {
             crate::remotek::uscita_terminale::HELPER_NON_PARTITO,
         );
         assert_eq!(evento_da_risposta(non_partito), Some(Evento::NonPartito));
-        let (esito, _) = ciclo(vec![Evento::Connesso, Evento::NonPartito], 5);
+        let (esito, _) = ciclo(vec![Evento::Connesso(true), Evento::NonPartito], 5);
         assert_eq!(esito, Ok(super::super::USCITA_NON_PARTITO));
         // Mai 0 e mai il 255 di un codice della shell fuori da 0-255.
         assert_ne!(super::super::USCITA_NON_PARTITO, 0);
@@ -1205,7 +1233,7 @@ mod tests {
     #[test]
     fn niente_script_senza_remotek_exec() {
         let vecchio = Evento::Aperto("Terminal opened (helper mode)".into());
-        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Connesso, vecchio]);
+        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Connesso(true), vecchio]);
         assert_eq!(
             esito,
             Err("il PC non esegue exec (client vecchio?)".to_owned())
@@ -1233,7 +1261,7 @@ mod tests {
             Some(Evento::Stderr(b"e\n".to_vec()))
         );
         let (esito, inviati, out, err) = ciclo_exec(vec![
-            Evento::Connesso,
+            Evento::Connesso(true),
             evento,
             Evento::Dati(b"o\n".to_vec()),
             Evento::Stderr(vec![0xff, b'\n']),
@@ -1247,7 +1275,7 @@ mod tests {
             mandati.iter().map(Vec::len).collect::<Vec<_>>(),
             vec![BLOCCO_SCRIPT, 1, 0]
         );
-        let (esito, _, _, _) = ciclo_exec(vec![Evento::Connesso, Evento::NonPartito]);
+        let (esito, _, _, _) = ciclo_exec(vec![Evento::Connesso(true), Evento::NonPartito]);
         assert_eq!(esito, Ok(super::super::USCITA_NON_PARTITO));
     }
 
@@ -1257,9 +1285,95 @@ mod tests {
         let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Chiuso(7)]);
         assert_eq!(esito, prima);
         assert!(dati_mandati(&inviati).is_empty(), "nessuno script mandato");
-        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Connesso, Evento::Chiuso(0)]);
+        let (esito, inviati, _, _) = ciclo_exec(vec![Evento::Connesso(true), Evento::Chiuso(0)]);
         assert_eq!(esito, prima);
         assert!(dati_mandati(&inviati).is_empty(), "nessuno script mandato");
         // Il CLI ne esce con 1 (`USCITA_ERRORE`), come per ogni `Err`.
+    }
+
+    /// Nessun `OpenTerminal` fra i messaggi mandati al PC.
+    fn nessuna_apertura(inviati: &[Data]) -> bool {
+        !inviati.iter().any(|d| match d {
+            Data::Message(m) => matches!(
+                &m.terminal_action().union,
+                Some(terminal_action::Union::Open(_))
+            ),
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn terminal_non_apre_sul_pc_che_non_dichiara() {
+        let (esito, inviati) = ciclo(vec![Evento::Connesso(false), Evento::Chiuso(0)], 5);
+        assert_eq!(esito, Ok(super::super::USCITA_NON_DICHIARA));
+        assert!(inviati.is_empty(), "niente al PC");
+        let mut avvisi = Vec::new();
+        assert_eq!(rifiuta_il_pc_che_non_dichiara(&mut avvisi), 126);
+        assert_eq!(
+            String::from_utf8(avvisi).unwrap(),
+            "remotek-cli: il PC non dichiara la trascrizione e la vista del terminale: aggiornare Remotek sul PC (remotek-1.4.9-7 o seguente)\n"
+        );
+        // Il PC che dichiara: open_terminal come prima.
+        let (esito, inviati) = ciclo(vec![Evento::Connesso(true), Evento::Chiuso(0)], 5);
+        assert_eq!(esito, Ok(0));
+        assert!(!nessuna_apertura(&inviati));
+        // 126 non e' ne' 1, ne' 2, ne' 125.
+        assert_ne!(
+            super::super::USCITA_NON_DICHIARA,
+            super::super::USCITA_NON_PARTITO
+        );
+        assert_ne!(
+            super::super::USCITA_NON_DICHIARA,
+            super::super::USCITA_ERRORE
+        );
+        assert_ne!(super::super::USCITA_NON_DICHIARA, super::super::USCITA_USO);
+    }
+
+    #[test]
+    fn exec_non_apre_sul_pc_che_non_dichiara() {
+        let aperto = Evento::Aperto(crate::remotek::exec::APERTO.into());
+        let (esito, inviati, out, err) =
+            ciclo_exec(vec![Evento::Connesso(false), aperto, Evento::Chiuso(0)]);
+        assert_eq!(esito, Ok(super::super::USCITA_NON_DICHIARA));
+        assert!(inviati.is_empty(), "niente al PC, nemmeno lo script");
+        assert!(out.is_empty());
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            format!("remotek-cli: {NON_DICHIARA}\n")
+        );
+        let aperto = Evento::Aperto(crate::remotek::exec::APERTO.into());
+        let (esito, inviati, _, err) =
+            ciclo_exec(vec![Evento::Connesso(true), aperto, Evento::Chiuso(0)]);
+        assert_eq!(esito, Ok(0));
+        assert!(!nessuna_apertura(&inviati));
+        assert!(!dati_mandati(&inviati).is_empty(), "lo script e' partito");
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn set_peer_info_decide_connesso() {
+        let connesso = |platform_additions: &str| {
+            let (tx, rx) = channel();
+            let gestore = Gestore {
+                eventi: Some(tx),
+                ..Default::default()
+            };
+            gestore.set_peer_info(&PeerInfo {
+                platform_additions: platform_additions.into(),
+                ..Default::default()
+            });
+            gestore.on_connected(ConnType::TERMINAL);
+            rx.try_recv().unwrap()
+        };
+        let mut dichiara = serde_json::Map::new();
+        dichiara.insert("is_installed".into(), serde_json::json!(true));
+        crate::remotek::dichiarazione::aggiungi(&mut dichiara);
+        let dichiara = serde_json::to_string(&dichiara).unwrap();
+        assert_eq!(connesso(&dichiara), Evento::Connesso(true));
+        assert_eq!(
+            connesso(r#"{"is_installed":true,"support_view_camera":true}"#),
+            Evento::Connesso(false)
+        );
+        assert_eq!(connesso(""), Evento::Connesso(false));
     }
 }

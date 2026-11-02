@@ -79,10 +79,20 @@ const COMANDO_POWERSHELL: &str = "$u = New-Object System.Text.UTF8Encoding $fals
 /// deve sembrare `HELPER_NON_PARTITO`.
 fn codice(stato: ExitStatus) -> i32 {
     #[cfg(unix)]
-    if let Some(s) = std::os::unix::process::ExitStatusExt::signal(&stato) {
-        return codice_dello_script(128 + s);
+    let segnale = std::os::unix::process::ExitStatusExt::signal(&stato);
+    #[cfg(not(unix))]
+    let segnale = None;
+    codice_da(stato.code(), segnale)
+}
+
+/// [`codice`] senza il processo, per provarlo su Linux, dove un processo non
+/// esce con `HELPER_NON_PARTITO`: 128 + il segnale se c'e', altrimenti il
+/// codice (`None`: -1), passati da `codice_dello_script`.
+fn codice_da(codice: Option<i32>, segnale: Option<i32>) -> i32 {
+    match segnale {
+        Some(s) => codice_dello_script(128 + s),
+        None => codice_dello_script(codice.unwrap_or(-1)),
     }
-    codice_dello_script(stato.code().unwrap_or(-1))
 }
 
 #[cfg(windows)]
@@ -1050,6 +1060,18 @@ pub(crate) mod tests {
         let troncato = codifica(MSG_TYPE_DATA, b"touch /nonesiste\n");
         assert_eq!(helper(troncato.as_slice(), &mut niente), HELPER_NON_PARTITO);
         assert!(niente.is_empty(), "senza script neanche \"partito\"");
+    }
+
+    #[test]
+    fn il_codice_dello_script_passa_da_codice_dello_script() {
+        use crate::remotek::uscita_terminale::CODICE_SCRIPT_SOSTITUITO;
+        assert_eq!(
+            codice_da(Some(HELPER_NON_PARTITO), None),
+            CODICE_SCRIPT_SOSTITUITO
+        );
+        assert_eq!(codice_da(Some(3), None), 3);
+        assert_eq!(codice_da(None, None), -1);
+        assert_eq!(codice_da(None, Some(9)), 137);
     }
 
     /// Una pipe d'uscita che il servizio non legge piu'.

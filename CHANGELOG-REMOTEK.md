@@ -40,7 +40,8 @@ rilasciate non si riscrivono.
   fine: exec non ha l'eco della shell che col terminale mostra i comandi
   (ADR-0021, regola 6). Col terminale non cambia niente.
 - **Per l'agente AI**: `remotek-cli exec <ID>` esegue sul PC lo script letto
-  da stdin (al massimo 1 MiB) e rimanda stdout e stderr separati, uscendo col
+  da stdin (al massimo 32 KiB e 2000 righe, controllati prima di collegarsi)
+  e rimanda stdout e stderr separati, uscendo col
   codice dello script; da utente o con `--amministratore`, sempre col
   lasciapassare di exec e il clic del cliente. Con un PC che non conosce exec
   si ferma senza mandare niente (ADR-0033).
@@ -52,6 +53,25 @@ rilasciate non si riscrivono.
 - Dove Remotek non e' installato e gira senza permessi di amministratore, chi
   chiedeva l'amministratore riceveva la shell da utente: ora il collegamento
   si rifiuta subito, senza finestra.
+
+### Sicurezza
+- Con exec il cliente vede sempre lo script intero e distinto da tutto il
+  resto, in un riquadro suo che nessun output raggiunge: ogni riga col suo
+  prefisso e uno stile suo, le righe d'inizio, di fine e di chiusura con uno
+  stile che ne' lo script ne' l'output possono imitare, nessun carattere di
+  controllo o Unicode invisibile nascosto; uno script piu' lungo di quanto il
+  connection manager tiene (32 KiB o 2000 righe) non si esegue. Stdout e
+  stderr hanno riquadri loro, in forma visibile, quindi non possono
+  cancellare, riscrivere o spingere fuori lo script mostrato; oltre circa
+  10000 righe un riquadro di output perde il suo inizio, che resta nella
+  trascrizione. Una riga finale dice come e' finito lo script, anche quando
+  non e' partito o e' stato rifiutato. Uno script partito che esce col
+  codice riservato al "non partito" (1381255937) si riporta 1381255938. Su
+  Windows, col servizio installato, lo script gira dentro l'helper con lo
+  stesso utente: uno script che chiude a forza il proprio helper con quel
+  codice fa ancora scrivere "non partito". Il suo testo resta intero nel
+  riquadro dello script e nella trascrizione; la chiusura arriva in una MR
+  successiva. La trascrizione non cambia.
 
 ## [remotek-1.4.9-6] - 2026-10-26
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

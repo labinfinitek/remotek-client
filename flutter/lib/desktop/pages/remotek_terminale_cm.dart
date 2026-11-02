@@ -14,6 +14,11 @@ import 'package:xterm/xterm.dart';
 
 import '../../common.dart';
 
+// La chiave del riquadro dello script di exec: vista_cm::RIQUADRO_SCRIPT
+// (src/remotek/vista_cm.rs), fuori dai terminal_id possibili (int32), cosi'
+// nessun output ci arriva.
+const _riquadroScript = -2147483649;
+
 class _TerminaleCm {
   final terminal = Terminal(maxLines: 10000);
   late final ByteConversionSink _utf8;
@@ -109,7 +114,11 @@ class RemotekVistaTerminale extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final t in terminali) ...[
-            Text(terminali.length > 1 ? '$titolo (${t.key})' : titolo)
+            Text(t.key == _riquadroScript
+                    ? '$titolo - Script'
+                    : terminali.length > 1
+                        ? '$titolo (${t.key})'
+                        : titolo)
                 .paddingSymmetric(horizontal: 8, vertical: 4),
             Expanded(
               child: TerminalView(

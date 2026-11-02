@@ -25,14 +25,15 @@ const USO: &str = "uso:
                                codice della shell si manda `exit` e si tiene stdin aperto
   remotek-cli exec <ID> [--amministratore] [--attesa <secondi>]
                                esegue sul PC lo script letto da stdin (tutto, prima di
-                               collegarsi; al massimo 1 MiB, altrimenti esce con 2) senza
-                               pseudo-console: PowerShell su Windows, sh su Linux; chiede
-                               sempre all'API un lasciapassare di exec, da utente o con
-                               --amministratore, e il cliente deve accettare; stdout e stderr
-                               del PC su stdout e stderr; esce col codice dello script, con le
-                               regole di terminal (fuori da 0-255: 255; 125 se non partito);
-                               il cliente vede lo script intero nel suo connection manager
-                               prima che parta: niente segreti nel testo dello script
+                               collegarsi; al massimo 32 KiB e 2000 righe, altrimenti esce
+                               con 2) senza pseudo-console: PowerShell su Windows, sh su
+                               Linux; chiede sempre all'API un lasciapassare di exec, da
+                               utente o con --amministratore, e il cliente deve accettare;
+                               stdout e stderr del PC su stdout e stderr; esce col codice
+                               dello script, con le regole di terminal (fuori da 0-255: 255;
+                               125 se non partito); il cliente vede lo script intero nel suo
+                               connection manager prima che parta: niente segreti nel testo
+                               dello script
 il CLI ha una cartella di configurazione sua (account, ID e chiavi), separata da quella
 del client grafico dello stesso utente;
 su Windows stdin e stdout vanno rediretti (pipe o file): su una console i byte non UTF-8

@@ -15,7 +15,9 @@ use hbb_common::{
     chrono::Local,
     config::Config,
     log,
-    message_proto::{message, terminal_action, terminal_response, Message, TerminalAction},
+    message_proto::{
+        message, terminal_action, terminal_response, Message, TerminalAction, TerminalResponse,
+    },
     tokio::sync::mpsc::UnboundedSender,
 };
 use super::scelta_terminale::Lingua;
@@ -294,8 +296,10 @@ pub struct Trascrizione {
     api: Option<Api>,
     file: Option<std_mpsc::Sender<String>>,
     vista: Option<super::vista_cm::Vista>,
-    /// Solo con exec: lo script per la vista (`vista_cm::Script`).
+    /// Solo con exec: lo script e l'output per la vista (`vista_cm::Script`).
     script: super::vista_cm::Script,
+    /// La lingua del CM, dalla prima azione di exec; `None` fuori da exec.
+    lingua: Option<Lingua>,
     #[cfg(test)]
     scrittore: Option<std::thread::JoinHandle<()>>,
     terminal_id: i32,
@@ -324,6 +328,7 @@ impl Trascrizione {
             file: None,
             vista,
             script: Default::default(),
+            lingua: None,
             #[cfg(test)]
             scrittore: None,
             terminal_id: 0,
@@ -380,7 +385,17 @@ impl Trascrizione {
     fn dati(&mut self, dir: Dir, terminal_id: i32, dati: &[u8]) {
         self.terminal_id = terminal_id;
         if let (Dir::Out, Some(v)) = (dir, self.vista.as_ref()) {
-            v.uscita(terminal_id, dati);
+            // In exec l'output va alla vista in forma visibile
+            // (`vista_cm::Script::uscita`); nel terminale byte per byte, perche'
+            // la sua pseudo-console le sequenze di controllo le usa davvero.
+            if self.lingua.is_some() {
+                v.uscita(
+                    i64::from(terminal_id),
+                    &self.script.uscita(terminal_id, dati),
+                );
+            } else {
+                v.uscita(i64::from(terminal_id), dati);
+            }
         }
         let blocchi = self
             .accumulo
@@ -388,14 +403,28 @@ impl Trascrizione {
         self.registra(blocchi);
     }
 
-    /// Exec non ha eco: lo script completo va alla vista prima che parta (e
-    /// quindi prima del suo output, che passa dallo stesso canale). La
-    /// trascrizione resta quella di `dati`.
-    fn script_alla_vista(&mut self, azione: &TerminalAction, lingua: Lingua) {
-        if let (Some(v), Some((terminal_id, testo))) =
-            (self.vista.as_ref(), self.script.azione(azione, lingua))
-        {
-            v.uscita(terminal_id, &testo);
+    /// Exec non ha eco: lo script completo va alla vista prima che parta, nel
+    /// riquadro suo (`vista_cm::RIQUADRO_SCRIPT`), che nessun output
+    /// raggiunge. La trascrizione resta quella di `dati`.
+    fn script_alla_vista(&mut self, azione: &TerminalAction) {
+        // La lingua del CM, una volta per trascrizione: alla prima azione di
+        // exec. Da qui la trascrizione e' di exec.
+        let lingua = *self
+            .lingua
+            .get_or_insert_with(super::scelta_terminale::lingua_del_cm);
+        if let (Some(v), Some(testo)) = (self.vista.as_ref(), self.script.azione(azione, lingua)) {
+            v.uscita(super::vista_cm::RIQUADRO_SCRIPT, &testo);
+        }
+    }
+
+    /// Solo in exec: la chiusura del terminale dello script, dal PC: il resto
+    /// dell'output sui suoi riquadri, poi la riga di chiusura nel riquadro
+    /// dello script (`vista_cm::Script::chiusura`).
+    fn chiusura_alla_vista(&mut self, r: &TerminalResponse) {
+        if let (Some(v), Some(lingua)) = (self.vista.as_ref(), self.lingua) {
+            for (riquadro, testo) in self.script.chiusura(r, lingua) {
+                v.uscita(riquadro, &testo);
+            }
         }
     }
 
@@ -406,6 +435,11 @@ impl Trascrizione {
     }
 
     fn chiudi(&mut self) {
+        if let (Some(v), Some(_)) = (self.vista.as_ref(), self.lingua) {
+            for (riquadro, testo) in self.script.resto() {
+                v.uscita(riquadro, &testo);
+            }
+        }
         let b = self.accumulo.fine(self.terminal_id);
         self.registra(b);
     }
@@ -452,8 +486,7 @@ pub fn ingresso(
         t.dati(Dir::In, d.terminal_id, &d.data);
     }
     if exec {
-        let lingua = super::scelta_terminale::lingua_del_cm();
-        t.script_alla_vista(azione, lingua);
+        t.script_alla_vista(azione);
     }
 }
 
@@ -464,16 +497,22 @@ pub fn uscita(t: &mut Option<Trascrizione>, msg: &Message) {
         return;
     };
     if let Some(message::Union::TerminalResponse(r)) = &msg.union {
-        if let Some(terminal_response::Union::Data(d)) = &r.union {
-            if d.compressed {
-                t.dati(
-                    Dir::Out,
-                    d.terminal_id,
-                    &hbb_common::compress::decompress(&d.data),
-                );
-            } else {
-                t.dati(Dir::Out, d.terminal_id, &d.data);
+        match &r.union {
+            Some(terminal_response::Union::Data(d)) => {
+                if d.compressed {
+                    t.dati(
+                        Dir::Out,
+                        d.terminal_id,
+                        &hbb_common::compress::decompress(&d.data),
+                    );
+                } else {
+                    t.dati(Dir::Out, d.terminal_id, &d.data);
+                }
             }
+            Some(terminal_response::Union::Closed(_) | terminal_response::Union::Error(_)) => {
+                t.chiusura_alla_vista(r)
+            }
+            _ => {}
         }
     }
 }
@@ -673,8 +712,9 @@ mod tests {
     }
 
     /// La stessa sequenza, con tre esche, va a `ingresso` (con la vista) e a
-    /// `Esecuzione::azione`: la vista mostra esattamente lo script eseguito,
-    /// poi il suo output. Senza exec la vista ha solo l'output.
+    /// `Esecuzione::azione`: la vista mostra esattamente lo script eseguito
+    /// nel suo blocco, poi il suo output in forma visibile, poi la riga di
+    /// chiusura. Senza exec la vista ha solo l'output, byte per byte.
     #[tokio::test]
     async fn la_vista_mostra_lo_script_che_parte_e_il_terminale_no() {
         use crate::remotek::exec::{tests::*, Esecuzione};
@@ -689,9 +729,9 @@ mod tests {
             apri(1),
             manda(2, b"echo esca2\n"), // un altro terminale
             manda(2, b""),
-            manda(1, b"echo a\n"),
+            manda(1, b"printf 'a\\033[2J\\n'\n"),
             manda(2, b""), // un vuoto di un altro terminale a meta' script
-            manda(1, b"echo b\n"),
+            manda(1, b"echo b; echo e >&2\n"),
             manda(1, b""),
             manda(1, b"echo dopo\n"), // dopo la fine
             chiudi,
@@ -717,27 +757,229 @@ mod tests {
             }
             let inizio = Instant::now();
             while !rx_tutto(&mut t, &mut e) && inizio.elapsed() < Duration::from_secs(10) {
-                std::thread::sleep(Duration::from_millis(20));
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
             drop(t);
             drop(tx_cm);
-            let mut visto = Vec::new();
-            while let Some(crate::ipc::Data::FileTransferLog((_, testo))) = rx_cm.recv().await {
-                let v: Value = serde_json::from_str(&testo).expect("json");
-                visto.extend(crate::decode64(v["data"].as_str().unwrap_or("")).expect("base64"));
-            }
+            let visto = riquadri(&mut rx_cm).await;
             let lingua = crate::remotek::scelta_terminale::lingua_del_cm();
-            let mut atteso = if exec {
-                crate::remotek::vista_cm::tests::testo(b"echo a\necho b\n", lingua)
+            let atteso: BTreeMap<i64, String> = if exec {
+                // Nel riquadro dello script solo inizio, script, fine e
+                // chiusura; stdout e stderr nei loro riquadri.
+                let script = b"printf 'a\\033[2J\\n'\necho b; echo e >&2\n";
+                let mut s = crate::remotek::vista_cm::tests::testo(script, lingua);
+                s.extend_from_slice(riga_di_chiusura(0).as_bytes());
+                [
+                    (RIQUADRO_SCRIPT, String::from_utf8_lossy(&s).into_owned()),
+                    (1, "a^[[2J\r\nb\r\n".to_owned()),
+                    (STDERR, "e\r\n".to_owned()),
+                ]
+                .into()
             } else {
-                Vec::new()
+                [(1, "a\x1b[2J\nb\n".to_owned()), (STDERR, "e\n".to_owned())].into()
             };
-            atteso.extend_from_slice(b"a\nb\n");
-            assert_eq!(
-                String::from_utf8_lossy(&visto),
-                String::from_utf8_lossy(&atteso)
-            );
+            assert_eq!(visto, atteso);
         }
+    }
+
+    use crate::remotek::vista_cm::RIQUADRO_SCRIPT;
+    use std::collections::BTreeMap;
+    const STDERR: i64 = crate::remotek::exec::TERMINAL_ID_STDERR as i64;
+
+    /// Quello che la vista ha mandato al CM, riquadro per riquadro.
+    async fn riquadri(
+        rx_cm: &mut mpsc::UnboundedReceiver<crate::ipc::Data>,
+    ) -> BTreeMap<i64, String> {
+        let mut visto: BTreeMap<i64, Vec<u8>> = BTreeMap::new();
+        while let Some(crate::ipc::Data::FileTransferLog((_, testo))) = rx_cm.recv().await {
+            let v: Value = serde_json::from_str(&testo).expect("json");
+            let riquadro = v["terminal_id"].as_i64().expect("terminal_id");
+            let dati = crate::decode64(v["data"].as_str().unwrap_or("")).expect("base64");
+            visto.entry(riquadro).or_default().extend(dati);
+        }
+        visto
+            .into_iter()
+            .map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned()))
+            .collect()
+    }
+
+    /// La riga di chiusura nella lingua del CM, per `codice`.
+    fn riga_di_chiusura(codice: i32) -> String {
+        let riga = match crate::remotek::scelta_terminale::lingua_del_cm() {
+            Lingua::Italiano => format!("fine dell'esecuzione, codice {codice}"),
+            Lingua::Inglese => format!("execution finished, exit code {codice}"),
+        };
+        format!("\r\n\x1b[7m---- {riga} ----\x1b[0m\r\n")
+    }
+
+    fn messaggio(r: TerminalResponse) -> Message {
+        let mut msg = Message::new();
+        msg.set_terminal_response(r);
+        msg
+    }
+
+    /// Le tre righe di chiusura passano da `uscita` con le risposte vere
+    /// (uno script uscito con `HELPER_NON_PARTITO` ha la riga del codice),
+    /// dopo tutto l'output; senza exec, o per un altro terminale, niente.
+    #[tokio::test]
+    async fn la_riga_di_chiusura_dopo_l_output() {
+        use crate::remotek::exec::{tests::*, Esecuzione};
+        use crate::remotek::uscita_terminale::{
+            codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO,
+        };
+        let it = crate::remotek::scelta_terminale::lingua_del_cm() == Lingua::Italiano;
+        let mut grande = Esecuzione::nuova();
+        grande.azione(&apri(1), None);
+        grande.azione(&manda(1, &[b'\n'; 2001]), None);
+        grande.azione(&manda(1, b""), None);
+        let rifiuto = grande.leggi().pop().expect("rifiuto");
+        let riga = |it_: &str, en: &str| {
+            format!(
+                "\r\n\x1b[7m---- {} ----\x1b[0m\r\n",
+                if it { it_ } else { en }
+            )
+        };
+        let non_partito = riga("lo script non e' partito", "the script did not start");
+        let rifiutato = riga(
+            "script rifiutato: oltre 32 KiB o 2000 righe, non eseguito",
+            "script refused: over 32 KiB or 2000 lines, not run",
+        );
+        let casi = [
+            (true, risposta_chiusura(1, 3), riga_di_chiusura(3)),
+            (true, risposta_chiusura(1, HELPER_NON_PARTITO), non_partito),
+            (
+                true,
+                risposta_chiusura(1, codice_dello_script(HELPER_NON_PARTITO)),
+                riga_di_chiusura(1381255938),
+            ),
+            (true, rifiuto, rifiutato),
+            (true, risposta_chiusura(2, 3), String::new()),
+            (false, risposta_chiusura(1, 3), String::new()),
+        ];
+        for (exec, risposta, riga) in casi {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+            let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm.clone());
+            let mut t = Some(Trascrizione::nuova(
+                7,
+                String::new(),
+                &tx,
+                None,
+                Some(vista),
+            ));
+            ingresso(&mut t, 7, &tx, &tx_cm, &apri(1), exec);
+            let mut r = TerminalResponse::new();
+            r.set_data(TerminalData {
+                terminal_id: 1,
+                data: b"fuori\xf0\x9f".to_vec().into(),
+                ..Default::default()
+            });
+            uscita(&mut t, &messaggio(r));
+            uscita(&mut t, &messaggio(risposta));
+            drop(t);
+            drop(tx_cm);
+            let visto = riquadri(&mut rx_cm).await;
+            let mut atteso = BTreeMap::new();
+            if exec {
+                atteso.insert(1, "fuori<0xF0><0x9F>".to_owned());
+                if !riga.is_empty() {
+                    atteso.insert(RIQUADRO_SCRIPT, riga);
+                }
+            } else {
+                atteso.insert(1, String::from_utf8_lossy(b"fuori\xf0\x9f").into_owned());
+            }
+            assert_eq!(visto, atteso);
+        }
+    }
+
+    /// Il rifiuto arriva alla vista sul percorso vero: le risposte di
+    /// `Esecuzione::leggi` passano da `uscita` (`read_outputs`), quelle di
+    /// `Esecuzione::azione` vanno dritte al controllante.
+    #[tokio::test]
+    async fn lo_script_rifiutato_si_vede_dalla_lettura() {
+        use crate::remotek::exec::{tests::*, Esecuzione};
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+        let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm.clone());
+        let mut t = Some(Trascrizione::nuova(
+            7,
+            String::new(),
+            &tx,
+            None,
+            Some(vista),
+        ));
+        let mut e = Esecuzione::nuova();
+        for a in [apri(1), manda(1, &[b'\n'; 2001]), manda(1, b"")] {
+            ingresso(&mut t, 7, &tx, &tx_cm, &a, true);
+            if let Some(r) = e.azione(&a, None) {
+                assert!(matches!(r.union, Some(terminal_response::Union::Opened(_))));
+            }
+        }
+        rx_tutto(&mut t, &mut e);
+        drop(t);
+        drop(tx_cm);
+        let riga = match crate::remotek::scelta_terminale::lingua_del_cm() {
+            Lingua::Italiano => "script rifiutato: oltre 32 KiB o 2000 righe, non eseguito",
+            Lingua::Inglese => "script refused: over 32 KiB or 2000 lines, not run",
+        };
+        let atteso: BTreeMap<i64, String> = [(
+            RIQUADRO_SCRIPT,
+            format!("\r\n\x1b[7m---- {riga} ----\x1b[0m\r\n"),
+        )]
+        .into();
+        assert_eq!(riquadri(&mut rx_cm).await, atteso);
+    }
+
+    /// Un output enorme, con una riga di fine finta, resta nel suo riquadro:
+    /// nel riquadro dello script non arriva un byte dell'output, e lo script
+    /// mostrato resta intero, uguale a quello eseguito.
+    #[tokio::test]
+    async fn l_output_non_raggiunge_il_riquadro_dello_script() {
+        use crate::remotek::exec::tests::*;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+        let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm.clone());
+        let mut t = Some(Trascrizione::nuova(
+            7,
+            String::new(),
+            &tx,
+            None,
+            Some(vista),
+        ));
+        let script = b"1..20000 | % { 'riga' }\n";
+        for a in [apri(1), manda(1, script), manda(1, b"")] {
+            ingresso(&mut t, 7, &tx, &tx_cm, &a, true);
+        }
+        let lingua = crate::remotek::scelta_terminale::lingua_del_cm();
+        let fine_finta = match lingua {
+            Lingua::Italiano => "---- fine dello script ----",
+            Lingua::Inglese => "---- end of script ----",
+        };
+        let output = format!("{}{fine_finta}\n", "riga\n".repeat(20000));
+        let mut r = TerminalResponse::new();
+        r.set_data(TerminalData {
+            terminal_id: 1,
+            data: output.into_bytes().into(),
+            ..Default::default()
+        });
+        uscita(&mut t, &messaggio(r));
+        uscita(
+            &mut t,
+            &messaggio(crate::remotek::uscita_terminale::risposta_chiusura(1, 0)),
+        );
+        drop(t);
+        drop(tx_cm);
+        let visto = riquadri(&mut rx_cm).await;
+        let mut atteso = crate::remotek::vista_cm::tests::testo(script, lingua);
+        atteso.extend_from_slice(riga_di_chiusura(0).as_bytes());
+        assert_eq!(
+            visto.get(&RIQUADRO_SCRIPT).map(String::as_bytes),
+            Some(atteso.as_slice())
+        );
+        let uscita_1 = visto.get(&1).expect("stdout");
+        assert_eq!(uscita_1.matches("riga\r\n").count(), 20000);
+        assert!(uscita_1.ends_with(&format!("{fine_finta}\r\n")));
+        assert_eq!(visto.len(), 2);
     }
 
     #[tokio::test]

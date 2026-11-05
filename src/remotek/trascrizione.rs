@@ -434,6 +434,19 @@ impl Trascrizione {
         self.registra(b);
     }
 
+    /// La vista, tolta dalla trascrizione alla fine della connessione, dopo
+    /// averle passato il resto dell'output di exec: da qui la trascrizione
+    /// continua senza vista.
+    fn togli_vista(&mut self) -> Option<super::vista_cm::Vista> {
+        let v = self.vista.take()?;
+        if self.lingua.is_some() {
+            for (riquadro, testo) in self.script.resto() {
+                v.uscita(riquadro, &testo);
+            }
+        }
+        Some(v)
+    }
+
     fn chiudi(&mut self) {
         if let (Some(v), Some(_)) = (self.vista.as_ref(), self.lingua) {
             for (riquadro, testo) in self.script.resto() {
@@ -487,6 +500,24 @@ pub fn ingresso(
     }
     if exec {
         t.script_alla_vista(azione);
+    }
+}
+
+/// L'ultimo dato della connessione per il CM (`on_close`,
+/// src/server/connection.rs): con la vista passa dal suo task, dopo tutto
+/// l'output e la riga di fine di exec (`vista_cm::Vista::fine`); senza vista
+/// (nessun terminale, o in prelogin) va direttamente su `tx_cm`, come upstream.
+pub fn fine_al_cm(
+    t: &mut Option<Trascrizione>,
+    tx_cm: &UnboundedSender<crate::ipc::Data>,
+    dato: crate::ipc::Data,
+) {
+    match t.as_mut().and_then(Trascrizione::togli_vista) {
+        Some(v) => v.fine(dato, tx_cm),
+        // Come upstream: senza CM il dato non ha chi lo legge.
+        None => {
+            tx_cm.send(dato).ok();
+        }
     }
 }
 
@@ -890,6 +921,63 @@ mod tests {
             }
             assert_eq!(visto, atteso);
         }
+    }
+
+    /// Alla fine della connessione (`on_close`) la riga di fine di exec
+    /// arriva al CM prima del dato di chiusura, dallo stesso canale; dopo il
+    /// dato di chiusura niente. Senza vista il dato va dritto al CM.
+    #[tokio::test]
+    async fn la_riga_di_fine_prima_della_chiusura() {
+        use crate::remotek::exec::tests::*;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+        let vista = crate::remotek::vista_cm::Vista::nuova(7, tx_cm.clone());
+        let mut t = Some(Trascrizione::nuova(
+            7,
+            String::new(),
+            &tx,
+            None,
+            Some(vista),
+        ));
+        for a in [apri(1), manda(1, b"exit 3\n"), manda(1, b"")] {
+            ingresso(&mut t, 7, &tx, &tx_cm, &a, true);
+        }
+        let mut r = TerminalResponse::new();
+        r.set_data(TerminalData {
+            terminal_id: 1,
+            data: b"fuori\xf0\x9f".to_vec().into(),
+            ..Default::default()
+        });
+        uscita(&mut t, &messaggio(r));
+        uscita(
+            &mut t,
+            &messaggio(crate::remotek::uscita_terminale::risposta_chiusura(1, 3)),
+        );
+        fine_al_cm(&mut t, &tx_cm, crate::ipc::Data::Disconnected);
+        drop(t);
+        drop(tx_cm);
+        let mut visti = Vec::new();
+        while let Some(d) = rx_cm.recv().await {
+            visti.push(d);
+        }
+        assert!(matches!(visti.pop(), Some(crate::ipc::Data::Disconnected)));
+        let Some(crate::ipc::Data::FileTransferLog((_, testo))) = visti.pop() else {
+            panic!("manca l'output prima della chiusura");
+        };
+        let v: Value = serde_json::from_str(&testo).expect("json");
+        assert_eq!(v["terminal_id"].as_i64(), Some(RIQUADRO_SCRIPT));
+        let dati = crate::decode64(v["data"].as_str().unwrap_or("")).expect("base64");
+        assert!(String::from_utf8_lossy(&dati).ends_with(&riga_di_chiusura(3)));
+        assert!(visti
+            .iter()
+            .all(|d| matches!(d, crate::ipc::Data::FileTransferLog(_))));
+
+        let (tx_cm, mut rx_cm) = mpsc::unbounded_channel();
+        let mut t = None;
+        fine_al_cm(&mut t, &tx_cm, crate::ipc::Data::Close);
+        drop(tx_cm);
+        assert!(matches!(rx_cm.recv().await, Some(crate::ipc::Data::Close)));
+        assert!(rx_cm.recv().await.is_none());
     }
 
     /// Il rifiuto arriva alla vista sul percorso vero: le risposte di

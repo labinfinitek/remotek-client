@@ -184,4 +184,23 @@ void main() {
         lessThan(200));
     expect(find.text('Accetta'), findsOneWidget);
   });
+
+  // ADR-0036: il tunnel dell'agente.
+  test('il tunnel: testo sopra i pulsanti, etichetta, CM sempre visibile', () {
+    const testo =
+        'agente-mario, agente AI di mario, chiede un tunnel verso le porte 1433, 8080 di questo PC, per al massimo 60 minuti';
+    final tunnel = {'etichetta': 'Tunnel', 'finestra': null, 'tunnel': testo};
+    expect(remotekTunnel(tunnel), testo);
+    expect(remotekEtichetta(tunnel), 'Tunnel');
+    expect(RemotekScelta.daJson(tunnel), isNull);
+    expect(remotekRichiestaTunnel(tunnel), hasLength(1));
+    expect(remotekTunnel(scheda(json)), isNull);
+    expect(remotekTunnel(null), isNull);
+    expect(remotekTunnel({'tunnel': 1}), isNull);
+    expect(remotekRichiestaTunnel(null), isEmpty);
+    expect(remotekTieneIlCm(false, tunnel), isTrue);
+    expect(remotekTieneIlCm(true, null), isTrue);
+    expect(remotekTieneIlCm(false, null), isFalse);
+    expect(remotekTieneIlCm(false, scheda(json)), isFalse);
+  });
 }

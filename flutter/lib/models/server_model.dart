@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../common.dart';
 import '../common/formatter/id_formatter.dart';
+import '../desktop/pages/remotek_scelta_cm.dart';
 import '../desktop/pages/server_page.dart' as desktop;
 import '../desktop/widgets/tabbar_widget.dart';
 import '../mobile/pages/server_page.dart';
@@ -599,8 +600,8 @@ class ServerModel with ChangeNotifier {
     // Only do the hidden task when on Desktop.
     if (client.authorized && isDesktop) {
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
-        // Remotek (ADR-0021 regola 6, ADR-0028 caso 3): mai con un terminale nel CM.
-        if (!hideCm && !_clients.any((c) => c.type_() == ClientType.terminal)) windowManager.minimize();
+        // Remotek (ADR-0021 regola 6, ADR-0028 caso 3, ADR-0036): mai con un terminale o un tunnel nel CM.
+        if (!hideCm && !_clients.any((c) => remotekTieneIlCm(c.type_() == ClientType.terminal, c.remotek))) windowManager.minimize();
         cmHiddenTimer = null;
       });
     }

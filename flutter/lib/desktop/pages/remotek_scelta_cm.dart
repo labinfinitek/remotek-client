@@ -44,6 +44,34 @@ class RemotekScelta {
   }
 }
 
+// Il testo della richiesta del tunnel dell'agente (ADR-0036), gia' nella
+// lingua del CM e dai nomi del lasciapassare verificato: sta sopra "Accetta"
+// e "Annulla". null senza tunnel.
+String? remotekTunnel(dynamic remotek) {
+  if (remotek is! Map<String, dynamic>) return null;
+  final testo = remotek['tunnel'];
+  return testo is String ? testo : null;
+}
+
+// Il testo del tunnel sopra i pulsanti di upstream: nessun widget senza tunnel.
+List<Widget> remotekRichiestaTunnel(dynamic remotek) {
+  final testo = remotekTunnel(remotek);
+  if (testo == null) return [];
+  return [
+    Text(
+      testo,
+      textAlign: TextAlign.center,
+      style: const TextStyle(fontWeight: FontWeight.bold),
+    ).marginOnly(bottom: 8),
+  ];
+}
+
+// Il CM non si riduce a icona con un terminale (ADR-0021 regola 6) o un
+// tunnel dell'agente (ADR-0036) fra i clienti: il cliente deve poterli
+// vedere e chiudere.
+bool remotekTieneIlCm(bool terminale, dynamic remotek) =>
+    terminale || remotekTunnel(remotek) != null;
+
 // Il tipo della connessione nella scheda del cliente al posto di
 // "Terminale", o null.
 String? remotekEtichetta(dynamic remotek) {

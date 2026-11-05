@@ -15,6 +15,18 @@ insieme. Il CLI nuovo contro un PC del -7 o del -8 esce con 126 dopo il clic
 del cliente, senza eseguire niente; il CLI del -8 contro un PC nuovo ha il
 login rifiutato con exec. `terminal` non cambia.
 
+### Aggiunto
+- **Per l'agente AI**: `remotek-cli tunnel <ID> <locale>:<porta> ...` apre un
+  tunnel verso le porte di un PC (per esempio SQL Server e Tomcat) senza la
+  VPN del cliente (ADR-0036): una sola connessione per sessione, con piu'
+  connessioni TCP dentro, un lasciapassare e un clic. Il CLI ascolta solo su
+  `127.0.0.1`; il cliente vede chi chiede il tunnel, verso quali porte e per
+  quanti minuti al massimo, e accetta o rifiuta; il connection manager resta
+  visibile finche' il tunnel c'e'. Senza clic sul server non presidiato non
+  ancora. Il PC lo dichiara (`remotek_tunnel`): un PC che non lo dichiara non
+  apre niente e il CLI esce con 126; un PC fino al -8 rifiuta dopo il clic
+  del cliente (non sa collegarsi) e il CLI esce con 1.
+
 ### Corretto
 - **Per l'agente AI**: fino al -8 l'help di `remotek-cli exec` e questo
   changelog (al -7) dicevano che il cliente vede lo script "prima che
@@ -35,16 +47,15 @@ login rifiutato con exec. `terminal` non cambia.
   esegue solo uno script uguale byte per byte a quello mostrato: se no non
   parte, e il cliente e l'agente leggono perche' (ADR-0035). Vale anche
   senza clic sul server non presidiato.
-
-### Sicurezza
 - Il tunnel dell'agente si collega solo all'indirizzo `127.0.0.1` del PC
   (mai un nome, mai `localhost`) e solo alle porte firmate nel lasciapassare
   (da 1 a 8, per al massimo 8 ore); il PC lo chiude alla durata firmata e
   scrive nel registro chi, verso quali porte, quanto e quanti byte, mai il
-  contenuto. Un login di port forward con un lasciapassare non valido o non
-  di tunnel e' rifiutato: non ricade mai sul port forward di upstream, che
-  resta quello di sempre solo senza lasciapassare. Il traffico del tunnel
-  resta cifrato con la chiave della sessione.
+  contenuto. Un login del tunnel (port forward con host vuoto e porta 0)
+  senza lasciapassare, o con uno non valido o non di tunnel, e' rifiutato:
+  non ricade mai sul port forward di upstream. Il port forward dei tecnici
+  (host e porta) non cambia, anche con la "Password del SO" salvata.
+  Il traffico del tunnel resta cifrato con la chiave della sessione.
 
 ## [remotek-1.4.9-8] - 2026-11-05
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

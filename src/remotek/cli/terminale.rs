@@ -80,6 +80,14 @@ pub(super) struct Gestore {
 }
 
 impl Gestore {
+    /// Il gestore del tunnel (src/remotek/cli/tunnel.rs): solo gli eventi.
+    pub(super) fn con_eventi(eventi: Sender<Evento>) -> Self {
+        Self {
+            eventi: Some(eventi),
+            ..Default::default()
+        }
+    }
+
     fn invia(&self, evento: Evento) {
         if let Some(tx) = &self.eventi {
             // Il ricevitore sparisce solo quando il CLI sta gia' uscendo.
@@ -268,8 +276,13 @@ impl InvokeUiSession for Gestore {
 }
 
 /// La sessione come in `session_add`: nessuna password (`password` vuota,
-/// nessuna password condivisa), tipo TERMINAL, mai amministratore.
-fn sessione(id: &str, gestore: Gestore) -> Result<Session<Gestore>, String> {
+/// nessuna password condivisa), tipo TERMINAL (o PORT_FORWARD per il
+/// tunnel), mai amministratore.
+pub(super) fn sessione(
+    id: &str,
+    gestore: Gestore,
+    conn_type: ConnType,
+) -> Result<Session<Gestore>, String> {
     // `LoginConfigHandler::initialize` legge IS_TERMINAL_ADMIN (src/client.rs).
     std::env::remove_var("IS_TERMINAL_ADMIN");
     let session = Session {
@@ -284,15 +297,7 @@ fn sessione(id: &str, gestore: Gestore) -> Result<Session<Gestore>, String> {
         .lc
         .write()
         .map_err(|_| "sessione non disponibile".to_owned())?;
-    lc.initialize(
-        id.to_owned(),
-        ConnType::TERMINAL,
-        None,
-        false,
-        None,
-        None,
-        None,
-    );
+    lc.initialize(id.to_owned(), conn_type, None, false, None, None, None);
     if lc.is_terminal_admin || !session.password.is_empty() {
         return Err("sessione come amministratore o con password: rifiutata".to_owned());
     }
@@ -392,6 +397,7 @@ fn con_sessione(
                     exec,
                     pc_script_nella_scelta: Arc::new(AtomicBool::new(false)),
                 },
+                ConnType::TERMINAL,
             )
         },
         chiedi,
@@ -980,7 +986,12 @@ mod tests {
         let _ambiente = AMBIENTE.lock().unwrap();
         // Anche con IS_TERMINAL_ADMIN nell'ambiente la sessione non e' admin.
         std::env::set_var("IS_TERMINAL_ADMIN", "Y");
-        let session = sessione("remotek-cli-test-id", Gestore::default()).unwrap();
+        let session = sessione(
+            "remotek-cli-test-id",
+            Gestore::default(),
+            ConnType::TERMINAL,
+        )
+        .unwrap();
         assert!(std::env::var("IS_TERMINAL_ADMIN").is_err());
         let lc = session.lc.read().unwrap();
         assert_eq!(lc.conn_type, ConnType::TERMINAL);
@@ -1003,7 +1014,7 @@ mod tests {
         };
         config.store(id);
         // `initialize` toglie `/r` e carica la configurazione di `id`.
-        let esito = sessione(&format!("{id}/r"), Gestore::default());
+        let esito = sessione(&format!("{id}/r"), Gestore::default(), ConnType::TERMINAL);
         PeerConfig::remove(id);
         assert!(esito.is_err());
     }
@@ -1017,7 +1028,7 @@ mod tests {
             .options
             .insert("terminal-service-id".into(), "ts_vecchio".into());
         config.store(id);
-        let session = sessione(id, Gestore::default()).unwrap();
+        let session = sessione(id, Gestore::default(), ConnType::TERMINAL).unwrap();
         let lc = session.lc.read().unwrap();
         // Il valore che `create_login_msg` mette in `Terminal::service_id`.
         let mandato = lc.get_option(lc.get_key_terminal_service_id());
@@ -1086,7 +1097,12 @@ mod tests {
     /// con la password della sessione (vuota), verso un socket locale.
     fn login_mandato(lasciapassare: &str) -> hbb_common::message_proto::LoginRequest {
         let _ambiente = AMBIENTE.lock().unwrap();
-        let session = sessione("remotek-cli-test-login", Gestore::default()).unwrap();
+        let session = sessione(
+            "remotek-cli-test-login",
+            Gestore::default(),
+            ConnType::TERMINAL,
+        )
+        .unwrap();
         session.lc.write().unwrap().remotek_lasciapassare = lasciapassare.to_owned();
         let rt = hbb_common::tokio::runtime::Builder::new_current_thread()
             .enable_all()

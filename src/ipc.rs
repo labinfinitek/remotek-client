@@ -315,9 +315,10 @@ pub enum Data {
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
-        // Remotek (ADR-0028, caso 2): l'agente AI chiede l'amministratore.
+        // Remotek (ADR-0028 caso 2, ADR-0033): exec e la richiesta
+        // dell'amministratore dell'agente AI, dal lasciapassare verificato.
         #[serde(default)]
-        remotek_amministratore: Option<crate::remotek::scelta_terminale::Richiesta>,
+        remotek: Option<crate::remotek::scelta_terminale::Agente>,
     },
     ChatMessage {
         text: String,

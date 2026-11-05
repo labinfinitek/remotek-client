@@ -413,6 +413,8 @@ pub struct Connection {
     lasciapassare: Option<crate::remotek::lasciapassare::Valido>,
     // Remotek (ADR-0028, caso 2): il cliente ha scelto "Accetta come amministratore".
     amministratore_scelto: bool,
+    // Remotek: il cliente ha chiuso dal CM (src/remotek/vista_cm.rs, `scheda_resta`).
+    chiusa_dal_cm: bool,
 }
 
 impl ConnInner {
@@ -602,6 +604,7 @@ impl Connection {
             trascrizione: None,
             lasciapassare: None,
             amministratore_scelto: false,
+            chiusa_dal_cm: false,
             conn_audit_primary_auth: ConnAuditPrimaryAuth::None,
             conn_audit_two_factor: ConnAuditTwoFactor::None,
         };
@@ -708,6 +711,7 @@ impl Connection {
                         ipc::Data::Close => {
                             conn.chat_unanswered = false; // seen
                             conn.file_transferred = false; //seen
+                            conn.chiusa_dal_cm = true;
                             conn.send_close_reason_no_retry("").await;
                             conn.on_close("connection manager", true).await;
                             break;
@@ -2156,7 +2160,7 @@ impl Connection {
             block_input: self.block_input,
             privacy_mode: self.privacy_mode,
             from_switch: self.from_switch,
-            remotek_amministratore: crate::remotek::scelta_terminale::richiesta(
+            remotek: crate::remotek::scelta_terminale::agente(
                 self.lasciapassare.as_ref(),
                 self.terminal,
                 crate::remotek::scelta_terminale::pc(),
@@ -5107,14 +5111,15 @@ impl Connection {
             lock_screen().await;
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let data = if self.chat_unanswered || self.file_transferred && cfg!(feature = "flutter") {
+        let data = if crate::remotek::vista_cm::scheda_resta(self.terminal, self.authorized, self.chiusa_dal_cm, self.chat_unanswered, self.file_transferred, cfg!(feature = "flutter")) {
             ipc::Data::Disconnected
         } else {
             ipc::Data::Close
         };
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let data = ipc::Data::Close;
-        self.tx_to_cm.send(data).ok();
+        // Remotek: dopo l'output della vista del terminale (src/remotek/trascrizione.rs).
+        crate::remotek::trascrizione::fine_al_cm(&mut self.trascrizione, &self.tx_to_cm, data);
         self.port_forward_socket.take();
     }
 

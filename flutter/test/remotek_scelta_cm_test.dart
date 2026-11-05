@@ -16,10 +16,25 @@ void main() {
     'rifiuta': 'Rifiuta',
   };
 
+  // Il campo `remotek` del client: `Scheda` di scelta_terminale.rs.
+  Map<String, dynamic> scheda(Map<String, dynamic>? finestra,
+          {String? etichetta}) =>
+      {'etichetta': etichetta, 'finestra': finestra};
+
   test('senza il campo remotek la finestra resta quella di upstream', () {
     expect(RemotekScelta.daJson(null), isNull);
-    expect(RemotekScelta.daJson({'testo': 'x'}), isNull);
-    expect(RemotekScelta.daJson(json), isNotNull);
+    expect(RemotekScelta.daJson(scheda({'testo': 'x'})), isNull);
+    expect(RemotekScelta.daJson(json), isNull);
+    expect(RemotekScelta.daJson(scheda(json)), isNotNull);
+  });
+
+  test('con exec la scheda dice cosa chiede l\'agente', () {
+    final exec = scheda(null, etichetta: 'Esecuzione di comandi');
+    expect(remotekEtichetta(exec), 'Esecuzione di comandi');
+    expect(RemotekScelta.daJson(exec), isNull);
+    expect(remotekEtichetta(scheda(json)), isNull);
+    expect(remotekEtichetta(null), isNull);
+    expect(remotekEtichetta({'etichetta': 1}), isNull);
   });
 
   testWidgets('tre scelte, e solo la prima manda la richiesta di SYSTEM',
@@ -28,7 +43,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: remotekSceltaCm(
-          scelta: RemotekScelta.daJson(json)!,
+          scelta: RemotekScelta.daJson(scheda(json))!,
           pulsante: (
                   {required color,
                   required onClick,
@@ -58,12 +73,12 @@ void main() {
   testWidgets('sul portatile elevato due scelte, senza accetta come utente',
       (tester) async {
     final due = Map<String, dynamic>.from(json)..['accetta_utente'] = null;
-    expect(RemotekScelta.daJson(due)!.accettaUtente, isNull);
-    expect(RemotekScelta.daJson(Map.of(due)..['accetta_utente'] = 1), isNull);
+    expect(RemotekScelta.daJson(scheda(due))!.accettaUtente, isNull);
+    expect(RemotekScelta.daJson(scheda(Map.of(due)..['accetta_utente'] = 1)), isNull);
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: remotekSceltaCm(
-          scelta: RemotekScelta.daJson(due)!,
+          scelta: RemotekScelta.daJson(scheda(due))!,
           pulsante: (
                   {required color,
                   required onClick,
@@ -89,7 +104,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: remotekSceltaCm(
-          scelta: RemotekScelta.daJson(json)!,
+          scelta: RemotekScelta.daJson(scheda(json))!,
           pulsante: (
                   {required color,
                   required onClick,

@@ -599,7 +599,8 @@ class ServerModel with ChangeNotifier {
     // Only do the hidden task when on Desktop.
     if (client.authorized && isDesktop) {
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
-        if (!hideCm) windowManager.minimize();
+        // Remotek (ADR-0021 regola 6, ADR-0028 caso 3): mai con un terminale nel CM.
+        if (!hideCm && !_clients.any((c) => c.type_() == ClientType.terminal)) windowManager.minimize();
         cmHiddenTimer = null;
       });
     }
@@ -832,7 +833,7 @@ class Client {
   bool fromSwitch = false;
   bool inVoiceCall = false;
   bool incomingVoiceCall = false;
-  // Remotek (ADR-0028, caso 2): src/remotek/scelta_terminale.rs, `Finestra`.
+  // Remotek (ADR-0028 caso 2, ADR-0033): src/remotek/scelta_terminale.rs, `Scheda`.
   dynamic remotek;
 
   RxInt unreadChatMessageCount = 0.obs;

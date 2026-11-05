@@ -49,8 +49,16 @@ const PEZZO_MAX: usize = 64 * 1024;
 /// flutter/lib/desktop/pages/remotek_terminale_cm.dart (`_riquadroScript`).
 pub const RIQUADRO_SCRIPT: i64 = i32::MIN as i64 - 1;
 
+/// Quello che passa dalla [`Vista`] al suo ciclo: un pezzo di output per un
+/// riquadro, o l'ultimo dato della connessione per il CM (`Data::Close` o
+/// `Data::Disconnected`), che parte dopo tutto l'output in attesa.
+enum Pezzo {
+    Uscita(i64, Vec<u8>),
+    Fine(Data),
+}
+
 pub struct Vista {
-    tx: UnboundedSender<(i64, Vec<u8>)>,
+    tx: UnboundedSender<Pezzo>,
 }
 
 impl Vista {
@@ -69,8 +77,55 @@ impl Vista {
         }
         // Se il task e' uscito il CM non c'e' piu': la vista non ha piu' a
         // chi mostrare l'output, la trascrizione continua lo stesso.
-        self.tx.send((riquadro, dati.to_vec())).ok();
+        self.tx.send(Pezzo::Uscita(riquadro, dati.to_vec())).ok();
     }
+
+    /// L'ultimo dato della connessione per il CM (`Data::Close` o
+    /// `Data::Disconnected`), dallo stesso task che manda l'output: parte
+    /// dopo tutto l'output gia' passato alla vista, compresa la riga di fine
+    /// di [`Script::chiusura`]. Mandato direttamente su `tx_cm` potrebbe
+    /// superare l'output che il ciclo tiene fino al prossimo giro (100 ms), e
+    /// il CM, che col dato di chiusura smette di leggere la connessione,
+    /// perderebbe la riga di fine. Se il ciclo non c'e' piu' (il CM ha chiuso
+    /// il canale) il dato va direttamente su `tx_cm`, come prima.
+    pub fn fine(self, dato: Data, tx_cm: &UnboundedSender<Data>) {
+        if let Err(e) = self.tx.send(Pezzo::Fine(dato)) {
+            if let Pezzo::Fine(dato) = e.0 {
+                // Come upstream (`on_close`): senza CM il dato non ha chi lo legge.
+                tx_cm.send(dato).ok();
+            }
+        }
+    }
+}
+
+/// Il dato di fine connessione per il CM (`on_close`, src/server/connection.rs):
+/// `true` per `Data::Disconnected`, che tiene la scheda nel CM finche' il
+/// cliente la chiude, `false` per `Data::Close`, che la toglie.
+///
+/// Per una sessione terminale (`self.terminal`, che comprende exec) gia'
+/// autorizzata che finisce da sola (finisce lo script, esce la shell, si
+/// chiude il CLI, cade la rete) la scheda resta: il cliente vede come e'
+/// finita la sessione (l'output fino all'ultima riga, con exec la riga di
+/// fine col codice) e il CM non sparisce dallo schermo nell'istante in cui
+/// l'agente chiude (ADR-0021 regola 6, ADR-0028 caso 3).
+///
+/// Come upstream invece:
+/// - una richiesta di terminale mai autorizzata (rifiutata dal cliente o
+///   abbandonata dall'agente prima del clic): la scheda e' ancora quella
+///   della richiesta, e non c'e' sessione da mostrare;
+/// - la chiusura dal CM ("Disconnetti"): il cliente la sessione l'ha gia'
+///   vista, e la scheda sparisce al primo clic;
+/// - le altre connessioni: resta solo con una chat senza risposta o, col CM
+///   Flutter, dopo un trasferimento di file.
+pub fn scheda_resta(
+    terminale: bool,
+    autorizzata: bool,
+    chiusa_dal_cm: bool,
+    chat_senza_risposta: bool,
+    file_trasferito: bool,
+    flutter: bool,
+) -> bool {
+    terminale && autorizzata && !chiusa_dal_cm || chat_senza_risposta || file_trasferito && flutter
 }
 
 /// Lo script di una sessione di exec per la vista. Quali azioni ne fanno
@@ -375,7 +430,7 @@ fn manda(conn_id: i32, attesa: &mut Vec<(i64, Vec<u8>)>, tx_cm: &UnboundedSender
 
 async fn ciclo(
     conn_id: i32,
-    mut rx: UnboundedReceiver<(i64, Vec<u8>)>,
+    mut rx: UnboundedReceiver<Pezzo>,
     tx_cm: UnboundedSender<Data>,
 ) {
     let mut attesa = Vec::new();
@@ -383,7 +438,14 @@ async fn ciclo(
     loop {
         tokio::select! {
             pezzo = rx.recv() => match pezzo {
-                Some((terminal_id, dati)) => accoda(&mut attesa, terminal_id, dati),
+                Some(Pezzo::Uscita(terminal_id, dati)) => accoda(&mut attesa, terminal_id, dati),
+                Some(Pezzo::Fine(dato)) => {
+                    // Prima l'output in attesa, poi il dato di chiusura: il CM
+                    // dopo quello non legge piu' la connessione.
+                    manda(conn_id, &mut attesa, &tx_cm);
+                    tx_cm.send(dato).ok();
+                    break;
+                }
                 None => {
                     manda(conn_id, &mut attesa, &tx_cm);
                     break;
@@ -433,6 +495,56 @@ pub(crate) mod tests {
         let v: Value = serde_json::from_str(&messaggi(9, &mut a)[0]).expect("json");
         assert_eq!(v["terminal_id"].as_i64(), Some(-2_147_483_649));
         assert!(i32::try_from(RIQUADRO_SCRIPT).is_err());
+    }
+
+    /// Il terminale (anche exec) autorizzato che finisce da solo tiene la
+    /// scheda nel CM; la richiesta mai autorizzata (rifiutata o abbandonata
+    /// prima del clic), la chiusura dal CM e le altre connessioni come
+    /// upstream: solo con una chat senza risposta o, col CM Flutter, dopo un
+    /// trasferimento di file.
+    #[test]
+    fn la_scheda_del_terminale_resta_le_altre_come_upstream() {
+        for chat in [false, true] {
+            for file in [false, true] {
+                for flutter in [false, true] {
+                    let upstream = chat || file && flutter;
+                    assert!(scheda_resta(true, true, false, chat, file, flutter));
+                    for autorizzata in [false, true] {
+                        for dal_cm in [false, true] {
+                            assert_eq!(
+                                scheda_resta(false, autorizzata, dal_cm, chat, file, flutter),
+                                upstream
+                            );
+                        }
+                    }
+                    assert_eq!(scheda_resta(true, false, false, chat, file, flutter), upstream);
+                    assert_eq!(scheda_resta(true, true, true, chat, file, flutter), upstream);
+                    assert_eq!(scheda_resta(true, false, true, chat, file, flutter), upstream);
+                }
+            }
+        }
+        // Rifiutata, abbandonata prima del clic o chiusa dal CM: `Close`.
+        assert!(!scheda_resta(true, false, false, false, false, true));
+        assert!(!scheda_resta(true, true, true, false, false, true));
+        assert!(!scheda_resta(false, true, false, false, true, false));
+    }
+
+    /// Il dato di fine parte dopo l'output gia' passato alla vista, anche se
+    /// il ciclo non ha ancora fatto il giro dei 100 ms, e chiude il ciclo.
+    #[tokio::test]
+    async fn la_fine_dopo_l_output() {
+        let (tx_cm, mut rx_cm) = unbounded_channel();
+        let vista = Vista::nuova(5, tx_cm.clone());
+        vista.uscita(1, b"ultima riga");
+        vista.fine(Data::Disconnected, &tx_cm);
+        drop(tx_cm);
+        let mut visti = Vec::new();
+        while let Some(d) = rx_cm.recv().await {
+            visti.push(d);
+        }
+        assert_eq!(visti.len(), 2);
+        assert!(matches!(&visti[0], Data::FileTransferLog((a, _)) if a == AZIONE));
+        assert!(matches!(visti[1], Data::Disconnected));
     }
 
     #[tokio::test]

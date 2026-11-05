@@ -21,11 +21,32 @@ rilasciate non si riscrivono.
   torna col clic. Senza la chiave non cambia niente per i `custom.txt` gia'
   consegnati: senza clic solo il terminale, come prima.
 
+### Corretto
+- **Per l'agente AI**: con exec i riquadri del connection manager si
+  chiamano "Script", "Output" ed "Errore": prima stdout e stderr avevano
+  solo un numero, "(0)" e "(-2)", e il cliente non capiva quale fosse
+  l'output e quale gli errori. Il terminale resta com'era.
+
 ### Sicurezza
 - Una chiave `remotek-agente-capacita` malformata (vuota, nome sconosciuto o
   ripetuto, spazi, maiuscole) spegne ogni senza clic sul server, terminale
   compreso: vale il clic del cliente, e il registro del servizio lo dice con
   una riga ERROR.
+- Il connection manager non si riduce piu' a icona da solo quando c'e' una
+  sessione terminale o exec: prima spariva dopo 3 secondi, anche sul server
+  non presidiato, dove chi e' alla console non lo vedeva mai e non poteva
+  chiudere la sessione; e spariva anche dopo "Accetta" o "Eleva". Quando una
+  sessione autorizzata finisce da sola (finisce lo script, esce la shell, si
+  chiude l'agente, cade la rete) la scheda resta nel connection manager, come
+  chiusa, con tutto l'output e, con exec, la riga di fine col codice, finche'
+  il cliente la chiude (prima spariva nell'istante in cui l'agente chiudeva,
+  e la riga di fine non si vedeva mai). Una richiesta rifiutata o abbandonata
+  prima del clic, e una sessione chiusa dal cliente con "Disconnetti",
+  spariscono come prima.
+- **Per l'agente AI**: quando l'agente esegue uno script, la scheda della
+  connessione nel connection manager dice "Esecuzione di comandi" invece di
+  "Terminale", da utente come da amministratore (ADR-0033). Lo dice solo il
+  lasciapassare verificato dell'API, mai quello che dichiara chi si collega.
 
 ## [remotek-1.4.9-7] - 2026-11-02
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

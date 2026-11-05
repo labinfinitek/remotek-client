@@ -3,8 +3,10 @@
 // accetta come amministratore (la shell gira come SYSTEM), accetta come
 // utente (la shell col suo token abbassato, come oggi), rifiuta.
 // Testo e pulsanti arrivano gia' nella lingua del connection manager, nel
-// campo `remotek` del client (src/remotek/scelta_terminale.rs, `Finestra`);
-// senza quel campo la finestra resta quella di upstream. Sul client non
+// campo `remotek` del client (src/remotek/scelta_terminale.rs, `Scheda`), in
+// `finestra` (`Finestra`); senza quel campo la finestra resta quella di
+// upstream. In `etichetta` c'e' cosa dice la scheda al posto di "Terminale"
+// (con exec "Esecuzione di comandi", ADR-0033), dal lasciapassare verificato. Sul client non
 // installato elevato `accetta_utente` e' null: due scelte, senza "accetta
 // come utente".
 
@@ -20,7 +22,9 @@ class RemotekScelta {
   RemotekScelta._(
       this.testo, this.accettaAmministratore, this.accettaUtente, this.rifiuta);
 
-  static RemotekScelta? daJson(dynamic json) {
+  static RemotekScelta? daJson(dynamic remotek) {
+    if (remotek is! Map<String, dynamic>) return null;
+    final json = remotek['finestra'];
     if (json is! Map<String, dynamic>) return null;
     final campi = [
       json['testo'],
@@ -33,6 +37,14 @@ class RemotekScelta {
     }
     return RemotekScelta._(campi[0], campi[1], utente, campi[2]);
   }
+}
+
+// Il tipo della connessione nella scheda del cliente al posto di
+// "Terminale", o null.
+String? remotekEtichetta(dynamic remotek) {
+  if (remotek is! Map<String, dynamic>) return null;
+  final etichetta = remotek['etichetta'];
+  return etichetta is String ? etichetta : null;
 }
 
 typedef RemotekPulsante = Widget Function(

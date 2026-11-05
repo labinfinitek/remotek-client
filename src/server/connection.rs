@@ -6075,6 +6075,7 @@ impl Connection {
             self.terminal_persistent,
             user_token.to_terminal_service_token(),
             exec,
+            self.script_mostrato.clone(),
         ));
         s.on_subscribe(self.inner.clone());
         self.terminal_generic_service = Some(s);

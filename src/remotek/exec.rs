@@ -20,6 +20,10 @@
 //! - oltre [`MASSIMO_SCRIPT`] byte o `script_exec::MASSIMO_RIGHE` righe:
 //!   `TerminalError` con [`TROPPO_GRANDE`] (da [`Esecuzione::leggi`]),
 //!   la sessione si chiude e non si esegue niente;
+//! - lo script raccolto deve essere uguale byte per byte a quello del login,
+//!   mostrato al cliente (src/remotek/script_al_login.rs, ADR-0035); se no,
+//!   o se il login non ne portava uno, `TerminalError` con [`NON_MOSTRATO`]
+//!   e non si esegue niente;
 //! - stdout va nei `TerminalData` del `terminal_id` aperto, stderr in quelli
 //!   di [`TERMINAL_ID_STDERR`]; l'ordine fra i due flussi non e' garantito;
 //! - alla fine `TerminalClosed` col codice dello script, oppure un
@@ -40,7 +44,7 @@
 //! stdout e stderr dal `terminal_id`; verso l'API, che oggi non riceve il
 //! `terminal_id`, sono tutti e due `out`, nell'ordine di arrivo.
 
-pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT, TROPPO_GRANDE};
+pub use super::script_exec::{aggiungi, Blocco, MASSIMO_SCRIPT, NON_MOSTRATO, TROPPO_GRANDE};
 use super::script_exec::{Passo, Raccolta};
 use super::uscita_terminale::{
     codice_dall_helper, codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO,
@@ -414,6 +418,8 @@ impl Drop for Processo {
 /// azioni fanno parte dello script lo decide `script_exec::Raccolta`, la
 /// stessa regola della vista del cliente.
 pub struct Esecuzione {
+    /// Lo script del login, mostrato al cliente: l'unico che parte.
+    mostrato: Option<Vec<u8>>,
     raccolta: Raccolta,
     processo: Option<Processo>,
     chiusa: bool,
@@ -442,8 +448,10 @@ fn dati(terminal_id: i32, data: Vec<u8>) -> TerminalResponse {
 }
 
 impl Esecuzione {
-    pub fn nuova() -> Self {
+    /// `mostrato`: lo script del login, quello che il cliente ha visto.
+    pub fn nuova(mostrato: Option<Vec<u8>>) -> Self {
         Self {
+            mostrato,
             raccolta: Raccolta::default(),
             processo: None,
             chiusa: false,
@@ -482,6 +490,13 @@ impl Esecuzione {
             Passo::TroppoGrande(terminal_id) => {
                 self.chiusa = true;
                 self.fine = Some(errore(terminal_id, TROPPO_GRANDE));
+                None
+            }
+            // Solo lo script mostrato al cliente, uguale byte per byte.
+            Passo::Completo(terminal_id, script) if self.mostrato.as_ref() != Some(&script) => {
+                log::warn!("exec: lo script non e' quello mostrato al cliente: non eseguito");
+                self.chiusa = true;
+                self.fine = Some(errore(terminal_id, NON_MOSTRATO));
                 None
             }
             Passo::Completo(terminal_id, script) => match avvia(script, token, terminal_id) {
@@ -893,7 +908,7 @@ pub(crate) mod tests {
 
     #[test]
     fn script_in_piu_blocchi_con_flussi_separati_e_codice() {
-        let mut e = Esecuzione::nuova();
+        let mut e = Esecuzione::nuova(Some(b"echo fuori; echo dentro >&2; exit 7\n".to_vec()));
         let r = e.azione(&apri(1), None).expect("aperto");
         assert!(
             matches!(r.union, Some(terminal_response::Union::Opened(ref o)) if o.success && o.message == APERTO)
@@ -916,7 +931,7 @@ pub(crate) mod tests {
     #[test]
     fn oltre_i_limiti_rifiutato_senza_esecuzione() {
         let segno = std::env::temp_dir().join(format!("remotek-exec-{}", std::process::id()));
-        let mut e = Esecuzione::nuova();
+        let mut e = Esecuzione::nuova(None);
         e.azione(&apri(1), None);
         let primo = format!("touch {}\n", segno.display());
         assert!(e.azione(&manda(1, primo.as_bytes()), None).is_none());
@@ -935,7 +950,7 @@ pub(crate) mod tests {
         thread::sleep(Duration::from_millis(200));
         assert!(e.leggi().is_empty());
         assert!(!segno.exists());
-        let mut righe = Esecuzione::nuova();
+        let mut righe = Esecuzione::nuova(None);
         righe.azione(&apri(1), None);
         let troppe = format!("{}touch {}\n", "\n".repeat(2000), segno.display());
         righe.azione(&manda(1, troppe.as_bytes()), None);
@@ -949,8 +964,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn parte_solo_lo_script_mostrato_al_cliente() {
+        let segno = std::env::temp_dir().join(format!("remotek-mostrato-{}", std::process::id()));
+        let script = format!("touch {}\nexit 4\n", segno.display()).into_bytes();
+        let mut diverso = script.clone();
+        diverso[0] = b'T';
+        let rifiutato = |mostrato: Option<Vec<u8>>, mandato: &[u8]| {
+            let mut e = Esecuzione::nuova(mostrato);
+            e.azione(&apri(1), None);
+            assert!(e.azione(&manda(1, mandato), None).is_none());
+            assert!(e.azione(&manda(1, b""), None).is_none());
+            let r = e.leggi();
+            assert!(
+                matches!(&r[..], [TerminalResponse { union: Some(terminal_response::Union::Error(x)), .. }] if x.message == NON_MOSTRATO && x.terminal_id == 1),
+                "il rifiuto esce da leggi, una volta: {:?}",
+                r
+            );
+            thread::sleep(Duration::from_millis(200));
+            assert!(e.leggi().is_empty());
+        };
+        // Diverso di un byte, o senza script mostrato: non parte.
+        rifiutato(Some(script.clone()), &diverso);
+        rifiutato(None, &script);
+        assert!(!segno.exists(), "nessuno script partito");
+        // Uguale: parte.
+        let mut e = Esecuzione::nuova(Some(script.clone()));
+        e.azione(&apri(1), None);
+        e.azione(&manda(1, &script), None);
+        e.azione(&manda(1, b""), None);
+        assert_eq!(esito(&mut e).2, Some(4));
+        assert!(segno.exists());
+        std::fs::remove_file(&segno).ok();
+    }
+
+    #[test]
     fn chiusura_uccide_anche_un_figlio() {
-        let mut e = Esecuzione::nuova();
+        let mut e = Esecuzione::nuova(Some(b"sleep 300 & echo $!; wait\n".to_vec()));
         e.azione(&apri(1), None);
         e.azione(&manda(1, b"sleep 300 & echo $!; wait\n"), None);
         e.azione(&manda(1, b""), None);

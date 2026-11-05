@@ -701,7 +701,7 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (tx_cm, _rx_cm) = mpsc::unbounded_channel();
         let mut t = Some(Trascrizione::nuova(7, String::new(), &tx, Some(c.clone()), None));
-        let mut e = Esecuzione::nuova();
+        let mut e = Esecuzione::nuova(Some(b"echo o; echo e >&2\n".to_vec()));
         for azione in [apri(1), manda(1, b"echo o; echo e >&2\n"), manda(1, b"")] {
             ingresso(&mut t, 7, &tx, &tx_cm, &azione, true);
             e.azione(&azione, None);
@@ -778,7 +778,8 @@ mod tests {
                 None,
                 Some(vista),
             ));
-            let mut e = Esecuzione::nuova();
+            let mostrato = b"printf 'a\\033[2J\\n'\necho b; echo e >&2\n".to_vec();
+            let mut e = Esecuzione::nuova(Some(mostrato));
             for (k, a) in sequenza.iter().enumerate() {
                 ingresso(&mut t, 7, &tx, &tx_cm, a, exec);
                 // La chiusura solo dopo l'output: va a `Esecuzione` alla fine.
@@ -859,7 +860,7 @@ mod tests {
             codice_dello_script, risposta_chiusura, HELPER_NON_PARTITO,
         };
         let it = crate::remotek::scelta_terminale::lingua_del_cm() == Lingua::Italiano;
-        let mut grande = Esecuzione::nuova();
+        let mut grande = Esecuzione::nuova(None);
         grande.azione(&apri(1), None);
         grande.azione(&manda(1, &[b'\n'; 2001]), None);
         grande.azione(&manda(1, b""), None);
@@ -996,7 +997,7 @@ mod tests {
             None,
             Some(vista),
         ));
-        let mut e = Esecuzione::nuova();
+        let mut e = Esecuzione::nuova(None);
         for a in [apri(1), manda(1, &[b'\n'; 2001]), manda(1, b"")] {
             ingresso(&mut t, 7, &tx, &tx_cm, &a, true);
             if let Some(r) = e.azione(&a, None) {

@@ -19,6 +19,11 @@ pub const MASSIMO_RIGHE: usize = 2000;
 /// lo esegue e la vista non lo mostra.
 pub const TROPPO_GRANDE: &str = "lo script supera 32 KiB o 2000 righe: non eseguito";
 
+/// Il messaggio del `TerminalError` per uno script diverso da quello del
+/// login, che il cliente ha visto prima di scegliere (ADR-0035), o senza
+/// script nel login: il PC non lo esegue.
+pub const NON_MOSTRATO: &str = "non e' lo script mostrato al cliente: non eseguito";
+
 /// Le righe dello script, come le conta [`MASSIMO_RIGHE`].
 pub fn righe(script: &[u8]) -> usize {
     let a_capo = script.iter().filter(|b| **b == b'\n').count();

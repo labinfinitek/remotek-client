@@ -21,6 +21,12 @@ rilasciate non si riscrivono.
   torna col clic. Senza la chiave non cambia niente per i `custom.txt` gia'
   consegnati: senza clic solo il terminale, come prima.
 
+### Corretto
+- **Per l'agente AI**: con exec i riquadri del connection manager si
+  chiamano "Script", "Output" ed "Errore": prima stdout e stderr avevano
+  solo un numero, "(0)" e "(-2)", e il cliente non capiva quale fosse
+  l'output e quale gli errori. Il terminale resta com'era.
+
 ### Sicurezza
 - Una chiave `remotek-agente-capacita` malformata (vuota, nome sconosciuto o
   ripetuto, spazi, maiuscole) spegne ogni senza clic sul server, terminale

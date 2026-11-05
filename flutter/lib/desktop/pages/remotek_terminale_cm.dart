@@ -18,6 +18,22 @@ import '../../common.dart';
 // (src/remotek/vista_cm.rs), fuori dai terminal_id possibili (int32), cosi'
 // nessun output ci arriva.
 const _riquadroScript = -2147483649;
+// Il terminal_id di stderr di exec: exec::TERMINAL_ID_STDERR
+// (src/remotek/exec.rs).
+const _riquadroStderr = -2;
+
+// Il titolo di un riquadro. Con exec (la connessione ha il riquadro dello
+// script) i riquadri sono lo script, l'output (stdout, il terminal_id che
+// apre il CLI) e gli errori (stderr); col terminale il numero del terminale,
+// se ce n'e' piu' d'uno.
+String _titoloRiquadro(String titolo, int riquadro, List<int> riquadri) {
+  if (riquadri.contains(_riquadroScript)) {
+    if (riquadro == _riquadroScript) return '$titolo - Script';
+    if (riquadro == _riquadroStderr) return '$titolo - ${translate('Error')}';
+    return '$titolo - Output';
+  }
+  return riquadri.length > 1 ? '$titolo ($riquadro)' : titolo;
+}
 
 class _TerminaleCm {
   final terminal = Terminal(maxLines: 10000);
@@ -114,11 +130,8 @@ class RemotekVistaTerminale extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final t in terminali) ...[
-            Text(t.key == _riquadroScript
-                    ? '$titolo - Script'
-                    : terminali.length > 1
-                        ? '$titolo (${t.key})'
-                        : titolo)
+            Text(_titoloRiquadro(
+                    titolo, t.key, [for (final r in terminali) r.key]))
                 .paddingSymmetric(horizontal: 8, vertical: 4),
             Expanded(
               child: TerminalView(

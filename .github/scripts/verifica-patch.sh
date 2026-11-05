@@ -2573,7 +2573,8 @@ fi
 # con KILL_ON_JOB_CLOSE; exec non avvia processi con un token ne' sospesi:
 # l'identita' resta quella del servizio o dell'helper di upstream.
 # La chiave del riquadro dello script (vista_cm.rs e remotek_terminale_cm.dart)
-# e' la stessa nei due file.
+# e' la stessa nei due file, e cosi' il terminal_id di stderr (exec.rs e
+# remotek_terminale_cm.dart).
 esito_exec=$(python3 - <<'PY'
 import re
 def codice(f):
@@ -2604,11 +2605,16 @@ for f, riga in (("src/remotek/vista_cm.rs", "pub const RIQUADRO_SCRIPT: i64 = i3
                 ("flutter/lib/desktop/pages/remotek_terminale_cm.dart", "const _riquadroScript = -2147483649;")):
     if riga not in open(f, encoding="utf-8").read().splitlines():
         guai.append("%s: manca `%s` (la chiave del riquadro dello script deve restare uguale in vista_cm.rs e remotek_terminale_cm.dart)" % (f, riga))
+# Lo stesso per stderr di exec: il riquadro col titolo "Errore" nel CM.
+for f, riga in (("src/remotek/exec.rs", "pub const TERMINAL_ID_STDERR: i32 = -2;"),
+                ("flutter/lib/desktop/pages/remotek_terminale_cm.dart", "const _riquadroStderr = -2;")):
+    if riga not in open(f, encoding="utf-8").read().splitlines():
+        guai.append("%s: manca `%s` (il terminal_id di stderr deve restare uguale in exec.rs e remotek_terminale_cm.dart)" % (f, riga))
 print("\n".join(guai))
 PY
 ) || esito_exec="${esito_exec:-}"$'\n'"controllo di exec non eseguito: python3 terminato con errore"
 if [ -z "$esito_exec" ]; then
-  ok "exec non apre la ConPTY e chiude i figli col Job object, senza token ne' partenze sospese; riquadro dello script uguale in Rust e Dart (ADR-0033)"
+  ok "exec non apre la ConPTY e chiude i figli col Job object, senza token ne' partenze sospese; riquadri dello script e di stderr uguali in Rust e Dart (ADR-0033)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"

@@ -2664,5 +2664,60 @@ else
   done <<<"$esito_elenco"
 fi
 
+# --- 34. Il CM resta visibile col terminale e mostra la fine -------------
+# ADR-0021 regola 6, ADR-0028 caso 3 (collaudo 26(a) e 28(b)): con un cliente
+# terminale nel CM, ne' il timer dei 3 secondi di `_addTab` ne' "Accept",
+# "Elevate" e "Accept and Elevate" minimizzano il CM; `on_close` sceglie fra
+# `Disconnected` e `Close` con `vista_cm::scheda_resta` (sessione terminale
+# autorizzata, non chiusa dal CM) e manda il dato da `trascrizione::fine_al_cm`,
+# dietro all'output della vista; la chiusura dal CM si segna in `chiusa_dal_cm`.
+# Un merge di upstream che riporta una di queste righe a com'era le perderebbe
+# senza errore: il CM sparirebbe di nuovo, o la riga di fine di exec.
+esito_cm=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+TERM = r"!(?:_clients|model\.clients)\.any\(\(c\) => c\.type_\(\) == ClientType\.terminal\)"
+SM = "flutter/lib/models/server_model.dart"
+sm = codice(SM)
+if not re.search(r"cmHiddenTimer = Timer\(const Duration\(seconds: 3\), \(\) \{\s*if \(!hideCm && " + TERM + r"\) windowManager\.minimize\(\);", sm):
+    guai.append("%s: il timer dei 3 secondi di _addTab minimizza il CM anche con un cliente terminale (collaudo 26(a))" % SM)
+if len(re.findall(r"windowManager\.minimize\(\)", sm)) != 1:
+    guai.append("%s: c'e' un altro windowManager.minimize() oltre a quello del timer di _addTab: va visto se nasconde il terminale" % SM)
+SP = "flutter/lib/desktop/pages/server_page.dart"
+sp = codice(SP)
+tutti = len(re.findall(r"windowManager\.minimize\(\)", sp))
+protetti = len(re.findall(r"if \(" + TERM + r"\) \{\s*windowManager\.minimize\(\);\s*\}", sp))
+if tutti != 3 or protetti != 3:
+    guai.append("%s: \"Accept\", \"Elevate\" e \"Accept and Elevate\" devono minimizzare solo senza clienti terminale (minimize: %d, con la condizione: %d, attesi 3 e 3)" % (SP, tutti, protetti))
+C = "src/server/connection.rs"
+c = codice(C)
+chiusura = re.search(r"async fn on_close\(&mut self, reason: &str, lock: bool\) \{(.*?)\n    \}\n", c, re.S)
+if not chiusura:
+    guai.append("%s: on_close non trovata" % C)
+else:
+    corpo = chiusura.group(1)
+    if not re.search(r"let data = if crate::remotek::vista_cm::scheda_resta\(self\.terminal, self\.authorized, self\.chiusa_dal_cm, self\.chat_unanswered, self\.file_transferred, cfg!\(feature = \"flutter\"\)\) \{\s*ipc::Data::Disconnected\s*\} else \{\s*ipc::Data::Close\s*\};", corpo):
+        guai.append("%s: on_close non sceglie Disconnected o Close con vista_cm::scheda_resta(self.terminal, self.authorized, self.chiusa_dal_cm, ...)" % C)
+    if "crate::remotek::trascrizione::fine_al_cm(&mut self.trascrizione, &self.tx_to_cm, data);" not in corpo:
+        guai.append("%s: on_close non manda il dato di fine da trascrizione::fine_al_cm (la riga di fine di exec arriverebbe dopo, collaudo 28(b))" % C)
+    if re.search(r"self\.tx_to_cm\.send\(\s*data\s*\)", corpo):
+        guai.append("%s: on_close manda di nuovo il dato di fine direttamente su tx_to_cm" % C)
+if not re.search(r"ipc::Data::Close => \{\s*conn\.chat_unanswered = false;\s*conn\.file_transferred = false;\s*conn\.chiusa_dal_cm = true;", c):
+    guai.append("%s: il ramo ipc::Data::Close del ciclo del CM non segna chiusa_dal_cm" % C)
+if len(re.findall(r"chiusa_dal_cm = true", c)) > 1:
+    guai.append("%s: chiusa_dal_cm diventa vero fuori dal ramo ipc::Data::Close del ciclo del CM" % C)
+print("\n".join(guai))
+PY
+) || esito_cm="${esito_cm:-}"$'\n'"controllo del CM col terminale non eseguito: python3 terminato con errore"
+if [ -z "$esito_cm" ]; then
+  ok "il CM non si minimizza con un cliente terminale; on_close passa da scheda_resta e fine_al_cm (ADR-0021 regola 6, ADR-0028 caso 3)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_cm"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

@@ -2785,7 +2785,7 @@ impl Connection {
                     crate::platform::is_prelogin(),
                     crate::remotek::non_presidiato::senza_clic(
                         crate::remotek::non_presidiato::abilitato(),
-                        crate::remotek::lasciapassare::terminale_amministratore(
+                        crate::remotek::non_presidiato::senza_clic_per(
                             self.lasciapassare.as_ref(),
                         ),
                         self.terminal,
@@ -2882,13 +2882,12 @@ impl Connection {
                     && is_logon();
 
             // Remotek (ADR-0028, caso 3): sul server non presidiato abilitato dal
-            // custom.txt firmato, il terminale col lasciapassare valido si autorizza
-            // senza clic e gira come SYSTEM; il CM lo mostra gia' autorizzato.
+            // custom.txt firmato, il terminale col lasciapassare valido (o exec, se
+            // il custom.txt lo elenca) si autorizza senza clic e gira come SYSTEM;
+            // il CM lo mostra gia' autorizzato.
             if crate::remotek::non_presidiato::senza_clic(
                 crate::remotek::non_presidiato::abilitato(),
-                crate::remotek::lasciapassare::terminale_amministratore(
-                    self.lasciapassare.as_ref(),
-                ),
+                crate::remotek::non_presidiato::senza_clic_per(self.lasciapassare.as_ref()),
                 self.terminal,
                 crate::remotek::scelta_terminale::windows_installato(),
             ) {
@@ -3957,7 +3956,7 @@ impl Connection {
         // login; il caso 2 qui sotto resta invariato.
         if crate::remotek::non_presidiato::senza_clic(
             crate::remotek::non_presidiato::abilitato(),
-            crate::remotek::lasciapassare::terminale_amministratore(self.lasciapassare.as_ref()),
+            crate::remotek::non_presidiato::senza_clic_per(self.lasciapassare.as_ref()),
             self.terminal,
             crate::remotek::scelta_terminale::windows_installato(),
         ) {

@@ -11,6 +11,22 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Aggiunto
+- **Per l'agente AI**: sul server non presidiato (`remotek-agente` =
+  `non-presidiato`) anche exec puo' entrare senza clic, se il `custom.txt`
+  firmato di quel PC lo elenca nella chiave nuova `remotek-agente-capacita`
+  (per esempio `terminale,exec`; ADR-0033, passo 7). Solo col lasciapassare
+  valido da amministratore, e gira come SYSTEM come il terminale senza clic;
+  exec da utente resta col clic. Con `exec` senza `terminale` il terminale
+  torna col clic. Senza la chiave non cambia niente per i `custom.txt` gia'
+  consegnati: senza clic solo il terminale, come prima.
+
+### Sicurezza
+- Una chiave `remotek-agente-capacita` malformata (vuota, nome sconosciuto o
+  ripetuto, spazi, maiuscole) spegne ogni senza clic sul server, terminale
+  compreso: vale il clic del cliente, e il registro del servizio lo dice con
+  una riga ERROR.
+
 ## [remotek-1.4.9-7] - 2026-11-02
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-7`

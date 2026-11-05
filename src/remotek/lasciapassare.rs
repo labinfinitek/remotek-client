@@ -80,12 +80,6 @@ pub fn amministratore(valido: Option<&Valido>) -> bool {
     valido.is_some_and(|v| v.modo == Modo::Amministratore)
 }
 
-/// Senza clic (`non_presidiato::senza_clic`) solo il terminale da
-/// amministratore: exec senza clic verra' col passo 7 di ADR-0033.
-pub fn terminale_amministratore(valido: Option<&Valido>) -> bool {
-    valido.is_some_and(|v| v.modo == Modo::Amministratore && v.capacita == Capacita::Terminale)
-}
-
 /// Il lasciapassare della connessione e' di exec: `init_terminal_service`
 /// (src/server/connection.rs) apre il servizio del terminale senza
 /// pseudo-console, con lo script di src/remotek/exec.rs.
@@ -347,6 +341,7 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
                 v.modo,
                 controllante
             );
+            super::non_presidiato::segnala_elenco_malformato();
             Some(v)
         }
         Err(e) => {
@@ -609,8 +604,11 @@ mod tests {
     }
 
     #[test]
-    fn utente_mai_amministratore_ed_exec_mai_senza_clic() {
-        use crate::remotek::{non_presidiato::senza_clic, scelta_terminale};
+    fn utente_mai_amministratore_ed_exec_senza_elenco_mai_senza_clic() {
+        use crate::remotek::{
+            non_presidiato::{ammesso_senza_clic, senza_clic, Elenco},
+            scelta_terminale,
+        };
         let lasciapassare = |modo, capacita| {
             Some(Valido {
                 agente: "a".into(),
@@ -623,7 +621,8 @@ mod tests {
         let terminale = lasciapassare(Modo::Amministratore, Capacita::Terminale);
         let exec_amm = lasciapassare(Modo::Amministratore, Capacita::Exec);
         let exec_ut = lasciapassare(Modo::Utente, Capacita::Exec);
-        // Come in src/server/connection.rs: finestra, scelta, SYSTEM, senza clic.
+        // Come in src/server/connection.rs: finestra, scelta, SYSTEM, senza clic
+        // (senza l'elenco firmato delle capacita').
         let decisioni = |l: &Option<Valido>| {
             (
                 scelta_terminale::richiesta(l.as_ref(), true, scelta_terminale::Pc::Installato)
@@ -640,7 +639,12 @@ mod tests {
                     scelta_terminale::Pc::Installato,
                     true,
                 ),
-                senza_clic(true, terminale_amministratore(l.as_ref()), true, true),
+                senza_clic(
+                    true,
+                    ammesso_senza_clic(l.as_ref(), &Elenco::Assente),
+                    true,
+                    true,
+                ),
             )
         };
         assert_eq!(decisioni(&terminale), (true, true, true, true));

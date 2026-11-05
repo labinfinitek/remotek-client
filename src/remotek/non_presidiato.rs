@@ -8,13 +8,25 @@
 //! alla console lo vede nel connection manager, gia' autorizzato, e lo puo'
 //! chiudere. La chiave si legge solo da `HARD_SETTINGS`: un'opzione locale,
 //! `override-settings` o `default-settings` non la accendono.
+//!
+//! Cosa entra senza clic lo dice la chiave `remotek-agente-capacita` dello
+//! stesso `custom.txt` (ADR-0033, punto 7): nomi separati da `,`, senza spazi,
+//! fra quelli di [`CAPACITA`], ciascuno una volta sola. Senza la chiave entra
+//! senza clic solo il terminale; con la chiave malformata niente, e vale il
+//! clic. Sempre e solo col lasciapassare valido da amministratore.
 
+use super::lasciapassare::{Capacita, Modo, Valido};
 use hbb_common::{config::HARD_SETTINGS, log};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// La chiave del `custom.txt` firmato e l'unico valore che abilita.
 pub const CHIAVE: &str = "remotek-agente";
 pub const VALORE: &str = "non-presidiato";
+
+/// La chiave dell'elenco di cio' che entra senza clic e i nomi ammessi. Ogni
+/// costante sta su una riga: lo strumento di firma le legge cosi'.
+pub const CHIAVE_CAPACITA: &str = "remotek-agente-capacita";
+pub const CAPACITA: [&str; 5] = ["terminale", "exec", "file", "tunnel", "schermo"];
 
 /// La chiave nelle impostazioni fisse del `custom.txt` firmato.
 pub fn abilitato_da(fisse: &HashMap<String, String>) -> bool {
@@ -29,15 +41,86 @@ pub fn abilitato() -> bool {
     }
 }
 
-/// Il terminale si autorizza senza clic solo con tutte e quattro: server
-/// abilitato, lasciapassare valido, terminale, Windows col client installato.
+/// L'elenco di `remotek-agente-capacita` nelle impostazioni fisse.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Elenco {
+    /// Chiave assente: senza clic solo il terminale, come prima della chiave.
+    Assente,
+    /// I nomi elencati, ciascuno una volta, tutti fra [`CAPACITA`].
+    Nomi(BTreeSet<&'static str>),
+    /// Vuota, nome sconosciuto o ripetuto, spazi, maiuscole: niente senza clic.
+    Malformato,
+}
+
+/// Legge `remotek-agente-capacita` dalle impostazioni fisse.
+pub fn elenco_da(fisse: &HashMap<String, String>) -> Elenco {
+    let Some(valore) = fisse.get(CHIAVE_CAPACITA) else {
+        return Elenco::Assente;
+    };
+    let mut nomi = BTreeSet::new();
+    for nome in valore.split(',') {
+        match CAPACITA.iter().find(|ammesso| **ammesso == nome) {
+            // `insert` falso: il nome e' ripetuto.
+            Some(ammesso) if nomi.insert(*ammesso) => {}
+            _ => return Elenco::Malformato,
+        }
+    }
+    Elenco::Nomi(nomi)
+}
+
+/// [`elenco_da`] su `HARD_SETTINGS`; se il lock non si prende, malformato.
+pub fn elenco() -> Elenco {
+    match HARD_SETTINGS.read() {
+        Ok(fisse) => elenco_da(&fisse),
+        Err(_) => Elenco::Malformato,
+    }
+}
+
+/// Il lasciapassare chiede qualcosa che l'elenco lascia entrare senza clic:
+/// solo da amministratore, e solo cio' che il client sa fare (terminale, exec).
+pub fn ammesso_senza_clic(valido: Option<&Valido>, elenco: &Elenco) -> bool {
+    let Some(v) = valido.filter(|v| v.modo == Modo::Amministratore) else {
+        return false;
+    };
+    let nome = match v.capacita {
+        Capacita::Terminale => "terminale",
+        Capacita::Exec => "exec",
+    };
+    match elenco {
+        Elenco::Assente => v.capacita == Capacita::Terminale,
+        Elenco::Nomi(nomi) => nomi.contains(nome),
+        Elenco::Malformato => false,
+    }
+}
+
+/// [`ammesso_senza_clic`] con l'elenco di `HARD_SETTINGS`: il secondo
+/// argomento di [`senza_clic`] nei tre punti di src/server/connection.rs.
+pub fn senza_clic_per(valido: Option<&Valido>) -> bool {
+    ammesso_senza_clic(valido, &elenco())
+}
+
+/// La riga ERROR per la chiave malformata sul server abilitato. Si chiama una
+/// volta per connessione dell'agente, quando il lasciapassare e' valido
+/// (`lasciapassare::verifica_login`), mai nelle letture di [`senza_clic_per`].
+pub fn segnala_elenco_malformato() {
+    if abilitato() && elenco() == Elenco::Malformato {
+        log::error!(
+            "chiave {} malformata: niente senza clic, vale il clic",
+            CHIAVE_CAPACITA
+        );
+    }
+}
+
+/// Si autorizza senza clic solo con tutte e quattro: server abilitato,
+/// lasciapassare valido che l'elenco lascia entrare ([`senza_clic_per`]),
+/// terminale (anche exec viaggia sul terminale), Windows col client installato.
 pub fn senza_clic(
     abilitato: bool,
-    lasciapassare_valido: bool,
+    ammesso_dall_elenco: bool,
     terminale: bool,
     windows_installato: bool,
 ) -> bool {
-    abilitato && lasciapassare_valido && terminale && windows_installato
+    abilitato && ammesso_dall_elenco && terminale && windows_installato
 }
 
 /// In prelogin (schermata di logon, nessuno alla console) il terminale viene
@@ -143,6 +226,93 @@ mod tests {
         ripristina(&HARD_SETTINGS, fisse);
         ripristina(&OVERWRITE_SETTINGS, sovrascritte);
         ripristina(&DEFAULT_SETTINGS, predefinite);
+    }
+
+    fn nomi(elenco: &[&'static str]) -> Elenco {
+        Elenco::Nomi(elenco.iter().copied().collect())
+    }
+
+    #[test]
+    fn elenco_assente_valido_o_malformato() {
+        assert_eq!(elenco_da(&fisse(&[])), Elenco::Assente);
+        assert_eq!(elenco_da(&fisse(&[(CHIAVE, VALORE)])), Elenco::Assente);
+        let validi: [(&str, &[&'static str]); 5] = [
+            ("terminale", &["terminale"]),
+            ("exec", &["exec"]),
+            ("terminale,exec", &["terminale", "exec"]),
+            ("exec,terminale", &["terminale", "exec"]),
+            ("terminale,exec,file,tunnel,schermo", &CAPACITA),
+        ];
+        for (valore, attesi) in validi {
+            let letto = elenco_da(&fisse(&[(CHIAVE_CAPACITA, valore)]));
+            assert_eq!(letto, nomi(attesi), "{:?}", valore);
+        }
+        let malformati = [
+            "",
+            "terminale,",
+            ",exec",
+            "terminale, exec",
+            "Exec",
+            "terminale,terminale",
+            "shell",
+        ];
+        for valore in malformati {
+            let letto = elenco_da(&fisse(&[(CHIAVE_CAPACITA, valore)]));
+            assert_eq!(letto, Elenco::Malformato, "{:?}", valore);
+        }
+    }
+
+    #[test]
+    fn decisione_senza_clic_tutta_la_tabella() {
+        let lasciapassare = |modo, capacita| Valido {
+            agente: "a".into(),
+            tecnico: "t".into(),
+            nonce: "n".into(),
+            modo,
+            capacita,
+        };
+        let terminale = lasciapassare(Modo::Amministratore, Capacita::Terminale);
+        let exec = lasciapassare(Modo::Amministratore, Capacita::Exec);
+        let terminale_ut = lasciapassare(Modo::Utente, Capacita::Terminale);
+        let exec_ut = lasciapassare(Modo::Utente, Capacita::Exec);
+        // Server abilitato e Windows installato: decide l'elenco.
+        let decide =
+            |l: &Valido, e: &Elenco| senza_clic(true, ammesso_senza_clic(Some(l), e), true, true);
+        // (elenco, terminale da amministratore, exec da amministratore)
+        let tabella = [
+            (Elenco::Assente, true, false),
+            (nomi(&["exec"]), false, true),
+            (nomi(&["terminale"]), true, false),
+            (nomi(&["terminale", "exec"]), true, true),
+            (nomi(&["file", "tunnel", "schermo"]), false, false),
+            (Elenco::Malformato, false, false),
+        ];
+        for (elenco, si_terminale, si_exec) in &tabella {
+            assert_eq!(decide(&terminale, elenco), *si_terminale, "{:?}", elenco);
+            assert_eq!(decide(&exec, elenco), *si_exec, "{:?}", elenco);
+            // Modo utente: mai.
+            assert!(!decide(&terminale_ut, elenco), "{:?}", elenco);
+            assert!(!decide(&exec_ut, elenco), "{:?}", elenco);
+            // Senza lasciapassare: mai.
+            assert!(!ammesso_senza_clic(None, elenco));
+            for l in [&terminale, &exec] {
+                let ammesso = ammesso_senza_clic(Some(l), elenco);
+                // Senza remotek-agente = non-presidiato: mai.
+                assert!(!senza_clic(false, ammesso, true, true));
+                // Non Windows installato: mai.
+                assert!(!senza_clic(true, ammesso, true, false));
+            }
+        }
+    }
+
+    #[test]
+    fn le_costanti_hanno_la_forma_che_legge_lo_strumento_di_firma() {
+        let sorgente = include_str!("non_presidiato.rs");
+        let righe: Vec<&str> = sorgente.lines().collect();
+        assert!(righe.contains(&r#"pub const CHIAVE_CAPACITA: &str = "remotek-agente-capacita";"#));
+        assert!(righe.contains(
+            &r#"pub const CAPACITA: [&str; 5] = ["terminale", "exec", "file", "tunnel", "schermo"];"#
+        ));
     }
 
     #[test]

@@ -7,9 +7,9 @@
 //! pubblica cablata sui byte del payload, prima di leggere il JSON; poi
 //! versione, capacita', modo, PC, finestra di tempo con 30 secondi di
 //! tolleranza, nonce mai visto. Il `v` = 1 e' il terminale da amministratore;
-//! del `v` = 2 vale solo `exec` (ADR-0033), da amministratore o da utente:
-//! ogni altra capacita' vale come nessun lasciapassare finche' il suo passo
-//! non arriva. I nonce visti stanno su file (`lasciapassare-visti.json` nella
+//! del `v` = 2 valgono `exec` (ADR-0033) e `tunnel` (ADR-0036), da
+//! amministratore o da utente: ogni altra capacita' vale come nessun
+//! lasciapassare finche' il suo passo non arriva. I nonce visti stanno su file (`lasciapassare-visti.json` nella
 //! cartella di configurazione del servizio, solo SYSTEM e Administrators su
 //! Windows, solo il proprietario altrove) fino a `scade + 30`, cosi' un
 //! riavvio del servizio non li dimentica. Un errore del file vale come nonce
@@ -66,18 +66,40 @@ pub enum Modo {
     Utente,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Capacita {
     /// `v` = 1.
     Terminale,
     /// `v` = 2, `capacita` = `exec`.
     Exec,
+    /// `v` = 2, `capacita` = `tunnel` (ADR-0036): le porte del PC (da 1 a 8,
+    /// diverse) e la durata in secondi (da 60 a 28800).
+    Tunnel { porte: Vec<u16>, durata: u32 },
 }
 
 /// Il lasciapassare chiede l'amministratore: la finestra del caso 2, la
 /// scelta del cliente e SYSTEM decidono con questo, mai con `is_some()`.
+/// Il tunnel non ha shell ne' identita' sul PC: mai amministratore.
 pub fn amministratore(valido: Option<&Valido>) -> bool {
-    valido.is_some_and(|v| v.modo == Modo::Amministratore)
+    valido.is_some_and(|v| v.modo == Modo::Amministratore && !tunnel(Some(v)))
+}
+
+/// Il lasciapassare della connessione e' di tunnel (ADR-0036).
+pub fn tunnel(valido: Option<&Valido>) -> bool {
+    valido.is_some_and(|v| matches!(v.capacita, Capacita::Tunnel { .. }))
+}
+
+/// Nel login del terminale un lasciapassare di tunnel non vale: si prosegue
+/// come senza, con una riga di warn.
+pub fn per_il_terminale(valido: Option<Valido>, controllante: &str) -> Option<Valido> {
+    if tunnel(valido.as_ref()) {
+        log::warn!(
+            "lasciapassare di tunnel nel login di un terminale: scartato (controllante {})",
+            controllante
+        );
+        return None;
+    }
+    valido
 }
 
 /// Il lasciapassare della connessione e' di exec: `init_terminal_service`
@@ -95,7 +117,8 @@ pub enum Rifiuto {
     VersioneOModo,
     /// Un `v` = 2 con una capacita' che il PC non accetta ancora.
     Capacita,
-    /// Un `v` = 2 exec con porte o durata.
+    /// Un `v` = 2 exec con porte o durata, o un tunnel con porte o durata
+    /// fuori dalle regole.
     PorteODurata,
     AltroPc,
     NonAncoraValido,
@@ -137,12 +160,18 @@ struct Payload {
     nonce: String,
 }
 
-/// Toglie il lasciapassare dal login di un terminale: `os_login` con lo
-/// username vuoto e la password no. Il modo con le credenziali di Windows
-/// (username non vuoto) e gli altri tipi di connessione restano com'erano.
+/// Toglie il lasciapassare dal login di un terminale o del tunnel (ADR-0036:
+/// port forward con host vuoto e porta 0, `tunnel::forma_del_tunnel`):
+/// `os_login` con lo username vuoto e la password no. Il modo con le
+/// credenziali di Windows (username non vuoto), il port forward dei tecnici
+/// (host e porta veri, con la "Password del SO" salvata) e gli altri tipi di
+/// connessione restano com'erano.
 pub fn togli(lr: &mut LoginRequest) -> Option<String> {
-    if !matches!(lr.union, Some(login_request::Union::Terminal(_))) {
-        return None;
+    match &lr.union {
+        Some(login_request::Union::Terminal(_)) => {}
+        Some(login_request::Union::PortForward(pf))
+            if super::tunnel::forma_del_tunnel(&pf.host, pf.port) => {}
+        _ => return None,
     }
     let os = lr.os_login.as_mut()?;
     if !os.username.is_empty() || os.password.is_empty() {
@@ -228,8 +257,10 @@ pub fn verifica(
     })
 }
 
-/// `v` = 1: solo `amministratore`, il terminale. `v` = 2: solo `exec`, con
-/// `amministratore` o `utente`, `porte` = `[]` e `durata` = 0.
+/// `v` = 1: solo `amministratore`, il terminale. `v` = 2, con
+/// `amministratore` o `utente`: `exec` con `porte` = `[]` e `durata` = 0;
+/// `tunnel` con le porte e la durata di `tunnel::porte_valide` e
+/// `tunnel::durata_valida`.
 fn modo_e_capacita(p: &Payload) -> Result<(Modo, Capacita), Rifiuto> {
     let modo = match p.modo.as_str() {
         "amministratore" => Modo::Amministratore,
@@ -238,6 +269,20 @@ fn modo_e_capacita(p: &Payload) -> Result<(Modo, Capacita), Rifiuto> {
     };
     match p.v {
         1 => Ok((modo, Capacita::Terminale)),
+        2 if p.capacita == "tunnel" => match (&p.porte, p.durata) {
+            (Some(porte), Some(durata))
+                if super::tunnel::porte_valide(porte) && super::tunnel::durata_valida(durata) =>
+            {
+                Ok((
+                    modo,
+                    Capacita::Tunnel {
+                        porte: porte.clone(),
+                        durata: durata as u32,
+                    },
+                ))
+            }
+            _ => Err(Rifiuto::PorteODurata),
+        },
         2 if p.capacita != "exec" => Err(Rifiuto::Capacita),
         2 if !p.porte.as_ref().is_some_and(Vec::is_empty) || p.durata != Some(0) => {
             Err(Rifiuto::PorteODurata)
@@ -529,16 +574,22 @@ mod tests {
     }
 
     #[test]
-    fn vettore_v2_del_readme_firma_buona_capacita_rifiutata() {
+    fn vettore_v2_del_readme_tunnel_accettato() {
         // Lo stesso payload, firmato qui, da' la stringa del README.
         assert_eq!(
             v2("tunnel", "amministratore", "[22,3389]", 3600),
             VETTORE_V2
         );
+        let v = prova(VETTORE_V2, CHIAVE_PROVA, PC, EMESSO).unwrap();
         assert_eq!(
-            prova(VETTORE_V2, CHIAVE_PROVA, PC, EMESSO),
-            Err(Rifiuto::Capacita)
+            v.capacita,
+            Capacita::Tunnel {
+                porte: vec![22, 3389],
+                durata: 3600
+            }
         );
+        // Il tunnel non da' mai l'amministratore, e non e' exec.
+        assert!(tunnel(Some(&v)) && !amministratore(Some(&v)) && !exec(Some(&v)));
         assert_eq!(Rifiuto::Capacita.to_string(), "capacita' non accettata");
         // Un byte alterato: la firma si controlla prima della capacita'.
         let rotto = VETTORE_V2.replacen("kahITk", "kahITj", 1);
@@ -558,8 +609,95 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_con_porte_e_durata_nei_due_modi() {
+        for modo in ["amministratore", "utente"] {
+            let v = prova(
+                &v2("tunnel", modo, "[1433,8080]", 60),
+                CHIAVE_PROVA,
+                PC,
+                EMESSO,
+            )
+            .unwrap();
+            assert_eq!(
+                v.capacita,
+                Capacita::Tunnel {
+                    porte: vec![1433, 8080],
+                    durata: 60
+                }
+            );
+        }
+        let otto = "[1,2,3,4,5,6,7,65535]";
+        assert!(prova(
+            &v2("tunnel", "utente", otto, 28800),
+            CHIAVE_PROVA,
+            PC,
+            EMESSO
+        )
+        .is_ok());
+        for (porte, durata) in [
+            ("[]", 3600),
+            ("[0]", 3600),
+            ("[1433,1433]", 3600),
+            ("[1,2,3,4,5,6,7,8,9]", 3600),
+            ("[1433]", 59),
+            ("[1433]", 28801),
+            ("[1433]", 0),
+        ] {
+            assert_eq!(
+                prova(
+                    &v2("tunnel", "utente", porte, durata),
+                    CHIAVE_PROVA,
+                    PC,
+                    EMESSO
+                ),
+                Err(Rifiuto::PorteODurata),
+                "{porte} {durata}"
+            );
+        }
+        // Una porta oltre 65535 non si legge nemmeno.
+        assert_eq!(
+            prova(
+                &v2("tunnel", "utente", "[65536]", 3600),
+                CHIAVE_PROVA,
+                PC,
+                EMESSO
+            ),
+            Err(Rifiuto::Formato)
+        );
+        // Senza porte o senza durata.
+        let senza = firmato(
+            r#"{"v":2,"pc":"999000111","agente":"a","tecnico":"t","modo":"utente","capacita":"tunnel","porte":[22],"emesso":1791000000,"scade":1791000060,"nonce":"n"}"#,
+        );
+        assert_eq!(
+            prova(&senza, CHIAVE_PROVA, PC, EMESSO),
+            Err(Rifiuto::PorteODurata)
+        );
+        // Exec con porte resta rifiutato.
+        assert_eq!(
+            prova(
+                &v2("exec", "utente", "[1433]", 3600),
+                CHIAVE_PROVA,
+                PC,
+                EMESSO
+            ),
+            Err(Rifiuto::PorteODurata)
+        );
+        // Nel login del terminale il tunnel non vale.
+        let t = prova(
+            &v2("tunnel", "utente", "[1433]", 60),
+            CHIAVE_PROVA,
+            PC,
+            EMESSO,
+        )
+        .ok();
+        assert_eq!(per_il_terminale(t, "1"), None);
+        let e = prova(&v2("exec", "utente", "[]", 0), CHIAVE_PROVA, PC, EMESSO).ok();
+        assert_eq!(per_il_terminale(e.clone(), "1"), e);
+    }
+
+    #[test]
     fn v2_non_exec_o_con_porte_e_v1_utente_rifiutati() {
-        for capacita in ["terminale", "file", "tunnel", "schermo", ""] {
+        for capacita in ["terminale", "file", "schermo", ""] {
             assert_eq!(
                 prova(
                     &v2(capacita, "amministratore", "[]", 0),
@@ -697,6 +835,31 @@ mod tests {
         let mut lr = login("", VETTORE, true);
         assert_eq!(togli(&mut lr).as_deref(), Some(VETTORE));
         assert_eq!(lr.os_login.password, "");
+        // Anche dal login del tunnel: port forward con host vuoto e porta 0.
+        let mut lr = login("", VETTORE, false);
+        lr.set_port_forward(Default::default());
+        assert_eq!(togli(&mut lr).as_deref(), Some(VETTORE));
+        assert_eq!(lr.os_login.password, "");
+        // Il port forward dei tecnici (host e porta veri) tiene la "Password
+        // del SO" salvata, anche se ha la forma di un lasciapassare.
+        for (host, porta) in [("localhost", 3389), ("RDP", 0), ("", 1433), ("10.0.0.5", 0)] {
+            for password in ["pw", VETTORE] {
+                let mut lr = login("", password, false);
+                lr.set_port_forward(hbb_common::message_proto::PortForward {
+                    host: host.into(),
+                    port: porta,
+                    ..Default::default()
+                });
+                assert_eq!(togli(&mut lr), None, "{host}:{porta}");
+                assert_eq!(lr.os_login.password, password);
+                assert_eq!(
+                    crate::remotek::tunnel::login_port_forward(None, host, porta, |_| {
+                        panic!("verificato")
+                    }),
+                    crate::remotek::tunnel::LoginPortForward::Upstream
+                );
+            }
+        }
         // Le credenziali di Windows, un login senza password e le altre
         // connessioni restano come sono.
         for (u, p, t) in [

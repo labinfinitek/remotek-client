@@ -14,5 +14,6 @@ pub mod script_exec;
 pub mod stampante;
 pub mod token_terminale;
 pub mod trascrizione;
+pub mod tunnel;
 pub mod uscita_terminale;
 pub mod vista_cm;

@@ -85,6 +85,8 @@ pub fn ammesso_senza_clic(valido: Option<&Valido>, elenco: &Elenco) -> bool {
     let nome = match v.capacita {
         Capacita::Terminale => "terminale",
         Capacita::Exec => "exec",
+        // Il tunnel vuole sempre il clic (ADR-0036; senza clic in un passo dopo).
+        Capacita::Tunnel { .. } => return false,
     };
     match elenco {
         Elenco::Assente => v.capacita == Capacita::Terminale,

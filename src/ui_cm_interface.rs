@@ -147,8 +147,9 @@ pub struct Client {
     pub from_switch: bool,
     pub in_voice_call: bool,
     pub incoming_voice_call: bool,
-    // Remotek (ADR-0028, caso 2): la finestra della scelta dell'amministratore.
-    pub remotek: Option<crate::remotek::scelta_terminale::Finestra>,
+    // Remotek (ADR-0028 caso 2, ADR-0033): la scheda dell'agente, cioe' l'etichetta
+    // della richiesta (exec) e la finestra della scelta dell'amministratore.
+    pub remotek: Option<crate::remotek::scelta_terminale::Scheda>,
     #[serde(skip)]
     #[cfg(not(any(target_os = "ios")))]
     tx: UnboundedSender<Data>,
@@ -235,7 +236,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
-        remotek: Option<crate::remotek::scelta_terminale::Finestra>,
+        remotek: Option<crate::remotek::scelta_terminale::Scheda>,
         #[cfg(not(any(target_os = "ios")))] tx: mpsc::UnboundedSender<Data>,
     ) {
         let client = Client {
@@ -556,9 +557,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch, remotek_amministratore} => {
+                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch, remotek} => {
                                     log::debug!("conn_id: {}", id);
-                                    let remotek = remotek_amministratore.map(|r| crate::remotek::scelta_terminale::finestra(r, crate::remotek::scelta_terminale::lingua_del_cm()));
+                                    let remotek = remotek.map(|a| crate::remotek::scelta_terminale::scheda(a, crate::remotek::scelta_terminale::lingua_del_cm()));
                                     self.cm.add_connection(id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, remotek, self.tx.clone());
                                     self.conn_id = id;
                                     #[cfg(target_os = "windows")]

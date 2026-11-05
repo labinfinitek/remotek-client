@@ -103,6 +103,32 @@ pub fn richiesta(valido: Option<&Valido>, terminale: bool, pc: Pc) -> Option<Ric
     })
 }
 
+/// Quello che il servizio dice al CM di una connessione dell'agente, in
+/// `Data::Login` (src/ipc.rs, campo `remotek`): solo dal lasciapassare
+/// verificato, mai da cio' che dichiara il controllante.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Agente {
+    /// Il lasciapassare e' di exec: la scheda del CM dice che l'agente
+    /// esegue comandi, non "Terminale" (ADR-0033 punto 7).
+    #[serde(default)]
+    pub exec: bool,
+    /// La finestra della scelta dell'amministratore ([`richiesta`]).
+    #[serde(default)]
+    pub amministratore: Option<Richiesta>,
+}
+
+/// L'[`Agente`] per il CM: con un lasciapassare valido di exec, o con la
+/// [`richiesta`] dell'amministratore; altrimenti niente, e il CM resta
+/// quello di upstream.
+pub fn agente(valido: Option<&Valido>, terminale: bool, pc: Pc) -> Option<Agente> {
+    let exec = terminale && lasciapassare::exec(valido);
+    let amministratore = richiesta(valido, terminale, pc);
+    (exec || amministratore.is_some()).then_some(Agente {
+        exec,
+        amministratore,
+    })
+}
+
 /// Il rifiuto del login prima della finestra, per la shell senza `os_login`
 /// sul client non installato: elevato vuole il lasciapassare da
 /// amministratore, non elevato non lo puo' onorare.
@@ -285,6 +311,31 @@ pub fn finestra(richiesta: Richiesta, lingua: Lingua) -> Finestra {
         accetta_amministratore: amministratore.to_owned(),
         accetta_utente: (!richiesta.solo_amministratore).then(|| utente.to_owned()),
         rifiuta: rifiuta.to_owned(),
+    }
+}
+
+/// Quello che il CM mostra di una connessione dell'agente (il campo
+/// `remotek` del client, flutter/lib/desktop/pages/remotek_scelta_cm.dart),
+/// gia' nella lingua del CM.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Scheda {
+    /// Nella scheda del cliente al posto di "Terminale"; `None`: "Terminale".
+    pub etichetta: Option<String>,
+    /// La finestra della scelta dell'amministratore; `None`: quella di upstream.
+    pub finestra: Option<Finestra>,
+}
+
+pub fn scheda(agente: Agente, lingua: Lingua) -> Scheda {
+    let etichetta = agente.exec.then(|| {
+        match lingua {
+            Lingua::Italiano => "Esecuzione di comandi",
+            Lingua::Inglese => "Run commands",
+        }
+        .to_owned()
+    });
+    Scheda {
+        etichetta,
+        finestra: agente.amministratore.map(|r| finestra(r, lingua)),
     }
 }
 
@@ -485,6 +536,73 @@ mod tests {
         // Le altre lingue non sono selezionabili: italiano.
         assert_eq!(lingua("", "de-DE"), Lingua::Italiano);
         assert_eq!(lingua("", ""), Lingua::Italiano);
+    }
+
+    /// La scheda dice "Esecuzione di comandi" solo col lasciapassare valido
+    /// di exec, da utente o da amministratore, nelle due lingue; mai senza
+    /// lasciapassare o col lasciapassare del terminale.
+    #[test]
+    fn la_scheda_dice_exec_solo_col_lasciapassare_di_exec() {
+        for pc in [Pc::Installato, Pc::PortatileElevato, Pc::PortatileNonElevato, Pc::Altro] {
+            for modo in [lasciapassare::Modo::Utente, lasciapassare::Modo::Amministratore] {
+                let a = agente(Some(&exec(modo)), true, pc).unwrap();
+                assert!(a.exec);
+                assert_eq!(
+                    scheda(a.clone(), Lingua::Italiano).etichetta.as_deref(),
+                    Some("Esecuzione di comandi")
+                );
+                assert_eq!(
+                    scheda(a, Lingua::Inglese).etichetta.as_deref(),
+                    Some("Run commands")
+                );
+                // Fuori da un terminale niente, nemmeno con exec.
+                assert_eq!(agente(Some(&exec(modo)), false, pc), None);
+            }
+            assert_eq!(agente(None, true, pc), None);
+            let terminale = Valido {
+                modo: lasciapassare::Modo::Utente,
+                ..valido()
+            };
+            assert_eq!(agente(Some(&terminale), true, pc), None);
+            // Il terminale da amministratore: la finestra, senza l'etichetta.
+            if let Some(a) = agente(Some(&valido()), true, pc) {
+                assert!(!a.exec);
+                assert_eq!(scheda(a, Lingua::Italiano).etichetta, None);
+            }
+        }
+    }
+
+    /// La finestra della scelta nella scheda e' quella di prima, per ogni
+    /// lasciapassare e PC; senza richiesta niente finestra.
+    #[test]
+    fn la_finestra_nella_scheda_come_prima() {
+        let lasciapassare = [
+            valido(),
+            exec(lasciapassare::Modo::Amministratore),
+            exec(lasciapassare::Modo::Utente),
+        ];
+        for pc in [Pc::Installato, Pc::PortatileElevato, Pc::PortatileNonElevato, Pc::Altro] {
+            for v in &lasciapassare {
+                let r = richiesta(Some(v), true, pc);
+                let a = agente(Some(v), true, pc);
+                assert_eq!(a.as_ref().and_then(|a| a.amministratore.clone()), r);
+                for lingua in [Lingua::Italiano, Lingua::Inglese] {
+                    assert_eq!(
+                        a.clone().and_then(|a| scheda(a, lingua).finestra),
+                        r.clone().map(|r| finestra(r, lingua))
+                    );
+                }
+            }
+        }
+        let a = agente(Some(&valido()), true, Pc::Installato).unwrap();
+        let j = serde_json::to_value(scheda(a, Lingua::Italiano)).unwrap();
+        assert_eq!(j["etichetta"], json!(null));
+        assert_eq!(j["finestra"]["accetta_utente"], json!("Accetta come utente"));
+        let a = agente(Some(&exec(lasciapassare::Modo::Utente)), true, Pc::Installato).unwrap();
+        assert_eq!(
+            serde_json::to_value(scheda(a, Lingua::Italiano)).unwrap(),
+            json!({"etichetta": "Esecuzione di comandi", "finestra": null})
+        );
     }
 
     #[test]

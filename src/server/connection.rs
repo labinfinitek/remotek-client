@@ -2160,7 +2160,7 @@ impl Connection {
             block_input: self.block_input,
             privacy_mode: self.privacy_mode,
             from_switch: self.from_switch,
-            remotek_amministratore: crate::remotek::scelta_terminale::richiesta(
+            remotek: crate::remotek::scelta_terminale::agente(
                 self.lasciapassare.as_ref(),
                 self.terminal,
                 crate::remotek::scelta_terminale::pc(),

@@ -494,7 +494,7 @@ class _CmHeaderState extends State<_CmHeader>
                 if (client.type_() == ClientType.terminal)
                   FittedBox(
                     child: Text(
-                      translate("Terminal"),
+                      remotekEtichetta(client.remotek) ?? translate("Terminal"),
                       style: TextStyle(color: Colors.white70, fontSize: 12),
                     ),
                   ),

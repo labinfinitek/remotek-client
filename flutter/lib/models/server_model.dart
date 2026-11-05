@@ -833,7 +833,7 @@ class Client {
   bool fromSwitch = false;
   bool inVoiceCall = false;
   bool incomingVoiceCall = false;
-  // Remotek (ADR-0028, caso 2): src/remotek/scelta_terminale.rs, `Finestra`.
+  // Remotek (ADR-0028 caso 2, ADR-0033): src/remotek/scelta_terminale.rs, `Scheda`.
   dynamic remotek;
 
   RxInt unreadChatMessageCount = 0.obs;

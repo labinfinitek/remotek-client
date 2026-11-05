@@ -43,6 +43,10 @@ rilasciate non si riscrivono.
   e la riga di fine non si vedeva mai). Una richiesta rifiutata o abbandonata
   prima del clic, e una sessione chiusa dal cliente con "Disconnetti",
   spariscono come prima.
+- **Per l'agente AI**: quando l'agente esegue uno script, la scheda della
+  connessione nel connection manager dice "Esecuzione di comandi" invece di
+  "Terminale", da utente come da amministratore (ADR-0033). Lo dice solo il
+  lasciapassare verificato dell'API, mai quello che dichiara chi si collega.
 
 ## [remotek-1.4.9-7] - 2026-11-02
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

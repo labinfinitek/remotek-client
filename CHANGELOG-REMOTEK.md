@@ -15,6 +15,12 @@ insieme. Il CLI nuovo contro un PC del -7 o del -8 esce con 126 dopo il clic
 del cliente, senza eseguire niente; il CLI del -8 contro un PC nuovo ha il
 login rifiutato con exec. `terminal` non cambia.
 
+### Corretto
+- **Per l'agente AI**: fino al -8 l'help di `remotek-cli exec` e questo
+  changelog (al -7) dicevano che il cliente vede lo script "prima che
+  parta": lo vedeva solo dopo aver accettato, nel riquadro "Script". Ora lo
+  vede prima della scelta (sotto, "Sicurezza").
+
 ### Sicurezza
 - **Per l'agente AI**: con exec la finestra della richiesta mostra lo script
   intero sopra i pulsanti, prima che il cliente scelga, sia coi pulsanti di

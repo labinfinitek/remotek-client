@@ -44,6 +44,10 @@ pub(super) enum Evento {
     /// La connessione e' su; `true` se il PC dichiara trascrizione e vista
     /// del terminale (`dichiarazione::dichiara_il_terminale`, ADR-0034).
     Connesso(bool),
+    /// Con exec: il PC dichiara trascrizione e vista ma non mostra lo script
+    /// nella finestra della richiesta (`dichiarazione::
+    /// dichiara_lo_script_nella_scelta`, ADR-0035): il PC del -7 o del -8.
+    ScriptNonNellaScelta,
     /// Il PC ha aperto il terminale; il `message` del `TerminalOpened`.
     Aperto(String),
     Dati(Vec<u8>),
@@ -68,6 +72,11 @@ pub(super) struct Gestore {
     /// La `PeerInfo` del PC dichiara trascrizione e vista del terminale.
     /// `set_peer_info` la scrive, `on_connected`, che viene dopo, la legge.
     pc_dichiara: Arc<AtomicBool>,
+    /// La sessione e' di exec: `on_connected` guarda anche
+    /// `pc_script_nella_scelta`.
+    exec: bool,
+    /// La `PeerInfo` del PC dichiara lo script nella finestra della scelta.
+    pc_script_nella_scelta: Arc<AtomicBool>,
 }
 
 impl Gestore {
@@ -188,12 +197,20 @@ impl InvokeUiSession for Gestore {
     fn set_peer_info(&self, pi: &PeerInfo) {
         let dichiara = crate::remotek::dichiarazione::dichiara_il_terminale(&pi.platform_additions);
         self.pc_dichiara.store(dichiara, Ordering::SeqCst);
+        let script =
+            crate::remotek::dichiarazione::dichiara_lo_script_nella_scelta(&pi.platform_additions);
+        self.pc_script_nella_scelta.store(script, Ordering::SeqCst);
     }
     fn set_displays(&self, _: &Vec<DisplayInfo>) {}
     fn set_platform_additions(&self, _: &str) {}
     fn on_connected(&self, conn_type: ConnType) {
         if conn_type == ConnType::TERMINAL {
-            self.invia(Evento::Connesso(self.pc_dichiara.load(Ordering::SeqCst)));
+            let dichiara = self.pc_dichiara.load(Ordering::SeqCst);
+            if dichiara && self.exec && !self.pc_script_nella_scelta.load(Ordering::SeqCst) {
+                self.invia(Evento::ScriptNonNellaScelta);
+            } else {
+                self.invia(Evento::Connesso(dichiara));
+            }
         }
     }
     fn update_privacy_mode(&self) {}
@@ -345,7 +362,7 @@ pub(super) fn terminale(
     chiedi: Option<impl FnOnce() -> Result<String, String>>,
 ) -> Result<i32, String> {
     let amministratore = chiedi.is_some();
-    con_sessione(id, amministratore, chiedi, |session, rx, tx| {
+    con_sessione(id, amministratore, false, chiedi, |session, rx, tx| {
         attendi(session, rx, tx, Duration::from_secs(attesa), righe, colonne)
     })
 }
@@ -355,6 +372,7 @@ pub(super) fn terminale(
 fn con_sessione(
     id: &str,
     amministratore: bool,
+    exec: bool,
     chiedi: Option<impl FnOnce() -> Result<String, String>>,
     corpo: impl FnOnce(
         &Session<Gestore>,
@@ -371,6 +389,8 @@ fn con_sessione(
                     eventi: Some(tx.clone()),
                     amministratore,
                     pc_dichiara: Arc::new(AtomicBool::new(false)),
+                    exec,
+                    pc_script_nella_scelta: Arc::new(AtomicBool::new(false)),
                 },
             )
         },
@@ -475,6 +495,8 @@ fn attendi(
                 return Ok(rifiuta_il_pc_che_non_dichiara(&mut std::io::stderr()))
             }
             Evento::Connesso(true) => session.open_terminal(ID_TERMINALE, righe, colonne),
+            // Solo con exec (`Gestore::exec`): il terminale non la guarda.
+            Evento::ScriptNonNellaScelta => session.open_terminal(ID_TERMINALE, righe, colonne),
             Evento::Aperto(_) if scadenza.is_some() && !chiusura => {
                 scadenza = None;
                 leggi_stdin(session.clone(), tx.clone());
@@ -507,13 +529,26 @@ fn attendi(
 /// Cosa dice il CLI quando il PC non dichiara trascrizione e vista.
 const NON_DICHIARA: &str = "il PC non dichiara la trascrizione e la vista del terminale: aggiornare Remotek sul PC (remotek-1.4.9-7 o seguente)";
 
+/// Cosa dice il CLI con exec quando il PC non dichiara lo script nella scelta.
+const SCRIPT_NON_NELLA_SCELTA: &str = "il PC non mostra lo script al cliente prima della scelta: exec non parte, aggiornare Remotek sul PC (remotek-1.4.9-9 o seguente)";
+
 /// Il PC non dichiara trascrizione e vista del terminale (ADR-0034): il CLI
 /// non gli manda niente, lo scrive su `avvisi` (stderr) e restituisce
 /// `USCITA_NON_DICHIARA`. Non c'e' modo di forzare. La sessione la chiude
 /// `con_sessione`.
 fn rifiuta_il_pc_che_non_dichiara(avvisi: &mut impl Write) -> i32 {
+    rifiuta_con(avvisi, NON_DICHIARA)
+}
+
+/// Come [`rifiuta_il_pc_che_non_dichiara`], con exec, per il PC che non
+/// dichiara lo script nella scelta (ADR-0035): niente `OpenTerminal`.
+fn rifiuta_il_pc_senza_script_nella_scelta(avvisi: &mut impl Write) -> i32 {
+    rifiuta_con(avvisi, SCRIPT_NON_NELLA_SCELTA)
+}
+
+fn rifiuta_con(avvisi: &mut impl Write, perche: &str) -> i32 {
     // Se stderr non si scrive, il codice d'uscita dice comunque il motivo.
-    writeln!(avvisi, "remotek-cli: {NON_DICHIARA}")
+    writeln!(avvisi, "remotek-cli: {perche}")
         .and_then(|()| avvisi.flush())
         .ok();
     super::USCITA_NON_DICHIARA
@@ -616,15 +651,17 @@ pub(super) fn exec(
     script: Vec<u8>,
     chiedi: impl FnOnce() -> Result<String, String>,
 ) -> Result<i32, String> {
+    // Il lasciapassare e lo script nel login: il cliente vede lo script nella
+    // finestra della richiesta, prima di scegliere (ADR-0035).
     let chiedi = || {
         let l = chiedi()?;
         if lasciapassare_di_exec(&l) {
-            Ok(l)
+            Ok(crate::remotek::script_al_login::componi(&l, &script))
         } else {
             Err("l'API non conosce exec".to_owned())
         }
     };
-    con_sessione(id, amministratore, Some(chiedi), |session, rx, _| {
+    con_sessione(id, amministratore, true, Some(chiedi), |session, rx, _| {
         let (mut out, mut err) = (std::io::stdout().lock(), std::io::stderr().lock());
         attendi_exec(
             session,
@@ -681,6 +718,9 @@ fn attendi_exec(
                 return Err("connessione non cifrata da un capo all'altro: rifiutata".to_owned());
             }
             Evento::Connesso(false) => return Ok(rifiuta_il_pc_che_non_dichiara(err)),
+            Evento::ScriptNonNellaScelta => {
+                return Ok(rifiuta_il_pc_senza_script_nella_scelta(err))
+            }
             Evento::Connesso(true) => {
                 session.open_terminal(ID_TERMINALE, RIGHE_PREDEFINITE, COLONNE_PREDEFINITE)
             }
@@ -1375,5 +1415,56 @@ mod tests {
             Evento::Connesso(false)
         );
         assert_eq!(connesso(""), Evento::Connesso(false));
+    }
+
+    /// Con exec il PC del -7 e del -8 (le chiavi del terminale, non quella
+    /// dello script nella scelta): `ScriptNonNellaScelta`, 126, niente al PC.
+    /// Il terminale non la guarda e apre come prima.
+    #[test]
+    fn exec_non_apre_sul_pc_senza_script_nella_scelta() {
+        let vecchio = r#"{"remotek_trascrizione":true,"remotek_vista_cm":true}"#;
+        let nuovo = {
+            let mut m = serde_json::Map::new();
+            crate::remotek::dichiarazione::aggiungi(&mut m);
+            serde_json::to_string(&m).unwrap()
+        };
+        let connesso = |exec: bool, platform_additions: &str| {
+            let (tx, rx) = channel();
+            let gestore = Gestore {
+                eventi: Some(tx),
+                exec,
+                ..Default::default()
+            };
+            gestore.set_peer_info(&PeerInfo {
+                platform_additions: platform_additions.into(),
+                ..Default::default()
+            });
+            gestore.on_connected(ConnType::TERMINAL);
+            rx.try_recv().unwrap()
+        };
+        assert_eq!(connesso(true, vecchio), Evento::ScriptNonNellaScelta);
+        assert_eq!(connesso(true, &nuovo), Evento::Connesso(true));
+        assert_eq!(connesso(true, ""), Evento::Connesso(false));
+        assert_eq!(connesso(false, vecchio), Evento::Connesso(true));
+        let aperto = Evento::Aperto(crate::remotek::exec::APERTO.into());
+        let (esito, inviati, out, err) = ciclo_exec(vec![
+            Evento::ScriptNonNellaScelta,
+            aperto,
+            Evento::Chiuso(0),
+        ]);
+        assert_eq!(esito, Ok(super::super::USCITA_NON_DICHIARA));
+        assert!(
+            inviati.is_empty(),
+            "niente al PC: ne' OpenTerminal ne' lo script"
+        );
+        assert!(out.is_empty());
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            format!("remotek-cli: {SCRIPT_NON_NELLA_SCELTA}\n")
+        );
+        // Il terminale sul PC del -8 apre come prima.
+        let (esito, inviati) = ciclo(vec![connesso(false, vecchio), Evento::Chiuso(0)], 5);
+        assert_eq!(esito, Ok(0));
+        assert!(!nessuna_apertura(&inviati));
     }
 }

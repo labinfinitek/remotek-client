@@ -20,6 +20,10 @@ login rifiutato con exec. `terminal` non cambia.
   changelog (al -7) dicevano che il cliente vede lo script "prima che
   parta": lo vedeva solo dopo aver accettato, nel riquadro "Script". Ora lo
   vede prima della scelta (sotto, "Sicurezza").
+- Con la scheda di una sessione terminale o exec precedente ancora aperta,
+  accanto a una richiesta nuova il connection manager mostrava il pannello
+  vuoto "Terminale - Sola lettura": ora il pannello resta vuoto finche' la
+  richiesta non e' accettata e si riempie col primo output.
 
 ### Sicurezza
 - **Per l'agente AI**: con exec la finestra della richiesta mostra lo script

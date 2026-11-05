@@ -1073,7 +1073,7 @@ class _CmControlPanel extends StatelessWidget {
     final remotek = RemotekScelta.daJson(client.remotek);
     if (remotek != null &&
         Provider.of<ServerModel>(context).approveMode != 'password') {
-      return remotekSceltaCm(
+      return remotekConScript(client.remotek, remotekSceltaCm(
         scelta: remotek,
         pulsante: (
                 {required color,
@@ -1092,7 +1092,7 @@ class _CmControlPanel extends StatelessWidget {
             bind.cmSceltaAmministratore(connId: client.id),
         accetta: () => handleAccept(context),
         rifiuta: handleDisconnect,
-      ).marginOnly(bottom: buttonBottomMargin);
+      )).marginOnly(bottom: buttonBottomMargin);
     }
     final bool canElevate = bind.cmCanElevate();
     final model = Provider.of<ServerModel>(context);
@@ -1100,7 +1100,7 @@ class _CmControlPanel extends StatelessWidget {
         model.showElevation &&
         client.type_() == ClientType.remote;
     final showAccept = model.approveMode != 'password';
-    return Column(
+    return remotekConScript(client.remotek, Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
         Offstage(
@@ -1158,7 +1158,7 @@ class _CmControlPanel extends StatelessWidget {
           ],
         ),
       ],
-    ).marginOnly(bottom: buttonBottomMargin);
+    )).marginOnly(bottom: buttonBottomMargin);
   }
 
   Widget buildButton(BuildContext context,

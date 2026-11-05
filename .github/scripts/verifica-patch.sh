@@ -2615,5 +2615,48 @@ else
   done <<<"$esito_exec"
 fi
 
+# --- 33. Senza clic solo cio' che il custom.txt firmato elenca --------------
+# ADR-0033, passo 7: sul server non presidiato entra senza clic solo cio' che
+# la chiave `remotek-agente-capacita` del custom.txt firmato elenca, letta solo
+# da HARD_SETTINGS (lock non preso = malformata); senza la chiave solo il
+# terminale, con la chiave malformata niente. I tre punti di
+# src/server/connection.rs decidono tutti con `non_presidiato::senza_clic_per`;
+# le due costanti stanno ciascuna su una riga, come le legge lo strumento di
+# firma. Se un merge di upstream li cambia, qui si ferma.
+esito_elenco=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+C = "src/server/connection.rs"
+c = codice(C)
+PER = r"crate::remotek::non_presidiato::senza_clic_per\(\s*self\.lasciapassare\.as_ref\(\),?\s*\)"
+punti = re.findall(r"crate::remotek::non_presidiato::senza_clic\(\s*crate::remotek::non_presidiato::abilitato\(\),\s*%s,\s*self\.terminal,\s*crate::remotek::scelta_terminale::windows_installato\(\),?\s*\)" % PER, c)
+if len(punti) != 3 or c.count("non_presidiato::senza_clic_per(") != 3:
+    guai.append("%s: i tre senza_clic (rifiuto da prelogin, login, fill_terminal_user_token) non decidono tutti con non_presidiato::senza_clic_per(self.lasciapassare.as_ref())" % C)
+N = "src/remotek/non_presidiato.rs"
+righe = open(N, encoding="utf-8").read().splitlines()
+for riga in ('pub const CHIAVE_CAPACITA: &str = "remotek-agente-capacita";',
+             'pub const CAPACITA: [&str; 5] = ["terminale", "exec", "file", "tunnel", "schermo"];'):
+    if riga not in righe:
+        guai.append("%s: manca la riga `%s` (lo strumento di firma la legge cosi')" % (N, riga))
+n = codice(N)
+if not re.search(r"pub fn elenco\(\) -> Elenco \{\s*match HARD_SETTINGS\.read\(\) \{\s*Ok\(fisse\) => elenco_da\(&fisse\),\s*Err\(_\) => Elenco::Malformato,\s*\}\s*\}", n):
+    guai.append("%s: l'elenco non si legge piu' solo da HARD_SETTINGS, o il lock non preso non vale come malformato" % N)
+if not re.search(r"Elenco::Assente => v\.capacita == Capacita::Terminale,\s*Elenco::Nomi\(nomi\) => nomi\.contains\(nome\),\s*Elenco::Malformato => false,", n):
+    guai.append("%s: ammesso_senza_clic non da' piu' senza la chiave solo il terminale, con la chiave i nomi elencati, malformata niente" % N)
+if "super::non_presidiato::segnala_elenco_malformato();" not in codice("src/remotek/lasciapassare.rs"):
+    guai.append("src/remotek/lasciapassare.rs: verifica_login non segnala piu' la chiave remotek-agente-capacita malformata")
+print("\n".join(guai))
+PY
+) || esito_elenco="${esito_elenco:-}"$'\n'"controllo dell'elenco senza clic non eseguito: python3 terminato con errore"
+if [ -z "$esito_elenco" ]; then
+  ok "senza clic solo cio' che remotek-agente-capacita del custom.txt firmato elenca, nei tre punti di connection.rs; costanti su una riga (ADR-0033, passo 7)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_elenco"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]

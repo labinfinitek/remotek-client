@@ -11,6 +11,21 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-8] - 2026-11-05
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-8`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`, lo stesso del
+-6 e del -7). Nello stesso build c'e' `remotek-cli.exe` per Windows, attestato
+come l'exe e come lui non firmato; il CLI non cambia dal -7. Corregge i due
+difetti trovati dal collaudo del -7: sul server non presidiato il connection
+manager si riduceva a icona dopo 3 secondi, e con exec la riga di fine col
+codice non si vedeva mai. Porta l'exec senza clic sul server non presidiato,
+solo dove il `custom.txt` firmato lo elenca (ADR-0033, passo 7).
+**Per chi installa**: come per il -7. Si installa sopra la versione
+precedente. I `custom.txt` gia' consegnati restano validi e danno senza clic
+solo il terminale; per l'exec senza clic serve un `custom.txt` nuovo, firmato
+con `remotek-agente-capacita` dallo strumento dell'ombrello.
+
 ### Aggiunto
 - **Per l'agente AI**: sul server non presidiato (`remotek-agente` =
   `non-presidiato`) anche exec puo' entrare senza clic, se il `custom.txt`

@@ -36,6 +36,16 @@ login rifiutato con exec. `terminal` non cambia.
   parte, e il cliente e l'agente leggono perche' (ADR-0035). Vale anche
   senza clic sul server non presidiato.
 
+### Sicurezza
+- Il tunnel dell'agente si collega solo all'indirizzo `127.0.0.1` del PC
+  (mai un nome, mai `localhost`) e solo alle porte firmate nel lasciapassare
+  (da 1 a 8, per al massimo 8 ore); il PC lo chiude alla durata firmata e
+  scrive nel registro chi, verso quali porte, quanto e quanti byte, mai il
+  contenuto. Un login di port forward con un lasciapassare non valido o non
+  di tunnel e' rifiutato: non ricade mai sul port forward di upstream, che
+  resta quello di sempre solo senza lasciapassare. Il traffico del tunnel
+  resta cifrato con la chiave della sessione.
+
 ## [remotek-1.4.9-8] - 2026-11-05
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-8`

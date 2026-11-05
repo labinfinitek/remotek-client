@@ -312,7 +312,8 @@ pub struct Connection {
     file_transfer: Option<(String, bool)>,
     view_camera: bool,
     terminal: bool,
-    port_forward_socket: Option<Framed<TcpStream, BytesCodec>>,
+    // Remotek (ADR-0036): il socket di upstream o il tunnel dell'agente.
+    port_forward_socket: Option<crate::remotek::tunnel::Inoltro>,
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
@@ -1304,7 +1305,16 @@ impl Connection {
         rx_from_cm: &mut mpsc::UnboundedReceiver<Data>,
     ) -> ResultType<()> {
         let mut last_recv_time = Instant::now();
-        if let Some(mut forward) = self.port_forward_socket.take() {
+        // Remotek (ADR-0036): il tunnel dell'agente ha il suo ciclo, coi flussi.
+        let forward = match self.port_forward_socket.take() {
+            Some(crate::remotek::tunnel::Inoltro::Tunnel(tunnel)) => {
+                let (id, test_delay) = (self.inner.id, self.last_test_delay.is_some());
+                return crate::remotek::tunnel::servi_pc(&mut self.stream, tunnel, rx_from_cm, id, &self.lr.my_id, test_delay).await;
+            }
+            Some(crate::remotek::tunnel::Inoltro::Upstream(forward)) => Some(forward),
+            None => None,
+        };
+        if let Some(mut forward) = forward {
             log::info!("Running port forwarding loop");
             self.stream.set_raw();
             let mut hbbs_rx = crate::hbbs_http::sync::signal_receiver();
@@ -1611,12 +1621,17 @@ impl Connection {
         let Some(login_request::Union::PortForward(pf)) = self.lr.union.as_ref() else {
             return true;
         };
+        // Remotek (ADR-0036): il tunnel dell'agente si collega flusso per flusso.
+        if let Some(tunnel) = crate::remotek::tunnel::del_lasciapassare(self.lasciapassare.as_ref()) {
+            self.port_forward_socket = Some(crate::remotek::tunnel::Inoltro::Tunnel(tunnel));
+            return true;
+        }
         let mut pf = pf.clone();
         let (mut addr, is_rdp) = Self::normalize_port_forward_target(&mut pf);
         self.port_forward_address = addr.clone();
         match timeout(3000, TcpStream::connect(&addr)).await {
             Ok(Ok(sock)) => {
-                self.port_forward_socket = Some(Framed::new(sock, BytesCodec::new()));
+                self.port_forward_socket = Some(crate::remotek::tunnel::Inoltro::Upstream(Framed::new(sock, BytesCodec::new())));
                 true
             }
             Ok(Err(e)) => {
@@ -2752,7 +2767,8 @@ impl Connection {
                     // Remotek (ADR-0035): lo script di exec nel login; rifiutato qui,
                     // prima che il CM riceva `Data::Login` (try_start_cm, piu' sotto).
                     match crate::remotek::script_al_login::al_login(lasciapassare, |l| {
-                        crate::remotek::lasciapassare::verifica_login(l, &self.lr.my_id)
+                        // Remotek (ADR-0036): un lasciapassare di tunnel qui vale come nessuno.
+                        crate::remotek::lasciapassare::per_il_terminale(crate::remotek::lasciapassare::verifica_login(l, &self.lr.my_id), &self.lr.my_id)
                     }) {
                         Ok((valido, script)) => {
                             self.lasciapassare = valido;
@@ -2779,8 +2795,25 @@ impl Connection {
                         sleep(1.).await;
                         return false;
                     }
+                    // Remotek (ADR-0036): col lasciapassare il tunnel dell'agente, o il rifiuto;
+                    // senza, il port forward di upstream.
+                    match crate::remotek::tunnel::login_port_forward(lasciapassare, &pf.host, pf.port, |l| {
+                        crate::remotek::lasciapassare::verifica_login(l, &self.lr.my_id)
+                    }) {
+                        crate::remotek::tunnel::LoginPortForward::Tunnel(v) => {
+                            self.port_forward_address = crate::remotek::tunnel::descrizione(&v);
+                            self.lasciapassare = Some(v);
+                        }
+                        crate::remotek::tunnel::LoginPortForward::Rifiuto => {
+                            self.send_login_error(crate::remotek::tunnel::RIFIUTO_LOGIN).await;
+                            sleep(1.).await;
+                            return false;
+                        }
+                        crate::remotek::tunnel::LoginPortForward::Upstream => {
                     let (addr, _is_rdp) = Self::normalize_port_forward_target(&mut pf);
                     self.port_forward_address = addr;
+                        }
+                    }
                 }
                 _ => {
                     if !self.check_privacy_mode_on().await {

@@ -22,10 +22,21 @@ login rifiutato con exec. `terminal` non cambia.
   connessioni TCP dentro, un lasciapassare e un clic. Il CLI ascolta solo su
   `127.0.0.1`; il cliente vede chi chiede il tunnel, verso quali porte e per
   quanti minuti al massimo, e accetta o rifiuta; il connection manager resta
-  visibile finche' il tunnel c'e'. Senza clic sul server non presidiato non
-  ancora. Il PC lo dichiara (`remotek_tunnel`): un PC che non lo dichiara non
+  visibile finche' il tunnel c'e'. Il PC lo dichiara (`remotek_tunnel`): un PC che non lo dichiara non
   apre niente e il CLI esce con 126; un PC fino al -8 rifiuta dopo il clic
   del cliente (non sa collegarsi) e il CLI esce con 1.
+- **Per l'agente AI**: sul server non presidiato (`remotek-agente` =
+  `non-presidiato`) il tunnel entra senza clic se il `custom.txt` firmato
+  nomina `tunnel` in `remotek-agente-capacita` ed elenca nella chiave nuova
+  `remotek-agente-porte` (per esempio `1433,8080`) tutte le porte che il
+  tunnel chiede, col lasciapassare da utente o da amministratore. Una porta
+  fuori dall'elenco, o una delle due chiavi assente, e il tunnel vuole il
+  clic come prima; la chiave delle porte malformata (vuota, porta 0 o oltre
+  65535, ripetuta, spazi, zeri davanti) lascia il clic e scrive una riga
+  ERROR nel registro del servizio. Terminale ed exec non cambiano. Nulla
+  cambia per i `custom.txt` gia' consegnati: senza la chiave delle porte il
+  tunnel vuole sempre il clic; per il tunnel senza clic serve un `custom.txt`
+  nuovo, firmato.
 
 ### Corretto
 - **Per l'agente AI**: fino al -8 l'help di `remotek-cli exec` e questo

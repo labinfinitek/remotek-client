@@ -387,6 +387,7 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
                 controllante
             );
             super::non_presidiato::segnala_elenco_malformato();
+            super::non_presidiato::segnala_porte_malformate();
             Some(v)
         }
         Err(e) => {
@@ -744,7 +745,7 @@ mod tests {
     #[test]
     fn utente_mai_amministratore_ed_exec_senza_elenco_mai_senza_clic() {
         use crate::remotek::{
-            non_presidiato::{ammesso_senza_clic, senza_clic, Elenco},
+            non_presidiato::{ammesso_senza_clic, senza_clic, Elenco, Porte},
             scelta_terminale,
         };
         let lasciapassare = |modo, capacita| {
@@ -779,7 +780,7 @@ mod tests {
                 ),
                 senza_clic(
                     true,
-                    ammesso_senza_clic(l.as_ref(), &Elenco::Assente),
+                    ammesso_senza_clic(l.as_ref(), &Elenco::Assente, &Porte::Assente),
                     true,
                     true,
                 ),

@@ -47,7 +47,9 @@ const USO: &str = "uso:
                                chiede all'API un lasciapassare di tunnel da utente per quelle
                                porte del PC (durata da 60 a 28800 secondi, 3600 senza
                                --durata) dopo aver preso le porte locali; il cliente deve
-                               accettare (attesa di default 120 s); una riga su stderr per
+                               accettare (attesa di default 120 s), tranne sul server non
+                               presidiato che lascia entrare il tunnel verso quelle porte
+                               senza clic; una riga su stderr per
                                ogni porta in ascolto e alla chiusura (motivo, flussi, byte);
                                resta in primo piano fino a SIGINT o SIGTERM (Ctrl+C su
                                Windows), alla chiusura del PC o alla fine della durata, e

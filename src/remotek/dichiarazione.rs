@@ -12,7 +12,9 @@
 //! `remotek-cli` non apre ne' terminale ne' exec su un PC che non le dichiara
 //! tutte e due (src/remotek/cli/terminale.rs). Per exec vuole anche
 //! [`CHIAVE_SCRIPT_NELLA_SCELTA`] (ADR-0035): il PC mostra lo script al
-//! cliente nella finestra della richiesta, prima della scelta.
+//! cliente nella finestra della richiesta, prima della scelta. Non apre il
+//! tunnel su un PC che non dichiara [`CHIAVE_TUNNEL`] (ADR-0036,
+//! src/remotek/cli/tunnel.rs).
 
 use serde_json::{Map, Value};
 
@@ -25,17 +27,28 @@ pub const CHIAVE_VISTA_CM: &str = "remotek_vista_cm";
 /// della scelta del cliente, ed esegue solo quello (ADR-0035).
 pub const CHIAVE_SCRIPT_NELLA_SCELTA: &str = "remotek_script_nella_scelta";
 
+/// Il PC serve il tunnel dell'agente coi flussi (src/remotek/tunnel.rs).
+pub const CHIAVE_TUNNEL: &str = "remotek_tunnel";
+
 /// Le chiavi che servono per aprire il terminale.
 const CHIAVI_DEL_TERMINALE: [&str; 2] = [CHIAVE_TRASCRIZIONE, CHIAVE_VISTA_CM];
 
 /// Aggiunge a `platform_additions` (src/server/connection.rs) le chiavi del
-/// terminale e quella dello script nella scelta, a `true`. Le altre chiavi
-/// restano come sono.
+/// terminale, quella dello script nella scelta e quella del tunnel, a `true`.
+/// Le altre chiavi restano come sono.
 pub fn aggiungi(m: &mut Map<String, Value>) {
     for chiave in CHIAVI_DEL_TERMINALE {
         m.insert(chiave.to_owned(), Value::Bool(true));
     }
     m.insert(CHIAVE_SCRIPT_NELLA_SCELTA.to_owned(), Value::Bool(true));
+    m.insert(CHIAVE_TUNNEL.to_owned(), Value::Bool(true));
+}
+
+/// Vera solo se `platform_additions` e' una mappa JSON con [`CHIAVE_TUNNEL`]
+/// al booleano `true`.
+pub fn dichiara_il_tunnel(platform_additions: &str) -> bool {
+    serde_json::from_str::<Map<String, Value>>(platform_additions)
+        .is_ok_and(|m| m.get(CHIAVE_TUNNEL) == Some(&Value::Bool(true)))
 }
 
 /// Vera solo se `platform_additions` e' una mappa JSON con tutte e due le
@@ -94,7 +107,7 @@ mod tests {
         platform_additions.insert("is_installed".into(), json!(true));
         platform_additions.insert("support_view_camera".into(), json!(true));
         aggiungi(&mut platform_additions);
-        assert_eq!(platform_additions.len(), 5);
+        assert_eq!(platform_additions.len(), 6);
         assert_eq!(platform_additions[CHIAVE_SCRIPT_NELLA_SCELTA], json!(true));
         assert_eq!(platform_additions["is_installed"], json!(true));
         assert_eq!(platform_additions["support_view_camera"], json!(true));
@@ -102,6 +115,19 @@ mod tests {
         let testo = serde_json::to_string(&platform_additions).unwrap_or("".into());
         assert!(dichiara_il_terminale(&testo));
         assert!(dichiara_lo_script_nella_scelta(&testo));
+        assert!(dichiara_il_tunnel(&testo));
+    }
+
+    #[test]
+    fn il_tunnel_solo_con_la_sua_chiave_a_true() {
+        assert!(dichiara_il_tunnel(r#"{"remotek_tunnel":true}"#));
+        // Un PC del -8 dichiara il terminale ma non il tunnel.
+        assert!(!dichiara_il_tunnel(
+            r#"{"remotek_trascrizione":true,"remotek_vista_cm":true}"#
+        ));
+        assert!(!dichiara_il_tunnel(r#"{"remotek_tunnel":"true"}"#));
+        assert!(!dichiara_il_tunnel(r#"{"remotek_tunnel":false}"#));
+        assert!(!dichiara_il_tunnel(""));
     }
 
     #[test]

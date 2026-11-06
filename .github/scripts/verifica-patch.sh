@@ -2125,7 +2125,8 @@ else:
     corpo = corpi[0]
     if not re.search(r"let is_terminal = lc\.read\(\)\.unwrap\(\)\.conn_type\.eq\(&ConnType::TERMINAL\);", corpo):
         guai.append("%s: handle_hash non distingue piu' il terminale (is_terminal)" % F)
-    if not re.search(r"let \(os_username, os_password\) = if is_terminal \{\s*\(\s*\"\"\.to_owned\(\),\s*lc\.read\(\)\.unwrap\(\)\.remotek_lasciapassare\.clone\(\)\s*\)\s*\} else", corpo):
+    # ADR-0036: lo stesso per il tunnel di remotek-cli (tunnel::login_del_tunnel).
+    if not re.search(r"let lasciapassare_nel_login = is_terminal \|\| crate::remotek::tunnel::login_del_tunnel\(&lc\.read\(\)\.unwrap\(\)\);\s*let \(os_username, os_password\) = if lasciapassare_nel_login \{\s*\(\s*\"\"\.to_owned\(\),\s*lc\.read\(\)\.unwrap\(\)\.remotek_lasciapassare\.clone\(\)\s*\)\s*\} else", corpo):
         guai.append("%s: handle_hash, per il terminale, non manda piu' os_login.username vuoto e il solo lasciapassare" % F)
 print("\n".join(guai))
 PY
@@ -2546,7 +2547,8 @@ if not re.search(r"lasciapassare::audit\(\s*&mut audit,\s*self\.lasciapassare\.a
     guai.append("%s: l'audit non manda piu' il nonce di ogni lasciapassare valido" % C)
 L = "src/remotek/lasciapassare.rs"
 l = codice(L)
-if not re.search(r"pub fn amministratore\(valido: Option<&Valido>\) -> bool \{\s*valido\.is_some_and\(\|v\| v\.modo == Modo::Amministratore\)\s*\}", l):
+# ADR-0036: il tunnel non da' mai l'amministratore.
+if not re.search(r"pub fn amministratore\(valido: Option<&Valido>\) -> bool \{\s*valido\.is_some_and\(\|v\| v\.modo == Modo::Amministratore && !tunnel\(Some\(v\)\)\)\s*\}", l):
     guai.append("%s: amministratore non guarda piu' solo il modo amministratore" % L)
 N = "src/remotek/non_presidiato.rs"
 if not re.search(r"pub fn ammesso_senza_clic\(valido: Option<&Valido>, elenco: &Elenco\) -> bool \{\s*let Some\(v\) = valido\.filter\(\|v\| v\.modo == Modo::Amministratore\) else \{\s*return false;\s*\};", codice(N)):
@@ -2679,7 +2681,8 @@ import re
 def codice(f):
     return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
 guai = []
-TERM = r"!(?:_clients|model\.clients)\.any\(\(c\) => c\.type_\(\) == ClientType\.terminal\)"
+# ADR-0036: anche col tunnel dell'agente (remotekTieneIlCm).
+TERM = r"!(?:_clients|model\.clients)\.any\(\(c\) => remotekTieneIlCm\(c\.type_\(\) == ClientType\.terminal, c\.remotek\)\)"
 SM = "flutter/lib/models/server_model.dart"
 sm = codice(SM)
 if not re.search(r"cmHiddenTimer = Timer\(const Duration\(seconds: 3\), \(\) \{\s*if \(!hideCm && " + TERM + r"\) windowManager\.minimize\(\);", sm):
@@ -2764,6 +2767,80 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_script"
+fi
+
+# --- 36. Il tunnel dell'agente: solo 127.0.0.1, solo porte firmate ----------
+# ADR-0036: col lasciapassare valido di tunnel il PC non usa il port forward
+# di upstream (`connect_port_forward_if_needed` prende il tunnel prima di
+# `TcpStream::connect(&addr)`, `try_port_forward_loop` lo passa a
+# `tunnel::servi_pc`); un login di port forward con un lasciapassare non
+# valido o non di tunnel e' rifiutato, mai ricade su upstream; il PC si
+# collega solo a 127.0.0.1 e alle porte del lasciapassare
+# (`tunnel::indirizzo_ammesso`, unico produttore degli indirizzi di
+# `Azione::Collega`; l'indirizzo dell'apertura, per ADR-0037, oggi vale solo
+# 127.0.0.1); un tunnel nel login del terminale non vale; handle_hash
+# manda il lasciapassare solo per il port forward di remotek-cli e il PC lo
+# toglie solo dal login del tunnel (host vuoto e porta 0), mai dal port
+# forward dei tecnici con la "Password del SO"; il PC
+# dichiara `remotek_tunnel`; il CM mostra la richiesta sopra i pulsanti.
+esito_tunnel=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+C = "src/server/connection.rs"
+c = codice(C)
+if not re.search(r"port_forward_socket: Option<crate::remotek::tunnel::Inoltro>,", c):
+    guai.append("%s: port_forward_socket non e' piu' tunnel::Inoltro" % C)
+ramo = re.search(r"Some\(login_request::Union::PortForward\(mut pf\)\) => \{(.*?)\n                \}\n", c, re.S)
+if not ramo or not re.search(r"match crate::remotek::tunnel::login_port_forward\(lasciapassare, &pf\.host, pf\.port, \|l\| \{\s*crate::remotek::lasciapassare::verifica_login\(l, &self\.lr\.my_id\)\s*\}\) \{\s*crate::remotek::tunnel::LoginPortForward::Tunnel\(v\) => \{\s*self\.port_forward_address = crate::remotek::tunnel::descrizione\(&v\);\s*self\.lasciapassare = Some\(v\);\s*\}\s*crate::remotek::tunnel::LoginPortForward::Rifiuto => \{\s*self\.send_login_error\(crate::remotek::tunnel::RIFIUTO_LOGIN\)\.await;\s*sleep\(1\.\)\.await;\s*return false;\s*\}\s*crate::remotek::tunnel::LoginPortForward::Upstream => \{\s*let \(addr, _is_rdp\) = Self::normalize_port_forward_target\(&mut pf\);", ramo.group(1)):
+    guai.append("%s: il login di port forward non passa da tunnel::login_port_forward (tunnel, rifiuto, upstream)" % C)
+collega = re.search(r"async fn connect_port_forward_if_needed\(&mut self\) -> bool \{(.*?)\n    \}\n", c, re.S)
+if not collega or not re.search(r"if let Some\(tunnel\) = crate::remotek::tunnel::del_lasciapassare\(self\.lasciapassare\.as_ref\(\)\) \{\s*self\.port_forward_socket = Some\(crate::remotek::tunnel::Inoltro::Tunnel\(tunnel\)\);\s*return true;\s*\}\s*let mut pf = pf\.clone\(\);", collega.group(1)):
+    guai.append("%s: connect_port_forward_if_needed non prende il tunnel prima del collegamento di upstream" % C)
+if len(re.findall(r"TcpStream::connect\(", c)) != 1:
+    guai.append("%s: TcpStream::connect deve restare solo quello di upstream in connect_port_forward_if_needed" % C)
+if not re.search(r"let forward = match self\.port_forward_socket\.take\(\) \{\s*Some\(crate::remotek::tunnel::Inoltro::Tunnel\(tunnel\)\) => \{\s*let \(id, test_delay\) = \(self\.inner\.id, self\.last_test_delay\.is_some\(\)\);\s*return crate::remotek::tunnel::servi_pc\(&mut self\.stream, tunnel, rx_from_cm, id, &self\.lr\.my_id, test_delay\)\.await;", c):
+    guai.append("%s: try_port_forward_loop non passa il tunnel a tunnel::servi_pc" % C)
+if not re.search(r"script_al_login::al_login\(lasciapassare, \|l\| \{\s*crate::remotek::lasciapassare::per_il_terminale\(crate::remotek::lasciapassare::verifica_login\(l, &self\.lr\.my_id\), &self\.lr\.my_id\)\s*\}\)", c):
+    guai.append("%s: il login del terminale accetta un lasciapassare di tunnel (per_il_terminale)" % C)
+T = "src/remotek/tunnel.rs"
+# Senza i test, che si collegano anche altrove.
+t = codice(T).split("#[cfg(test)]")[0]
+# ADR-0037: l'apertura porta l'indirizzo, ma oggi vale solo 127.0.0.1.
+if not re.search(r"pub fn indirizzo_ammesso\(\s*indirizzo: Ipv4Addr,\s*porta: u16,\s*ammesse: &\[u16\],\s*\) -> Result<SocketAddr, ErroreFlusso> \{\s*if indirizzo != Ipv4Addr::LOCALHOST \{\s*return Err\(ErroreFlusso::IndirizzoNonAmmesso\);\s*\}\s*if porta == 0 \|\| !ammesse\.contains\(&porta\) \{\s*return Err\(ErroreFlusso::PortaNonAmmessa\);\s*\}\s*Ok\(SocketAddr::from\(\(Ipv4Addr::LOCALHOST, porta\)\)\)\s*\}", t):
+    guai.append("%s: indirizzo_ammesso non da' solo 127.0.0.1 e le porte del lasciapassare" % T)
+if len(re.findall(r"Azione::Collega \{ flusso, indirizzo \}", t)) != 2 or not re.search(r"match indirizzo_ammesso\(indirizzo, porta, porte\) \{\s*Ok\(indirizzo\) => \{\s*self\.flussi\.insert\(flusso, Conto::nuovo\(\)\);\s*Ok\(Azione::Collega \{ flusso, indirizzo \}\)", t):
+    guai.append("%s: Azione::Collega nasce fuori da indirizzo_ammesso" % T)
+if len(re.findall(r"TcpStream::connect\(", t)) != 1 or "TcpStream::connect(indirizzo)" not in t:
+    guai.append("%s: il PC si collega con altro che l'indirizzo di Azione::Collega" % T)
+if not re.search(r"pub fn forma_del_tunnel\(host: &str, porta: i32\) -> bool \{\s*host\.is_empty\(\) && porta == 0\s*\}", t):
+    guai.append("%s: forma_del_tunnel non e' piu' host vuoto e porta 0" % T)
+L = "src/remotek/lasciapassare.rs"
+if not re.search(r"Some\(login_request::Union::PortForward\(pf\)\)\s*if super::tunnel::forma_del_tunnel\(&pf\.host, pf\.port\) => \{\}", codice(L)):
+    guai.append("%s: togli prende la password anche dal port forward dei tecnici (host e porta veri)" % L)
+if "set_raw" in t:
+    guai.append("%s: il tunnel chiama set_raw: perderebbe cifratura e confini dei messaggi" % T)
+if not re.search(r"pub fn login_del_tunnel\(lc: &crate::client::LoginConfigHandler\) -> bool \{\s*lc\.conn_type == hbb_common::rendezvous_proto::ConnType::PORT_FORWARD\s*&& !lc\.remotek_lasciapassare\.is_empty\(\)", t):
+    guai.append("%s: login_del_tunnel non vale solo per il port forward col lasciapassare di remotek-cli" % T)
+D = "src/remotek/dichiarazione.rs"
+if not re.search(r'pub const CHIAVE_TUNNEL: &str = "remotek_tunnel";', codice(D)) or "m.insert(CHIAVE_TUNNEL.to_owned(), Value::Bool(true));" not in codice(D):
+    guai.append("%s: il PC non dichiara remotek_tunnel" % D)
+SP = "flutter/lib/desktop/pages/server_page.dart"
+sp = codice(SP)
+if not re.search(r"final showAccept = model\.approveMode != 'password';\s*return remotekConScript\(client\.remotek, Column\(\s*mainAxisAlignment: MainAxisAlignment\.end,\s*children: \[\s*\.\.\.remotekRichiestaTunnel\(client\.remotek\),", sp):
+    guai.append("%s: buildUnAuthorized non mostra la richiesta del tunnel sopra i pulsanti" % SP)
+if "if (client.type_() == ClientType.terminal || remotekTunnel(client.remotek) != null)" not in sp:
+    guai.append("%s: la scheda del cliente non dice \"Tunnel\"" % SP)
+print("\n".join(guai))
+PY
+) || esito_tunnel="${esito_tunnel:-}"$'\n'"controllo del tunnel non eseguito: python3 terminato con errore"
+if [ -z "$esito_tunnel" ]; then
+  ok "tunnel dell'agente: solo 127.0.0.1 e porte firmate, nessun ritorno al port forward di upstream col lasciapassare sbagliato, dichiarato, richiesta nel CM (ADR-0036)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_tunnel"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

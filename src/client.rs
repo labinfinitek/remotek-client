@@ -3607,7 +3607,9 @@ pub async fn handle_hash(
     };
 
     let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
-    let (os_username, os_password) = if is_terminal {
+    // Remotek (ADR-0036): anche il tunnel di remotek-cli, un port forward col lasciapassare.
+    let lasciapassare_nel_login = is_terminal || crate::remotek::tunnel::login_del_tunnel(&lc.read().unwrap());
+    let (os_username, os_password) = if lasciapassare_nel_login {
         // Remotek (ADR-0028): per il terminale solo il lasciapassare di remotek-cli.
         ("".to_owned(), lc.read().unwrap().remotek_lasciapassare.clone())
     } else {

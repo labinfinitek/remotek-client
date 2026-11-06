@@ -119,12 +119,26 @@ pub struct Agente {
     /// cliente lo vede nella finestra della richiesta prima di scegliere.
     #[serde(default)]
     pub script: Option<Vec<u8>>,
+    /// Il tunnel dell'agente (ADR-0036): la richiesta sopra i pulsanti.
+    #[serde(default)]
+    pub tunnel: Option<RichiestaTunnel>,
 }
 
-/// L'[`Agente`] per il CM: con un lasciapassare valido di exec, o con la
-/// [`richiesta`] dell'amministratore; altrimenti niente, e il CM resta
-/// quello di upstream. `script`: lo script del login, che va al CM solo con
-/// exec.
+/// Chi chiede il tunnel, verso quali porte e per quanto, dal lasciapassare
+/// verificato.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RichiestaTunnel {
+    pub agente: String,
+    pub tecnico: String,
+    pub porte: Vec<u16>,
+    /// Secondi.
+    pub durata: u32,
+}
+
+/// L'[`Agente`] per il CM: con un lasciapassare valido di exec o di tunnel,
+/// o con la [`richiesta`] dell'amministratore; altrimenti niente, e il CM
+/// resta quello di upstream. `script`: lo script del login, che va al CM solo
+/// con exec.
 pub fn agente(
     valido: Option<&Valido>,
     terminale: bool,
@@ -133,10 +147,20 @@ pub fn agente(
 ) -> Option<Agente> {
     let exec = terminale && lasciapassare::exec(valido);
     let amministratore = richiesta(valido, terminale, pc);
-    (exec || amministratore.is_some()).then(|| Agente {
+    let tunnel = valido.and_then(|v| match &v.capacita {
+        lasciapassare::Capacita::Tunnel { porte, durata } if !terminale => Some(RichiestaTunnel {
+            agente: v.agente.clone(),
+            tecnico: v.tecnico.clone(),
+            porte: porte.clone(),
+            durata: *durata,
+        }),
+        _ => None,
+    });
+    (exec || amministratore.is_some() || tunnel.is_some()).then(|| Agente {
         exec,
         amministratore,
         script: script.filter(|_| exec).map(<[u8]>::to_vec),
+        tunnel,
     })
 }
 
@@ -340,6 +364,8 @@ pub struct Scheda {
     pub script: Option<String>,
     /// Con uno script vuoto, la frase che lo dice al posto del testo.
     pub script_vuoto: Option<String>,
+    /// Il testo della richiesta del tunnel, sopra "Accetta" e "Annulla".
+    pub tunnel: Option<String>,
 }
 
 /// Lo script come lo mostra il riquadro "Script" della vista: stesso codice,
@@ -353,13 +379,18 @@ fn script_visibile(script: &[u8]) -> String {
 }
 
 pub fn scheda(agente: Agente, lingua: Lingua) -> Scheda {
-    let etichetta = agente.exec.then(|| {
-        match lingua {
-            Lingua::Italiano => "Esecuzione di comandi",
-            Lingua::Inglese => "Run commands",
-        }
-        .to_owned()
-    });
+    let etichetta = if agente.tunnel.is_some() {
+        // "Tunnel" nelle due lingue.
+        Some("Tunnel".to_owned())
+    } else {
+        agente.exec.then(|| {
+            match lingua {
+                Lingua::Italiano => "Esecuzione di comandi",
+                Lingua::Inglese => "Run commands",
+            }
+            .to_owned()
+        })
+    };
     let script_vuoto = agente.script.as_ref().filter(|s| s.is_empty()).map(|_| {
         match lingua {
             Lingua::Italiano => "(script vuoto)",
@@ -372,6 +403,41 @@ pub fn scheda(agente: Agente, lingua: Lingua) -> Scheda {
         finestra: agente.amministratore.map(|r| finestra(r, lingua)),
         script: agente.script.as_deref().map(script_visibile),
         script_vuoto,
+        tunnel: agente.tunnel.map(|t| testo_tunnel(&t, lingua)),
+    }
+}
+
+/// "<agente>, agente AI di <tecnico>, chiede un tunnel verso le porte 1433,
+/// 8080 di questo PC, per al massimo 60 minuti". I minuti arrotondano in su:
+/// il tunnel non dura mai piu' di quanto dice.
+pub fn testo_tunnel(t: &RichiestaTunnel, lingua: Lingua) -> String {
+    let porte = t
+        .porte
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let minuti = (t.durata + 59) / 60;
+    let una_porta = t.porte.len() == 1;
+    match lingua {
+        Lingua::Italiano => format!(
+            "{}, agente AI di {}, chiede un tunnel verso {} {} di questo PC, per al massimo {} {}",
+            t.agente,
+            t.tecnico,
+            if una_porta { "la porta" } else { "le porte" },
+            porte,
+            minuti,
+            if minuti == 1 { "minuto" } else { "minuti" }
+        ),
+        Lingua::Inglese => format!(
+            "{}, AI agent of {}, asks for a tunnel to {} {} of this PC, for at most {} {}",
+            t.agente,
+            t.tecnico,
+            if una_porta { "port" } else { "ports" },
+            porte,
+            minuti,
+            if minuti == 1 { "minute" } else { "minutes" }
+        ),
     }
 }
 
@@ -643,6 +709,7 @@ mod tests {
                 "finestra": null,
                 "script": "Get-Date\r\n",
                 "script_vuoto": null,
+                "tunnel": null,
             })
         );
     }
@@ -686,6 +753,58 @@ mod tests {
         // Un `Agente` senza `script` (servizio vecchio): nessun riquadro.
         let vecchio: Agente = serde_json::from_value(json!({"exec": true})).unwrap();
         assert_eq!(scheda(vecchio, Lingua::Italiano).script, None);
+    }
+
+    fn tunnel(porte: Vec<u16>, durata: u32) -> Valido {
+        Valido {
+            modo: lasciapassare::Modo::Utente,
+            capacita: lasciapassare::Capacita::Tunnel { porte, durata },
+            ..valido()
+        }
+    }
+
+    #[test]
+    fn il_tunnel_nelle_due_lingue_con_porte_e_minuti() {
+        let a = agente(Some(&tunnel(vec![1433, 8080], 3600)), false, Pc::Installato, None).unwrap();
+        assert!(!a.exec && a.amministratore.is_none());
+        let it = scheda(a.clone(), Lingua::Italiano);
+        assert_eq!(
+            it.tunnel.as_deref(),
+            Some("agente-mario, agente AI di mario, chiede un tunnel verso le porte 1433, 8080 di questo PC, per al massimo 60 minuti")
+        );
+        assert_eq!(it.etichetta.as_deref(), Some("Tunnel"));
+        assert_eq!(it.finestra, None);
+        let en = scheda(a, Lingua::Inglese);
+        assert_eq!(
+            en.tunnel.as_deref(),
+            Some("agente-mario, AI agent of mario, asks for a tunnel to ports 1433, 8080 of this PC, for at most 60 minutes")
+        );
+        assert_eq!(en.etichetta.as_deref(), Some("Tunnel"));
+        // Una porta; i minuti arrotondano in su.
+        let a = agente(Some(&tunnel(vec![1433], 90)), false, Pc::Installato, None).unwrap();
+        assert_eq!(
+            scheda(a.clone(), Lingua::Italiano).tunnel.as_deref(),
+            Some("agente-mario, agente AI di mario, chiede un tunnel verso la porta 1433 di questo PC, per al massimo 2 minuti")
+        );
+        assert_eq!(
+            scheda(a, Lingua::Inglese).tunnel.as_deref(),
+            Some("agente-mario, AI agent of mario, asks for a tunnel to port 1433 of this PC, for at most 2 minutes")
+        );
+        let a = agente(Some(&tunnel(vec![1433], 60)), false, Pc::Altro, None).unwrap();
+        assert!(scheda(a, Lingua::Italiano).tunnel.unwrap().ends_with("per al massimo 1 minuto"));
+        // Il tunnel da amministratore non apre la finestra della scelta, e
+        // nel campo per il CM c'e' anche il tunnel, che arriva dal servizio.
+        let amm = Valido {
+            modo: lasciapassare::Modo::Amministratore,
+            ..tunnel(vec![1433], 600)
+        };
+        let a = agente(Some(&amm), false, Pc::Installato, None).unwrap();
+        assert!(a.amministratore.is_none());
+        let ipc: Agente = serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+        assert_eq!(ipc, a);
+        // Il campo di un servizio di prima, senza tunnel, si legge ancora.
+        let vecchio: Agente = serde_json::from_value(json!({"exec": true})).unwrap();
+        assert_eq!(vecchio.tunnel, None);
     }
 
     #[test]

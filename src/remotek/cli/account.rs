@@ -325,6 +325,17 @@ fn corpo_lasciapassare_exec(id: &str, amministratore: bool) -> Value {
     corpo
 }
 
+/// Tunnel (ADR-0036): `capacita` = `tunnel`, sempre da utente (il tunnel non
+/// ha shell ne' identita' sul PC), le porte del PC e, se data, la durata
+/// (senza, l'API da' 3600 secondi).
+fn corpo_lasciapassare_tunnel(id: &str, porte: &[u16], durata: Option<u32>) -> Value {
+    let mut corpo = json!({ "id": id, "capacita": "tunnel", "modo": "utente", "porte": porte });
+    if let Some(d) = durata {
+        corpo["durata"] = json!(d);
+    }
+    corpo
+}
+
 /// La risposta di `POST /api/agente/lasciapassare`: la stringa, o il motivo
 /// che l'API scrive in `error` (PC fuori dalla rubrica, funzione spenta, ...).
 /// Un 401 e' l'accesso scaduto o revocato, come in [`verifica_accesso`].
@@ -350,6 +361,15 @@ pub(super) async fn lasciapassare(id: &str) -> Result<String, String> {
 /// Il lasciapassare di exec per il PC `id`, col modo di `amministratore`.
 pub(super) async fn lasciapassare_exec(id: &str, amministratore: bool) -> Result<String, String> {
     lasciapassare_su(&api()?, corpo_lasciapassare_exec(id, amministratore)).await
+}
+
+/// Il lasciapassare di tunnel per le porte `porte` del PC `id`.
+pub(super) async fn lasciapassare_tunnel(
+    id: &str,
+    porte: &[u16],
+    durata: Option<u32>,
+) -> Result<String, String> {
+    lasciapassare_su(&api()?, corpo_lasciapassare_tunnel(id, porte, durata)).await
 }
 
 async fn lasciapassare_su(api: &str, corpo: Value) -> Result<String, String> {
@@ -519,6 +539,14 @@ mod tests {
         assert_eq!(
             corpo_lasciapassare_exec("123456789", true),
             json!({"id": "123456789", "capacita": "exec"})
+        );
+        assert_eq!(
+            corpo_lasciapassare_tunnel("123456789", &[1433, 8080], Some(600)),
+            json!({"id": "123456789", "capacita": "tunnel", "modo": "utente", "porte": [1433, 8080], "durata": 600})
+        );
+        assert_eq!(
+            corpo_lasciapassare_tunnel("123456789", &[1433], None),
+            json!({"id": "123456789", "capacita": "tunnel", "modo": "utente", "porte": [1433]})
         );
         assert_eq!(
             esito_lasciapassare(&risposta(200, r#"{"lasciapassare":"pay.firma"}"#)),

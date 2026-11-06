@@ -4,6 +4,7 @@
 
 mod account;
 mod terminale;
+mod tunnel;
 
 use std::io::Write;
 
@@ -39,6 +40,25 @@ const USO: &str = "uso:
                                lo script va al PC col login: il cliente lo vede intero
                                nella finestra della richiesta, prima di accettare, e il PC
                                esegue solo quello: niente segreti nel testo dello script
+  remotek-cli tunnel <ID> <locale>:<porta> [<locale>:<porta> ...] [--durata <secondi>] [--attesa <secondi>]
+                               ogni connessione TCP a 127.0.0.1:<locale> di questa macchina va a
+                               127.0.0.1:<porta> del PC, tutte in una sola connessione (ADR-0036);
+                               da 1 a 8 porte da 1 a 65535, locali diverse e porte diverse;
+                               chiede all'API un lasciapassare di tunnel da utente per quelle
+                               porte del PC (durata da 60 a 28800 secondi, 3600 senza
+                               --durata) dopo aver preso le porte locali; il cliente deve
+                               accettare (attesa di default 120 s); una riga su stderr per
+                               ogni porta in ascolto e alla chiusura (motivo, flussi, byte);
+                               resta in primo piano fino a SIGINT o SIGTERM (Ctrl+C su
+                               Windows), alla chiusura del PC o alla fine della durata, e
+                               non si ricollega; esce con 0 se l'ha chiuso l'agente o e'
+                               finita la durata, 1 per errori di rete o dell'API e quando
+                               il PC chiude per altri motivi (il cliente, un'ora senza
+                               traffico), 2 per argomenti sbagliati, 126 se il PC non
+                               dichiara il tunnel (va aggiornato; lo dice anche su stderr);
+                               un PC fino al remotek-1.4.9-8 non sa del tunnel: dopo il clic
+                               del cliente rifiuta il login e il CLI esce con 1, col
+                               messaggio del PC
 il CLI ha una cartella di configurazione sua (account, ID e chiavi), separata da quella
 del client grafico dello stesso utente;
 su Windows stdin, stdout e, con exec, stderr vanno rediretti (pipe o file): su una
@@ -76,17 +96,55 @@ enum Comando {
         attesa: u64,
         amministratore: bool,
     },
+    Tunnel {
+        id: String,
+        porte: Vec<tunnel::Porta>,
+        durata: Option<u32>,
+        attesa: u64,
+    },
     Aiuto,
+}
+
+/// L'ID del PC: niente `/r`, `@server` o altro che il client interpreta.
+fn controlla_id(id: &str) -> Result<(), String> {
+    let valido = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    if id.is_empty() || id.starts_with('-') || !id.chars().all(valido) {
+        return Err("ID del PC non valido".to_owned());
+    }
+    Ok(())
+}
+
+/// `tunnel <ID> <locale>:<porta> ... [--durata <s>] [--attesa <s>]`.
+fn leggi_tunnel(id: &str, resto: &[&str]) -> Result<Comando, String> {
+    controlla_id(id)?;
+    let (mut durata, mut attesa, mut porte) = (None, 120u64, Vec::new());
+    let mut parole = resto.iter();
+    while let Some(parola) = parole.next() {
+        match *parola {
+            "--durata" => durata = Some(tunnel::leggi_durata(parole.next().unwrap_or(&""))?),
+            "--attesa" => {
+                attesa = parole
+                    .next()
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or("argomenti non validi")?
+                    .into()
+            }
+            p => porte.push(p),
+        }
+    }
+    Ok(Comando::Tunnel {
+        id: id.to_owned(),
+        porte: tunnel::leggi_porte(&porte)?,
+        durata,
+        attesa,
+    })
 }
 
 /// `terminal <ID>` con le tre opzioni numeriche e `--amministratore`; nessuna
 /// porta una password.
 fn leggi_terminale(id: &str, opzioni: &[&str]) -> Result<Comando, String> {
-    // Solo l'ID: niente `/r`, `@server` o altro che il client interpreta.
-    let valido = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
-    if id.is_empty() || id.starts_with('-') || !id.chars().all(valido) {
-        return Err("ID del PC non valido".to_owned());
-    }
+    controlla_id(id)?;
     let (mut attesa, mut righe, mut colonne) = (
         120,
         terminale::RIGHE_PREDEFINITE,
@@ -151,6 +209,7 @@ fn leggi_argomenti(args: &[String]) -> Result<Comando, String> {
                 _ => Err("argomenti non validi".to_owned()),
             }
         }
+        ["tunnel", id, resto @ ..] => leggi_tunnel(id, resto),
         [] => Err("manca il comando".to_owned()),
         // Gli argomenti non si ripetono: potrebbero contenere una password.
         _ => Err("argomenti non validi".to_owned()),
@@ -282,6 +341,28 @@ fn avvia(argomenti: impl Iterator<Item = std::ffi::OsString>) -> i32 {
                 }
             };
         }
+        Ok(Comando::Tunnel {
+            id,
+            porte,
+            durata,
+            attesa,
+        }) => {
+            let esito = avvia_terminale(
+                || account::whoami().and_then(|_| nel_runtime(account::verifica_accesso())),
+                || {
+                    tunnel::tunnel(&id, &porte, attesa, |remote| {
+                        nel_runtime(account::lasciapassare_tunnel(&id, remote, durata))
+                    })
+                },
+            );
+            return match esito {
+                Ok(codice) => codice,
+                Err(e) => {
+                    eprintln!("remotek-cli: {e}");
+                    USCITA_ERRORE
+                }
+            };
+        }
         Err(e) => {
             eprintln!("remotek-cli: {e}\n{USO}");
             return USCITA_USO;
@@ -375,6 +456,49 @@ mod tests {
                 amministratore: true,
             })
         );
+    }
+
+    #[test]
+    fn il_comando_tunnel() {
+        let porta = |locale, remota| tunnel::Porta { locale, remota };
+        assert_eq!(
+            leggi(&["tunnel", "123456789", "1433:1433"]),
+            Ok(Comando::Tunnel {
+                id: "123456789".into(),
+                porte: vec![porta(1433, 1433)],
+                durata: None,
+                attesa: 120,
+            })
+        );
+        assert_eq!(
+            leggi(&["tunnel", "123456789", "15433:1433", "--durata", "600", "18080:8080", "--attesa", "30"]),
+            Ok(Comando::Tunnel {
+                id: "123456789".into(),
+                porte: vec![porta(15433, 1433), porta(18080, 8080)],
+                durata: Some(600),
+                attesa: 30,
+            })
+        );
+        for sbagliato in [
+            &["tunnel", "123456789"][..],
+            &["tunnel", "123456789", "0:1433"],
+            &["tunnel", "123456789", "1433:70000"],
+            &["tunnel", "123456789", "1433:1433", "2433:1433"],
+            &["tunnel", "123456789", "1433:1433", "--durata", "30"],
+            &["tunnel", "123456789", "1433:1433", "--durata"],
+            &["tunnel", "123456789", "1433:1433", "--attesa", "0"],
+            &["tunnel", "123456789", "1433:1433", "--amministratore"],
+            &["tunnel", "12/r", "1433:1433"],
+            &["tunnel", "-1", "1433:1433"],
+        ] {
+            assert!(leggi(sbagliato).is_err(), "{sbagliato:?}");
+        }
+        let nove: Vec<String> = (1..=9).map(|i| format!("{}:{}", 2000 + i, 3000 + i)).collect();
+        let mut parole = vec!["tunnel", "123456789"];
+        parole.extend(nove.iter().map(String::as_str));
+        assert!(leggi(&parole).is_err());
+        parole.pop();
+        assert!(leggi(&parole).is_ok());
     }
 
     #[test]

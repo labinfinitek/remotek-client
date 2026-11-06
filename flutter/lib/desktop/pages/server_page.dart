@@ -491,7 +491,7 @@ class _CmHeaderState extends State<_CmHeader>
                     style: TextStyle(color: Colors.white, fontSize: 14),
                   ),
                 ),
-                if (client.type_() == ClientType.terminal)
+                if (client.type_() == ClientType.terminal || remotekTunnel(client.remotek) != null)
                   FittedBox(
                     child: Text(
                       remotekEtichetta(client.remotek) ?? translate("Terminal"),
@@ -1019,8 +1019,8 @@ class _CmControlPanel extends StatelessWidget {
             color: MyTheme.accent,
             onClick: () {
               handleElevate(context);
-              // Remotek (ADR-0021 regola 6): mai con un terminale nel CM.
-              if (!model.clients.any((c) => c.type_() == ClientType.terminal)) {
+              // Remotek (ADR-0021 regola 6, ADR-0036): mai con un terminale o un tunnel nel CM.
+              if (!model.clients.any((c) => remotekTieneIlCm(c.type_() == ClientType.terminal, c.remotek))) {
                 windowManager.minimize();
               }
             },
@@ -1103,13 +1103,15 @@ class _CmControlPanel extends StatelessWidget {
     return remotekConScript(client.remotek, Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
+        // Remotek (ADR-0036): cosa chiede il tunnel dell'agente.
+        ...remotekRichiestaTunnel(client.remotek),
         Offstage(
           offstage: !showElevation || !showAccept,
           child: buildButton(context, color: Colors.green[700], onClick: () {
             handleAccept(context);
             handleElevate(context);
-            // Remotek (ADR-0021 regola 6): mai con un terminale nel CM.
-            if (!model.clients.any((c) => c.type_() == ClientType.terminal)) {
+            // Remotek (ADR-0021 regola 6, ADR-0036): mai con un terminale o un tunnel nel CM.
+            if (!model.clients.any((c) => remotekTieneIlCm(c.type_() == ClientType.terminal, c.remotek))) {
               windowManager.minimize();
             }
           },
@@ -1134,8 +1136,8 @@ class _CmControlPanel extends StatelessWidget {
                       color: MyTheme.accent,
                       onClick: () {
                         handleAccept(context);
-                        // Remotek (ADR-0021 regola 6): mai con un terminale nel CM.
-                        if (!model.clients.any((c) => c.type_() == ClientType.terminal)) {
+                        // Remotek (ADR-0021 regola 6, ADR-0036): mai con un terminale o un tunnel nel CM.
+                        if (!model.clients.any((c) => remotekTieneIlCm(c.type_() == ClientType.terminal, c.remotek))) {
                           windowManager.minimize();
                         }
                       },

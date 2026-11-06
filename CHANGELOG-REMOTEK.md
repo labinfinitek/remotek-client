@@ -10,10 +10,26 @@ introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 tiene quelli di
 rilasciate non si riscrivono.
 
 ## [Non rilasciato]
+
+## [remotek-1.4.9-9] - 2026-11-06
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-9`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`, lo stesso
+dal -6 al -8). Nello stesso build c'e' `remotek-cli.exe` per Windows,
+attestato come l'exe e come lui non firmato. Con exec il cliente vede lo
+script prima di scegliere, e il PC esegue solo quello (ADR-0035). Porta il
+tunnel dell'agente verso le porte del PC (ADR-0036) e, dove il `custom.txt`
+firmato le elenca, verso altre macchine della rete del cliente (ADR-0037),
+col clic e senza clic sul server non presidiato.
 **Per chi installa**: `remotek-cli` e Remotek sul PC vanno aggiornati
-insieme. Il CLI nuovo contro un PC del -7 o del -8 esce con 126 dopo il clic
-del cliente, senza eseguire niente; il CLI del -8 contro un PC nuovo ha il
-login rifiutato con exec. `terminal` non cambia.
+insieme. Con exec il CLI nuovo contro un PC del -7 o del -8 esce con 126 dopo
+il clic del cliente, senza eseguire niente; il CLI del -8 contro un PC nuovo
+ha il login rifiutato. Il tunnel vuole tutti e due del -9: contro un PC
+del -8 il CLI esce con 1. `terminal` non cambia. I `custom.txt` gia'
+consegnati restano validi: il tunnel vuole il clic e va solo a `127.0.0.1`;
+per il tunnel senza clic o verso altre macchine serve un `custom.txt` nuovo,
+firmato con `remotek-agente-porte` o `remotek-agente-destinazioni` dallo
+strumento dell'ombrello.
 
 ### Aggiunto
 - **Per l'agente AI**: `remotek-cli tunnel <ID> <locale>:<porta> ...` apre un
@@ -22,9 +38,10 @@ login rifiutato con exec. `terminal` non cambia.
   connessioni TCP dentro, un lasciapassare e un clic. Il CLI ascolta solo su
   `127.0.0.1`; il cliente vede chi chiede il tunnel, verso quali porte e per
   quanti minuti al massimo, e accetta o rifiuta; il connection manager resta
-  visibile finche' il tunnel c'e'. Il PC lo dichiara (`remotek_tunnel`): un PC che non lo dichiara non
-  apre niente e il CLI esce con 126; un PC fino al -8 rifiuta dopo il clic
-  del cliente (non sa collegarsi) e il CLI esce con 1.
+  visibile finche' il tunnel c'e'. Il PC lo dichiara (`remotek_tunnel`): un
+  PC che non lo dichiara non apre niente e il CLI esce con 126; un PC fino
+  al -8 rifiuta dopo il clic del cliente (non sa collegarsi) e il CLI esce
+  con 1.
 - **Per l'agente AI**: sul server non presidiato (`remotek-agente` =
   `non-presidiato`) il tunnel entra senza clic se il `custom.txt` firmato
   nomina `tunnel` in `remotek-agente-capacita` ed elenca nella chiave nuova

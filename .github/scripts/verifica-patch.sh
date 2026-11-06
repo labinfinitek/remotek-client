@@ -2562,7 +2562,7 @@ print("\n".join(guai))
 PY
 ) || esito_modo="${esito_modo:-}"$'\n'"controllo del modo del lasciapassare non eseguito: python3 terminato con errore"
 if [ -z "$esito_modo" ]; then
-  ok "il lasciapassare da utente non apre la finestra del caso 2, SYSTEM ne' il senza clic (ADR-0033)"
+  ok "il lasciapassare da utente non apre la finestra del caso 2, SYSTEM ne' il senza clic di terminale ed exec; il tunnel mai SYSTEM (ADR-0033, ADR-0036)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"

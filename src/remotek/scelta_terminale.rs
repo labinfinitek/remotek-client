@@ -115,17 +115,28 @@ pub struct Agente {
     /// La finestra della scelta dell'amministratore ([`richiesta`]).
     #[serde(default)]
     pub amministratore: Option<Richiesta>,
+    /// Con exec, lo script del login (src/remotek/script_al_login.rs): il
+    /// cliente lo vede nella finestra della richiesta prima di scegliere.
+    #[serde(default)]
+    pub script: Option<Vec<u8>>,
 }
 
 /// L'[`Agente`] per il CM: con un lasciapassare valido di exec, o con la
 /// [`richiesta`] dell'amministratore; altrimenti niente, e il CM resta
-/// quello di upstream.
-pub fn agente(valido: Option<&Valido>, terminale: bool, pc: Pc) -> Option<Agente> {
+/// quello di upstream. `script`: lo script del login, che va al CM solo con
+/// exec.
+pub fn agente(
+    valido: Option<&Valido>,
+    terminale: bool,
+    pc: Pc,
+    script: Option<&[u8]>,
+) -> Option<Agente> {
     let exec = terminale && lasciapassare::exec(valido);
     let amministratore = richiesta(valido, terminale, pc);
-    (exec || amministratore.is_some()).then_some(Agente {
+    (exec || amministratore.is_some()).then(|| Agente {
         exec,
         amministratore,
+        script: script.filter(|_| exec).map(<[u8]>::to_vec),
     })
 }
 
@@ -323,6 +334,22 @@ pub struct Scheda {
     pub etichetta: Option<String>,
     /// La finestra della scelta dell'amministratore; `None`: quella di upstream.
     pub finestra: Option<Finestra>,
+    /// Con exec, lo script nella forma visibile del riquadro "Script" della
+    /// vista (`vista_cm::FormaVisibile`, a capo `\r\n`), mostrato sopra i
+    /// pulsanti della richiesta (flutter/lib/desktop/pages/remotek_scelta_cm.dart).
+    pub script: Option<String>,
+    /// Con uno script vuoto, la frase che lo dice al posto del testo.
+    pub script_vuoto: Option<String>,
+}
+
+/// Lo script come lo mostra il riquadro "Script" della vista: stesso codice,
+/// quindi caratteri di controllo, invisibili Unicode e byte non UTF-8 in
+/// forma visibile.
+fn script_visibile(script: &[u8]) -> String {
+    let mut forma = super::vista_cm::FormaVisibile::default();
+    let mut testo = forma.pezzo(script);
+    testo.push_str(&forma.fine());
+    testo
 }
 
 pub fn scheda(agente: Agente, lingua: Lingua) -> Scheda {
@@ -333,9 +360,18 @@ pub fn scheda(agente: Agente, lingua: Lingua) -> Scheda {
         }
         .to_owned()
     });
+    let script_vuoto = agente.script.as_ref().filter(|s| s.is_empty()).map(|_| {
+        match lingua {
+            Lingua::Italiano => "(script vuoto)",
+            Lingua::Inglese => "(empty script)",
+        }
+        .to_owned()
+    });
     Scheda {
         etichetta,
         finestra: agente.amministratore.map(|r| finestra(r, lingua)),
+        script: agente.script.as_deref().map(script_visibile),
+        script_vuoto,
     }
 }
 
@@ -545,7 +581,7 @@ mod tests {
     fn la_scheda_dice_exec_solo_col_lasciapassare_di_exec() {
         for pc in [Pc::Installato, Pc::PortatileElevato, Pc::PortatileNonElevato, Pc::Altro] {
             for modo in [lasciapassare::Modo::Utente, lasciapassare::Modo::Amministratore] {
-                let a = agente(Some(&exec(modo)), true, pc).unwrap();
+                let a = agente(Some(&exec(modo)), true, pc, None).unwrap();
                 assert!(a.exec);
                 assert_eq!(
                     scheda(a.clone(), Lingua::Italiano).etichetta.as_deref(),
@@ -556,16 +592,16 @@ mod tests {
                     Some("Run commands")
                 );
                 // Fuori da un terminale niente, nemmeno con exec.
-                assert_eq!(agente(Some(&exec(modo)), false, pc), None);
+                assert_eq!(agente(Some(&exec(modo)), false, pc, None), None);
             }
-            assert_eq!(agente(None, true, pc), None);
+            assert_eq!(agente(None, true, pc, None), None);
             let terminale = Valido {
                 modo: lasciapassare::Modo::Utente,
                 ..valido()
             };
-            assert_eq!(agente(Some(&terminale), true, pc), None);
+            assert_eq!(agente(Some(&terminale), true, pc, None), None);
             // Il terminale da amministratore: la finestra, senza l'etichetta.
-            if let Some(a) = agente(Some(&valido()), true, pc) {
+            if let Some(a) = agente(Some(&valido()), true, pc, None) {
                 assert!(!a.exec);
                 assert_eq!(scheda(a, Lingua::Italiano).etichetta, None);
             }
@@ -584,7 +620,7 @@ mod tests {
         for pc in [Pc::Installato, Pc::PortatileElevato, Pc::PortatileNonElevato, Pc::Altro] {
             for v in &lasciapassare {
                 let r = richiesta(Some(v), true, pc);
-                let a = agente(Some(v), true, pc);
+                let a = agente(Some(v), true, pc, None);
                 assert_eq!(a.as_ref().and_then(|a| a.amministratore.clone()), r);
                 for lingua in [Lingua::Italiano, Lingua::Inglese] {
                     assert_eq!(
@@ -594,15 +630,62 @@ mod tests {
                 }
             }
         }
-        let a = agente(Some(&valido()), true, Pc::Installato).unwrap();
+        let a = agente(Some(&valido()), true, Pc::Installato, None).unwrap();
         let j = serde_json::to_value(scheda(a, Lingua::Italiano)).unwrap();
         assert_eq!(j["etichetta"], json!(null));
         assert_eq!(j["finestra"]["accetta_utente"], json!("Accetta come utente"));
-        let a = agente(Some(&exec(lasciapassare::Modo::Utente)), true, Pc::Installato).unwrap();
+        let utente = exec(lasciapassare::Modo::Utente);
+        let a = agente(Some(&utente), true, Pc::Installato, Some(b"Get-Date\r\n")).unwrap();
         assert_eq!(
             serde_json::to_value(scheda(a, Lingua::Italiano)).unwrap(),
-            json!({"etichetta": "Esecuzione di comandi", "finestra": null})
+            json!({
+                "etichetta": "Esecuzione di comandi",
+                "finestra": null,
+                "script": "Get-Date\r\n",
+                "script_vuoto": null,
+            })
         );
+    }
+
+    /// Lo script nella scheda e' quello del riquadro "Script" della vista,
+    /// con la stessa forma visibile; solo con exec, anche con la finestra
+    /// dell'amministratore; vuoto, lo dice.
+    #[test]
+    fn lo_script_nella_scheda_come_nel_riquadro() {
+        // ESC, U+202E (bidi), U+200B (larghezza zero), un byte non UTF-8, `\r\n`.
+        let script = b"a\x1b[2J\xe2\x80\xaeb\xe2\x80\x8bc\xff\r\nd".to_vec();
+        for modo in [
+            lasciapassare::Modo::Utente,
+            lasciapassare::Modo::Amministratore,
+        ] {
+            let a = agente(Some(&exec(modo)), true, Pc::Installato, Some(&script)).unwrap();
+            for lingua in [Lingua::Italiano, Lingua::Inglese] {
+                let s = scheda(a.clone(), lingua);
+                let mut forma = crate::remotek::vista_cm::FormaVisibile::default();
+                let atteso = forma.pezzo(&script) + &forma.fine();
+                assert_eq!(s.script.as_deref(), Some(atteso.as_str()));
+                assert!(!atteso.contains('\x1b') && !atteso.contains('\u{202e}'));
+                assert!(atteso.ends_with("\r\nd"), "{atteso}");
+                assert_eq!(s.script_vuoto, None);
+                assert_eq!(
+                    s.finestra.is_some(),
+                    modo == lasciapassare::Modo::Amministratore
+                );
+            }
+        }
+        // Col lasciapassare del terminale lo script non va al CM.
+        let a = agente(Some(&valido()), true, Pc::Installato, Some(&script)).unwrap();
+        assert_eq!(a.script, None);
+        let utente = exec(lasciapassare::Modo::Utente);
+        let vuoto = agente(Some(&utente), true, Pc::Installato, Some(b"")).unwrap();
+        let it = scheda(vuoto.clone(), Lingua::Italiano);
+        assert_eq!(it.script.as_deref(), Some(""));
+        assert_eq!(it.script_vuoto.as_deref(), Some("(script vuoto)"));
+        let en = scheda(vuoto, Lingua::Inglese);
+        assert_eq!(en.script_vuoto.as_deref(), Some("(empty script)"));
+        // Un `Agente` senza `script` (servizio vecchio): nessun riquadro.
+        let vecchio: Agente = serde_json::from_value(json!({"exec": true})).unwrap();
+        assert_eq!(scheda(vecchio, Lingua::Italiano).script, None);
     }
 
     #[test]

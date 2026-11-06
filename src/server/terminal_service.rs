@@ -167,6 +167,7 @@ fn get_or_create_service(
     is_persistent: bool,
     is_specified_user: bool,
     exec: bool,
+    script_mostrato: Option<Vec<u8>>,
 ) -> Result<Arc<Mutex<PersistentTerminalService>>> {
     let mut services = TERMINAL_SERVICES.lock().unwrap();
     // Remotek: exec solo in un servizio nuovo (src/remotek/exec.rs).
@@ -192,7 +193,7 @@ fn get_or_create_service(
             );
             let mut s =
                 PersistentTerminalService::new(service_id.clone(), is_persistent, is_specified_user);
-            s.exec = exec.then(crate::remotek::exec::Esecuzione::nuova);
+            s.exec = exec.then(|| crate::remotek::exec::Esecuzione::nuova(script_mostrato));
             Arc::new(Mutex::new(s))
         })
         .clone();
@@ -398,13 +399,15 @@ pub fn new(
     is_persistent: bool,
     user_token: Option<UserToken>,
     exec: bool,
+    script_mostrato: Option<Vec<u8>>,
 ) -> GenericService {
     // Create the service with initial persistence setting
     allow_err!(get_or_create_service(
         service_id.clone(),
         is_persistent && !exec,
         user_token.is_some(),
-        exec
+        exec,
+        script_mostrato
     ));
     let svc = TerminalService {
         sp: GenericService::new(service_id.clone(), false),
@@ -2241,13 +2244,15 @@ mod tests {
         use crate::remotek::exec::{tests::*, APERTO};
         use hbb_common::message_proto::terminal_response::Union;
         let id = super::generate_service_id();
-        let service = super::get_or_create_service(id.clone(), false, false, true).unwrap();
-        assert!(super::get_or_create_service(id.clone(), false, false, true).is_err());
+        let script = b"echo ok; exit 3\n";
+        let mostrato = Some(script.to_vec());
+        let service = super::get_or_create_service(id.clone(), false, false, true, mostrato).unwrap();
+        assert!(super::get_or_create_service(id.clone(), false, false, true, None).is_err());
         let mut proxy = super::TerminalServiceProxy::new(id.clone(), None, None);
         let r = proxy.handle_action(&apri(1)).unwrap().unwrap();
         assert!(matches!(r.union, Some(Union::Opened(o)) if o.success && o.message == APERTO));
         assert!(service.lock().unwrap().sessions.is_empty());
-        assert!(proxy.handle_action(&manda(1, b"echo ok; exit 3\n")).unwrap().is_none());
+        assert!(proxy.handle_action(&manda(1, script)).unwrap().is_none());
         assert!(proxy.handle_action(&manda(1, b"")).unwrap().is_none());
         let mut fine = None;
         for _ in 0..500 {

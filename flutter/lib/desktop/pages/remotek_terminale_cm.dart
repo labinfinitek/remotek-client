@@ -122,6 +122,15 @@ class RemotekVistaTerminale extends StatelessWidget {
     return Obx(() {
       modello.versione.value;
       final terminali = modello.terminali(connId);
+      // Una richiesta che aspetta il clic non ha ancora output: niente
+      // pannello vuoto "Terminale - Sola lettura" accanto alla richiesta
+      // (collaudo t101, con la scheda di un exec precedente aperta). Il primo
+      // output, dopo l'accettazione, ridisegna la vista (`versione`).
+      if (terminali.isEmpty &&
+          gFFI.serverModel.clients
+              .any((c) => c.id == connId && !c.authorized)) {
+        return const Offstage();
+      }
       final titolo = '${translate('Terminal')} - ${translate('Read-only')}';
       if (terminali.isEmpty) {
         return Center(child: Text(titolo));

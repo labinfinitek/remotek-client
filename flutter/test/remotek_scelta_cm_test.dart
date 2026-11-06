@@ -74,7 +74,8 @@ void main() {
       (tester) async {
     final due = Map<String, dynamic>.from(json)..['accetta_utente'] = null;
     expect(RemotekScelta.daJson(scheda(due))!.accettaUtente, isNull);
-    expect(RemotekScelta.daJson(scheda(Map.of(due)..['accetta_utente'] = 1)), isNull);
+    expect(RemotekScelta.daJson(scheda(Map.of(due)..['accetta_utente'] = 1)),
+        isNull);
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: remotekSceltaCm(
@@ -128,5 +129,59 @@ void main() {
     scelta.complete();
     await tester.pump();
     expect(eventi, ['amministratore', 'accetta']);
+  });
+
+  // ADR-0035: lo script di exec sopra i pulsanti della richiesta.
+  Widget conScript(dynamic remotek, {double altezza = 300}) => MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              width: 300,
+              height: altezza,
+              child: remotekConScript(remotek,
+                  TextButton(onPressed: () {}, child: const Text('Accetta'))),
+            ),
+          ),
+        ),
+      );
+
+  testWidgets('senza script solo i pulsanti, come prima', (tester) async {
+    for (final remotek in [
+      null,
+      scheda(json),
+      {'script': 1}
+    ]) {
+      await tester.pumpWidget(conScript(remotek));
+      expect(find.text('Script'), findsNothing);
+      expect(find.text('Accetta'), findsOneWidget);
+    }
+  });
+
+  testWidgets('lo script sopra i pulsanti, selezionabile, vuoto lo dice',
+      (tester) async {
+    await tester.pumpWidget(conScript(
+        {'etichetta': 'Esecuzione di comandi', 'script': 'Get-Date\r\n^[[2J'}));
+    expect(find.text('Script'), findsOneWidget);
+    expect(find.byType(SelectableText), findsOneWidget);
+    expect(tester.widget<SelectableText>(find.byType(SelectableText)).data,
+        'Get-Date\n^[[2J');
+    expect(
+        tester.getTopLeft(find.byType(SelectableText)).dy <
+            tester.getTopLeft(find.text('Accetta')).dy,
+        isTrue);
+    await tester.pumpWidget(
+        conScript({'script': '', 'script_vuoto': '(script vuoto)'}));
+    expect(find.text('(script vuoto)'), findsOneWidget);
+  });
+
+  testWidgets('uno script lungo scorre e non allarga il CM', (tester) async {
+    final lungo =
+        List.generate(2000, (i) => 'riga $i ${'x' * 200}').join('\r\n');
+    await tester.pumpWidget(conScript({'script': lungo}, altezza: 200));
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.byType(SingleChildScrollView)).height,
+        lessThan(200));
+    expect(find.text('Accetta'), findsOneWidget);
   });
 }

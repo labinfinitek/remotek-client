@@ -411,6 +411,8 @@ pub struct Connection {
     trascrizione: Option<crate::remotek::trascrizione::Trascrizione>,
     // Remotek (ADR-0028): il lasciapassare valido dell'agente (src/remotek/lasciapassare.rs).
     lasciapassare: Option<crate::remotek::lasciapassare::Valido>,
+    // Remotek (ADR-0035): lo script di exec del login, mostrato al cliente (src/remotek/script_al_login.rs).
+    script_mostrato: Option<Vec<u8>>,
     // Remotek (ADR-0028, caso 2): il cliente ha scelto "Accetta come amministratore".
     amministratore_scelto: bool,
     // Remotek: il cliente ha chiuso dal CM (src/remotek/vista_cm.rs, `scheda_resta`).
@@ -603,6 +605,7 @@ impl Connection {
             terminal_generic_service: None,
             trascrizione: None,
             lasciapassare: None,
+            script_mostrato: None,
             amministratore_scelto: false,
             chiusa_dal_cm: false,
             conn_audit_primary_auth: ConnAuditPrimaryAuth::None,
@@ -2164,6 +2167,7 @@ impl Connection {
                 self.lasciapassare.as_ref(),
                 self.terminal,
                 crate::remotek::scelta_terminale::pc(),
+                self.script_mostrato.as_deref(),
             ),
         });
     }
@@ -2745,9 +2749,22 @@ impl Connection {
                     }
 
                     self.terminal = true;
-                    self.lasciapassare = lasciapassare.and_then(|l| {
-                        crate::remotek::lasciapassare::verifica_login(&l, &self.lr.my_id)
-                    });
+                    // Remotek (ADR-0035): lo script di exec nel login; rifiutato qui,
+                    // prima che il CM riceva `Data::Login` (try_start_cm, piu' sotto).
+                    match crate::remotek::script_al_login::al_login(lasciapassare, |l| {
+                        crate::remotek::lasciapassare::verifica_login(l, &self.lr.my_id)
+                    }) {
+                        Ok((valido, script)) => {
+                            self.lasciapassare = valido;
+                            self.script_mostrato = script;
+                        }
+                        Err(rifiuto) => {
+                            log::warn!("login rifiutato: {} (controllante {})", rifiuto, lr.my_id);
+                            self.send_login_error(rifiuto).await;
+                            sleep(1.).await;
+                            return false;
+                        }
+                    }
                     // Remotek: la shell non sopravvive alla connessione, qualunque
                     // cosa chieda il controllante (trascrizione e chiusura del cliente).
                     // if let Some(o) = self.options_in_login.as_ref() {
@@ -6058,6 +6075,7 @@ impl Connection {
             self.terminal_persistent,
             user_token.to_terminal_service_token(),
             exec,
+            self.script_mostrato.clone(),
         ));
         s.on_subscribe(self.inner.clone());
         self.terminal_generic_service = Some(s);

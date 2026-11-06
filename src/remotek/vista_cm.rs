@@ -19,7 +19,9 @@
 //! come variabili d'ambiente, mai nel testo dello script, che il cliente vede.
 
 use super::scelta_terminale::Lingua;
-use super::script_exec::{Passo, Raccolta, MASSIMO_RIGHE, MASSIMO_SCRIPT, TROPPO_GRANDE};
+use super::script_exec::{
+    Passo, Raccolta, MASSIMO_RIGHE, MASSIMO_SCRIPT, NON_MOSTRATO, TROPPO_GRANDE,
+};
 use super::uscita_terminale::NON_PARTITO;
 use crate::ipc::Data;
 use hbb_common::message_proto::{terminal_response, TerminalAction, TerminalResponse};
@@ -202,6 +204,13 @@ impl Script {
                     }
                     (TROPPO_GRANDE, false) => {
                         format!("script refused: over {kib} KiB or {righe} lines, not run")
+                    }
+                    (NON_MOSTRATO, true) => {
+                        "script rifiutato: non e' quello mostrato prima della scelta, non eseguito"
+                            .to_owned()
+                    }
+                    (NON_MOSTRATO, false) => {
+                        "script refused: not the one shown before the choice, not run".to_owned()
                     }
                     _ => return Vec::new(),
                 }
@@ -847,18 +856,23 @@ pub(crate) mod tests {
                 });
                 r
             };
-            let chiusura = [finito, errore(NON_PARTITO), errore(TROPPO_GRANDE)]
-                .iter()
-                .map(|r| {
-                    let mut s = Script::default();
-                    s.azione(&apri(1), lingua);
-                    let v = s.chiusura(r, lingua);
-                    assert_eq!(v.len(), 1);
-                    assert_eq!(v[0].0, RIQUADRO_SCRIPT);
-                    righe(&String::from_utf8_lossy(&v[0].1))
-                })
-                .max()
-                .unwrap_or_default();
+            let chiusura = [
+                finito,
+                errore(NON_PARTITO),
+                errore(TROPPO_GRANDE),
+                errore(NON_MOSTRATO),
+            ]
+            .iter()
+            .map(|r| {
+                let mut s = Script::default();
+                s.azione(&apri(1), lingua);
+                let v = s.chiusura(r, lingua);
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].0, RIQUADRO_SCRIPT);
+                righe(&String::from_utf8_lossy(&v[0].1))
+            })
+            .max()
+            .unwrap_or_default();
             let peggiore = corpo + righe(&vuoto) + chiusura;
             assert!(
                 peggiore * 10 <= RIGHE_XTERM * 9,

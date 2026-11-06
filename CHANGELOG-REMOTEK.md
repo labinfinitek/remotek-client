@@ -10,6 +10,31 @@ introdusse il singolo cambiamento. `verifica-patch.sh` sez. 13 tiene quelli di
 rilasciate non si riscrivono.
 
 ## [Non rilasciato]
+**Per chi installa**: `remotek-cli` e Remotek sul PC vanno aggiornati
+insieme. Il CLI nuovo contro un PC del -7 o del -8 esce con 126 dopo il clic
+del cliente, senza eseguire niente; il CLI del -8 contro un PC nuovo ha il
+login rifiutato con exec. `terminal` non cambia.
+
+### Corretto
+- **Per l'agente AI**: fino al -8 l'help di `remotek-cli exec` e questo
+  changelog (al -7) dicevano che il cliente vede lo script "prima che
+  parta": lo vedeva solo dopo aver accettato, nel riquadro "Script". Ora lo
+  vede prima della scelta (sotto, "Sicurezza").
+- Con la scheda di una sessione terminale o exec precedente ancora aperta,
+  accanto a una richiesta nuova il connection manager mostrava il pannello
+  vuoto "Terminale - Sola lettura": ora il pannello resta vuoto finche' la
+  richiesta non e' accettata e si riempie col primo output.
+
+### Sicurezza
+- **Per l'agente AI**: con exec la finestra della richiesta mostra lo script
+  intero sopra i pulsanti, prima che il cliente scelga, sia coi pulsanti di
+  sempre sia nella scelta dell'amministratore, nella stessa forma del
+  riquadro "Script" (caratteri di controllo e invisibili resi visibili). Lo
+  script arriva col login; il PC lo rifiuta prima di mostrare la richiesta se
+  manca, se e' oltre i limiti o se non ha un lasciapassare valido di exec, ed
+  esegue solo uno script uguale byte per byte a quello mostrato: se no non
+  parte, e il cliente e l'agente leggono perche' (ADR-0035). Vale anche
+  senza clic sul server non presidiato.
 
 ## [remotek-1.4.9-8] - 2026-11-05
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

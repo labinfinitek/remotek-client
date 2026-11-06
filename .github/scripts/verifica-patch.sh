@@ -17,7 +17,8 @@
 # firmate con la sua chiave; il dialogo del server bloccato senza l'import;
 # il terminale da utente col token abbassato; il lasciapassare dell'agente;
 # il login del terminale senza le credenziali di Windows; la stampante remota
-# spenta; exec senza pseudo-console coi figli nel Job.
+# spenta; exec senza pseudo-console coi figli nel Job; lo script di exec
+# nella finestra della scelta.
 #
 # Uso:   bash .github/scripts/verifica-patch.sh
 # Esce con 1 se c'e' almeno un ERRORE. Gli AVVISI non fanno fallire; con
@@ -2717,6 +2718,52 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_cm"
+fi
+
+# --- 35. Lo script di exec nella finestra della scelta ----------------------
+# ADR-0035: lo script di exec arriva nel login, si controlla li' prima che il
+# CM riceva `Data::Login`, va al CM con `scelta_terminale::agente` e alla
+# creazione di `exec::Esecuzione`, che esegue solo quello; il CM lo mostra
+# sopra i pulsanti della richiesta, in tutti e due i rami di
+# `buildUnAuthorized`. Un merge di upstream che toglie una di queste chiamate
+# farebbe tornare il cliente ad accettare senza vedere lo script, o il PC a
+# eseguire uno script diverso.
+esito_script=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+C = "src/server/connection.rs"
+c = codice(C)
+login = c.find("crate::remotek::script_al_login::al_login(lasciapassare,")
+cm = c.find("self.try_start_cm(lr.my_id")
+if login < 0:
+    guai.append("%s: il login del terminale non passa da script_al_login::al_login" % C)
+elif cm < 0 or login > cm:
+    guai.append("%s: script_al_login::al_login non viene prima di try_start_cm (Data::Login al CM)" % C)
+if not re.search(r"Err\(rifiuto\) => \{\s*log::warn!\([^;]*\);\s*self\.send_login_error\(rifiuto\)\.await;\s*sleep\(1\.\)\.await;\s*return false;\s*\}", c):
+    guai.append("%s: un rifiuto di script_al_login::al_login non chiude il login con send_login_error" % C)
+if not re.search(r"crate::remotek::scelta_terminale::agente\(\s*self\.lasciapassare\.as_ref\(\),\s*self\.terminal,\s*crate::remotek::scelta_terminale::pc\(\),\s*self\.script_mostrato\.as_deref\(\),?\s*\)", c):
+    guai.append("%s: lo script del login non va al CM (scelta_terminale::agente)" % C)
+if not re.search(r"terminal_service::new\([^;]*\bexec,\s*self\.script_mostrato\.clone\(\),?\s*\)\);", c):
+    guai.append("%s: lo script del login non arriva alla creazione dell'exec (terminal_service::new)" % C)
+T = "src/server/terminal_service.rs"
+if "s.exec = exec.then(|| crate::remotek::exec::Esecuzione::nuova(script_mostrato));" not in codice(T):
+    guai.append("%s: Esecuzione::nuova non riceve lo script mostrato al cliente" % T)
+SP = "flutter/lib/desktop/pages/server_page.dart"
+sp = codice(SP)
+ramo = re.search(r"buildUnAuthorized\(BuildContext context\) \{(.*?)\n  \}\n", sp, re.S)
+if not ramo or len(re.findall(r"return remotekConScript\(client\.remotek, ", ramo.group(1))) != 2:
+    guai.append("%s: buildUnAuthorized non mostra lo script sopra i pulsanti in tutti e due i rami (remotekConScript)" % SP)
+print("\n".join(guai))
+PY
+) || esito_script="${esito_script:-}"$'\n'"controllo dello script nella scelta non eseguito: python3 terminato con errore"
+if [ -z "$esito_script" ]; then
+  ok "lo script di exec si controlla al login prima del CM, si mostra nella richiesta ed e' l'unico eseguito (ADR-0035)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_script"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

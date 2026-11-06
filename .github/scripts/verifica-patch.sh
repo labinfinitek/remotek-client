@@ -2833,8 +2833,8 @@ if not re.search(r"Some\(login_request::Union::PortForward\(pf\)\)\s*if super::t
     guai.append("%s: togli prende la password anche dal port forward dei tecnici (host e porta veri)" % L)
 if "set_raw" in t:
     guai.append("%s: il tunnel chiama set_raw: perderebbe cifratura e confini dei messaggi" % T)
-if not re.search(r"pub fn login_del_tunnel\(lc: &crate::client::LoginConfigHandler\) -> bool \{\s*lc\.conn_type == hbb_common::rendezvous_proto::ConnType::PORT_FORWARD\s*&& !lc\.remotek_lasciapassare\.is_empty\(\)", t):
-    guai.append("%s: login_del_tunnel non vale solo per il port forward col lasciapassare di remotek-cli" % T)
+if not re.search(r"pub fn login_del_tunnel\(lc: &crate::client::LoginConfigHandler\) -> bool \{\s*lc\.conn_type == hbb_common::rendezvous_proto::ConnType::PORT_FORWARD\s*&& !lc\.remotek_lasciapassare\.is_empty\(\)\s*&& lc\.port_forward\.0\.is_empty\(\)\s*&& lc\.port_forward\.1 == 0\s*\}", t):
+    guai.append("%s: login_del_tunnel non vale solo per il port forward col lasciapassare di remotek-cli, host vuoto e porta 0" % T)
 D = "src/remotek/dichiarazione.rs"
 if not re.search(r'pub const CHIAVE_TUNNEL: &str = "remotek_tunnel";', codice(D)) or "m.insert(CHIAVE_TUNNEL.to_owned(), Value::Bool(true));" not in codice(D):
     guai.append("%s: il PC non dichiara remotek_tunnel" % D)

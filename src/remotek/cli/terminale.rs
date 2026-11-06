@@ -1096,14 +1096,26 @@ mod tests {
     /// Il login che il CLI manda davvero: `handle_hash` come in io_loop.rs,
     /// con la password della sessione (vuota), verso un socket locale.
     fn login_mandato(lasciapassare: &str) -> hbb_common::message_proto::LoginRequest {
+        login_mandato_per(lasciapassare, ConnType::TERMINAL, None).0
+    }
+
+    /// [`login_mandato`] per un tipo di connessione e, per il port forward,
+    /// host e porta come li mette cli/tunnel.rs; con `login_del_tunnel`.
+    fn login_mandato_per(
+        lasciapassare: &str,
+        conn_type: ConnType,
+        port_forward: Option<(&str, i32)>,
+    ) -> (hbb_common::message_proto::LoginRequest, bool) {
         let _ambiente = AMBIENTE.lock().unwrap();
-        let session = sessione(
-            "remotek-cli-test-login",
-            Gestore::default(),
-            ConnType::TERMINAL,
-        )
-        .unwrap();
-        session.lc.write().unwrap().remotek_lasciapassare = lasciapassare.to_owned();
+        let session = sessione("remotek-cli-test-login", Gestore::default(), conn_type).unwrap();
+        let del_tunnel = {
+            let mut lc = session.lc.write().unwrap();
+            lc.remotek_lasciapassare = lasciapassare.to_owned();
+            if let Some((host, porta)) = port_forward {
+                lc.port_forward = (host.to_owned(), porta);
+            }
+            crate::remotek::tunnel::login_del_tunnel(&lc)
+        };
         let rt = hbb_common::tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1127,7 +1139,7 @@ mod tests {
             let dati = server.next().await.unwrap().unwrap();
             <Message as hbb_common::protobuf::Message>::parse_from_bytes(&dati).unwrap()
         });
-        login.login_request().clone()
+        (login.login_request().clone(), del_tunnel)
     }
 
     #[test]
@@ -1170,6 +1182,51 @@ mod tests {
             ("", "pay.firma")
         );
         assert!(lr.has_terminal());
+    }
+
+    #[test]
+    fn login_del_tunnel_col_lasciapassare_solo_in_os_login_password() {
+        // Come cli/tunnel.rs: port forward, host vuoto e porta 0.
+        let (lr, del_tunnel) =
+            login_mandato_per("pay.firma", ConnType::PORT_FORWARD, Some(("", 0)));
+        assert!(del_tunnel);
+        assert!(lr.password.is_empty());
+        let os = lr.os_login.as_ref().unwrap();
+        assert_eq!(
+            (os.username.as_str(), os.password.as_str()),
+            ("", "pay.firma")
+        );
+        let pf = lr.port_forward();
+        assert!(lr.has_port_forward() && pf.host.is_empty() && pf.port == 0);
+        assert!(crate::remotek::tunnel::forma_del_tunnel(&pf.host, pf.port));
+    }
+
+    #[test]
+    fn fuori_dalla_forma_del_tunnel_il_lasciapassare_non_parte() {
+        // Il port forward dei tecnici (host o porta veri), il tunnel senza
+        // lasciapassare, il terminale: login_del_tunnel falso, e col port
+        // forward il lasciapassare non va nel login.
+        let casi = [
+            (
+                "pay.firma",
+                ConnType::PORT_FORWARD,
+                Some(("localhost", 3389)),
+            ),
+            ("pay.firma", ConnType::PORT_FORWARD, Some(("", 3389))),
+            ("pay.firma", ConnType::PORT_FORWARD, Some(("", 1433))),
+            ("pay.firma", ConnType::PORT_FORWARD, Some(("10.0.0.5", 0))),
+            ("", ConnType::PORT_FORWARD, Some(("", 0))),
+            ("pay.firma", ConnType::TERMINAL, Some(("", 0))),
+        ];
+        for (lasciapassare, conn_type, port_forward) in casi {
+            let caso = (lasciapassare, conn_type, port_forward);
+            let (lr, del_tunnel) = login_mandato_per(lasciapassare, conn_type, port_forward);
+            assert!(!del_tunnel, "{:?}", caso);
+            if conn_type == ConnType::PORT_FORWARD {
+                let os = lr.os_login.as_ref();
+                assert!(os.map_or(true, |o| o.password != "pay.firma"), "{:?}", caso);
+            }
+        }
     }
 
     /// Il ciclo di exec su eventi gia' in coda: esito, cio' che va a io_loop,

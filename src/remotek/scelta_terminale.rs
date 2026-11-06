@@ -133,6 +133,11 @@ pub struct RichiestaTunnel {
     pub porte: Vec<u16>,
     /// Secondi.
     pub durata: u32,
+    /// Le destinazioni esterne della sessione (ADR-0037), calcolate dal
+    /// servizio con `destinazioni::della_sessione`: il CM non legge il
+    /// `custom.txt`.
+    #[serde(default)]
+    pub destinazioni: Vec<std::net::SocketAddrV4>,
 }
 
 /// L'[`Agente`] per il CM: con un lasciapassare valido di exec o di tunnel,
@@ -153,6 +158,10 @@ pub fn agente(
             tecnico: v.tecnico.clone(),
             porte: porte.clone(),
             durata: *durata,
+            destinazioni: super::destinazioni::della_sessione(
+                &super::destinazioni::destinazioni(),
+                porte,
+            ),
         }),
         _ => None,
     });
@@ -408,8 +417,9 @@ pub fn scheda(agente: Agente, lingua: Lingua) -> Scheda {
 }
 
 /// "<agente>, agente AI di <tecnico>, chiede un tunnel verso le porte 1433,
-/// 8080 di questo PC, per al massimo 60 minuti". I minuti arrotondano in su:
-/// il tunnel non dura mai piu' di quanto dice.
+/// 8080 di questo PC, per al massimo 60 minuti"; con le destinazioni esterne
+/// "... di questo PC e verso 10.0.0.5:1433, per ...". I minuti arrotondano in
+/// su: il tunnel non dura mai piu' di quanto dice.
 pub fn testo_tunnel(t: &RichiestaTunnel, lingua: Lingua) -> String {
     let porte = t
         .porte
@@ -419,22 +429,37 @@ pub fn testo_tunnel(t: &RichiestaTunnel, lingua: Lingua) -> String {
         .join(", ");
     let minuti = (t.durata + 59) / 60;
     let una_porta = t.porte.len() == 1;
+    let esterne = t
+        .destinazioni
+        .iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verso = |e: &str| {
+        if esterne.is_empty() {
+            String::new()
+        } else {
+            format!(" {e} {esterne}")
+        }
+    };
     match lingua {
         Lingua::Italiano => format!(
-            "{}, agente AI di {}, chiede un tunnel verso {} {} di questo PC, per al massimo {} {}",
+            "{}, agente AI di {}, chiede un tunnel verso {} {} di questo PC{}, per al massimo {} {}",
             t.agente,
             t.tecnico,
             if una_porta { "la porta" } else { "le porte" },
             porte,
+            verso("e verso"),
             minuti,
             if minuti == 1 { "minuto" } else { "minuti" }
         ),
         Lingua::Inglese => format!(
-            "{}, AI agent of {}, asks for a tunnel to {} {} of this PC, for at most {} {}",
+            "{}, AI agent of {}, asks for a tunnel to {} {} of this PC{}, for at most {} {}",
             t.agente,
             t.tecnico,
             if una_porta { "port" } else { "ports" },
             porte,
+            verso("and to"),
             minuti,
             if minuti == 1 { "minute" } else { "minutes" }
         ),
@@ -805,6 +830,53 @@ mod tests {
         // Il campo di un servizio di prima, senza tunnel, si legge ancora.
         let vecchio: Agente = serde_json::from_value(json!({"exec": true})).unwrap();
         assert_eq!(vecchio.tunnel, None);
+        // Senza la chiave firmata nessuna destinazione esterna.
+        assert_eq!(a.tunnel.unwrap().destinazioni, vec![]);
+    }
+
+    /// Le destinazioni esterne della sessione (ADR-0037) nel testo della
+    /// richiesta, nelle due lingue; il campo di un servizio di prima, senza
+    /// destinazioni, si legge ancora.
+    #[test]
+    fn il_tunnel_con_le_destinazioni_esterne() {
+        let mut t = RichiestaTunnel {
+            agente: "agente-mario".into(),
+            tecnico: "mario".into(),
+            porte: vec![1433, 8080],
+            durata: 3600,
+            destinazioni: vec!["10.0.0.5:1433".parse().unwrap()],
+        };
+        assert_eq!(
+            testo_tunnel(&t, Lingua::Italiano),
+            "agente-mario, agente AI di mario, chiede un tunnel verso le porte 1433, 8080 di questo PC e verso 10.0.0.5:1433, per al massimo 60 minuti"
+        );
+        assert_eq!(
+            testo_tunnel(&t, Lingua::Inglese),
+            "agente-mario, AI agent of mario, asks for a tunnel to ports 1433, 8080 of this PC and to 10.0.0.5:1433, for at most 60 minutes"
+        );
+        t.destinazioni.push("10.0.0.6:8080".parse().unwrap());
+        assert_eq!(
+            testo_tunnel(&t, Lingua::Italiano),
+            "agente-mario, agente AI di mario, chiede un tunnel verso le porte 1433, 8080 di questo PC e verso 10.0.0.5:1433, 10.0.0.6:8080, per al massimo 60 minuti"
+        );
+        assert_eq!(
+            testo_tunnel(&t, Lingua::Inglese),
+            "agente-mario, AI agent of mario, asks for a tunnel to ports 1433, 8080 of this PC and to 10.0.0.5:1433, 10.0.0.6:8080, for at most 60 minutes"
+        );
+        let ipc: RichiestaTunnel =
+            serde_json::from_value(serde_json::to_value(&t).unwrap()).unwrap();
+        assert_eq!(ipc, t);
+        assert_eq!(
+            serde_json::to_value(&t).unwrap()["destinazioni"],
+            json!(["10.0.0.5:1433", "10.0.0.6:8080"])
+        );
+        let vecchio: RichiestaTunnel = serde_json::from_value(json!({
+            "agente": "a", "tecnico": "t", "porte": [1433], "durata": 60
+        }))
+        .unwrap();
+        assert_eq!(vecchio.destinazioni, vec![]);
+        assert!(testo_tunnel(&vecchio, Lingua::Italiano)
+            .ends_with("di questo PC, per al massimo 1 minuto"));
     }
 
     #[test]

@@ -40,12 +40,16 @@ const USO: &str = "uso:
                                lo script va al PC col login: il cliente lo vede intero
                                nella finestra della richiesta, prima di accettare, e il PC
                                esegue solo quello: niente segreti nel testo dello script
-  remotek-cli tunnel <ID> <locale>:<porta> [<locale>:<porta> ...] [--durata <secondi>] [--attesa <secondi>]
+  remotek-cli tunnel <ID> <locale>:[<indirizzo>:]<porta> [...] [--durata <secondi>] [--attesa <secondi>]
                                ogni connessione TCP a 127.0.0.1:<locale> di questa macchina va a
                                127.0.0.1:<porta> del PC, tutte in una sola connessione (ADR-0036);
-                               da 1 a 8 porte da 1 a 65535, locali diverse e porte diverse;
-                               chiede all'API un lasciapassare di tunnel da utente per quelle
-                               porte del PC (durata da 60 a 28800 secondi, 3600 senza
+                               con <indirizzo> (IPv4 scritto per intero, niente nomi, niente
+                               127.x) va a <indirizzo>:<porta> visto dal PC, che lo apre solo se
+                               la configurazione firmata del PC lo elenca (ADR-0037; se no il flusso
+                               e' rifiutato e lo dice su stderr); porte da 1 a 65535, locali
+                               diverse, coppie indirizzo e porta diverse, da 1 a 8 porte del PC
+                               diverse; chiede all'API un lasciapassare di tunnel da utente per
+                               quelle porte del PC (durata da 60 a 28800 secondi, 3600 senza
                                --durata) dopo aver preso le porte locali; il cliente deve
                                accettare (attesa di default 120 s), tranne sul server non
                                presidiato che lascia entrare il tunnel verso quelle porte
@@ -57,7 +61,8 @@ const USO: &str = "uso:
                                finita la durata, 1 per errori di rete o dell'API e quando
                                il PC chiude per altri motivi (il cliente, un'ora senza
                                traffico), 2 per argomenti sbagliati, 126 se il PC non
-                               dichiara il tunnel (va aggiornato; lo dice anche su stderr);
+                               dichiara il tunnel, o con <indirizzo> se non dichiara le
+                               destinazioni (va aggiornato; lo dice anche su stderr);
                                un PC fino al remotek-1.4.9-8 non sa del tunnel: dopo il clic
                                del cliente rifiuta il login e il CLI esce con 1, col
                                messaggio del PC
@@ -116,7 +121,7 @@ fn controlla_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `tunnel <ID> <locale>:<porta> ... [--durata <s>] [--attesa <s>]`.
+/// `tunnel <ID> <locale>:[<indirizzo>:]<porta> ... [--durata <s>] [--attesa <s>]`.
 fn leggi_tunnel(id: &str, resto: &[&str]) -> Result<Comando, String> {
     controlla_id(id)?;
     let (mut durata, mut attesa, mut porte) = (None, 120u64, Vec::new());
@@ -462,12 +467,33 @@ mod tests {
 
     #[test]
     fn il_comando_tunnel() {
-        let porta = |locale, remota| tunnel::Porta { locale, remota };
+        let porta = |locale, remota| tunnel::Porta {
+            locale,
+            indirizzo: std::net::Ipv4Addr::LOCALHOST,
+            remota,
+        };
         assert_eq!(
             leggi(&["tunnel", "123456789", "1433:1433"]),
             Ok(Comando::Tunnel {
                 id: "123456789".into(),
                 porte: vec![porta(1433, 1433)],
+                durata: None,
+                attesa: 120,
+            })
+        );
+        // Verso un'altra macchina vista dal PC (ADR-0037).
+        assert_eq!(
+            leggi(&["tunnel", "123456789", "15433:10.0.0.5:1433", "1433:1433"]),
+            Ok(Comando::Tunnel {
+                id: "123456789".into(),
+                porte: vec![
+                    tunnel::Porta {
+                        locale: 15433,
+                        indirizzo: std::net::Ipv4Addr::new(10, 0, 0, 5),
+                        remota: 1433,
+                    },
+                    porta(1433, 1433)
+                ],
                 durata: None,
                 attesa: 120,
             })
@@ -486,6 +512,8 @@ mod tests {
             &["tunnel", "123456789", "0:1433"],
             &["tunnel", "123456789", "1433:70000"],
             &["tunnel", "123456789", "1433:1433", "2433:1433"],
+            &["tunnel", "123456789", "15433:127.0.0.1:1433"],
+            &["tunnel", "123456789", "15433:sql.cliente.local:1433"],
             &["tunnel", "123456789", "1433:1433", "--durata", "30"],
             &["tunnel", "123456789", "1433:1433", "--durata"],
             &["tunnel", "123456789", "1433:1433", "--attesa", "0"],

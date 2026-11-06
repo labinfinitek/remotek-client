@@ -2306,12 +2306,12 @@ if not re.search(r"pub fn vista_al_cm\(prelogin: bool\) -> bool \{\s*!prelogin\s
 for radice, _, file in os.walk("src"):
     for f in file:
         p = os.path.join(radice, f)
-        if p != N and f.endswith((".rs", ".dart")) and "remotek-agente" in open(p, encoding="utf-8", errors="replace").read():
+        if p != N and f.endswith((".rs", ".dart")) and re.search(r"remotek-agente(?!-destinazioni)", open(p, encoding="utf-8", errors="replace").read()):
             guai.append("%s: la chiave remotek-agente compare fuori da %s" % (p, N))
 for radice, _, file in os.walk("flutter/lib"):
     for f in file:
         p = os.path.join(radice, f)
-        if f.endswith(".dart") and "remotek-agente" in open(p, encoding="utf-8", errors="replace").read():
+        if f.endswith(".dart") and re.search(r"remotek-agente(?!-destinazioni)", open(p, encoding="utf-8", errors="replace").read()):
             guai.append("%s: la chiave remotek-agente compare nell'interfaccia" % p)
 C = "src/server/connection.rs"
 c = codice(C)
@@ -2787,10 +2787,9 @@ fi
 # `TcpStream::connect(&addr)`, `try_port_forward_loop` lo passa a
 # `tunnel::servi_pc`); un login di port forward con un lasciapassare non
 # valido o non di tunnel e' rifiutato, mai ricade su upstream; il PC si
-# collega solo a 127.0.0.1 e alle porte del lasciapassare
+# collega a 127.0.0.1 solo alle porte del lasciapassare
 # (`tunnel::indirizzo_ammesso`, unico produttore degli indirizzi di
-# `Azione::Collega`; l'indirizzo dell'apertura, per ADR-0037, oggi vale solo
-# 127.0.0.1); un tunnel nel login del terminale non vale; handle_hash
+# `Azione::Collega`; le altre macchine, ADR-0037, solo dalla sez. 37); un tunnel nel login del terminale non vale; handle_hash
 # manda il lasciapassare solo per il port forward di remotek-cli e il PC lo
 # toglie solo dal login del tunnel (host vuoto e porta 0), mai dal port
 # forward dei tecnici con la "Password del SO"; il PC
@@ -2819,10 +2818,10 @@ if not re.search(r"script_al_login::al_login\(lasciapassare, \|l\| \{\s*crate::r
 T = "src/remotek/tunnel.rs"
 # Senza i test, che si collegano anche altrove.
 t = codice(T).split("#[cfg(test)]")[0]
-# ADR-0037: l'apertura porta l'indirizzo, ma oggi vale solo 127.0.0.1.
-if not re.search(r"pub fn indirizzo_ammesso\(\s*indirizzo: Ipv4Addr,\s*porta: u16,\s*ammesse: &\[u16\],\s*\) -> Result<SocketAddr, ErroreFlusso> \{\s*if indirizzo != Ipv4Addr::LOCALHOST \{\s*return Err\(ErroreFlusso::IndirizzoNonAmmesso\);\s*\}\s*if porta == 0 \|\| !ammesse\.contains\(&porta\) \{\s*return Err\(ErroreFlusso::PortaNonAmmessa\);\s*\}\s*Ok\(SocketAddr::from\(\(Ipv4Addr::LOCALHOST, porta\)\)\)\s*\}", t):
+# ADR-0037: un indirizzo diverso da 127.0.0.1 lo controlla la sez. 37.
+if not re.search(r"pub fn indirizzo_ammesso\(\s*indirizzo: Ipv4Addr,\s*porta: u16,\s*ammesse: &\[u16\],\s*destinazioni: &\[SocketAddrV4\],\s*\) -> Result<SocketAddr, ErroreFlusso> \{\s*if indirizzo != Ipv4Addr::LOCALHOST \{[\s\S]*?\n    \}\n\s*if porta == 0 \|\| !ammesse\.contains\(&porta\) \{\s*return Err\(ErroreFlusso::PortaNonAmmessa\);\s*\}\s*Ok\(SocketAddr::from\(\(Ipv4Addr::LOCALHOST, porta\)\)\)\s*\}", t):
     guai.append("%s: indirizzo_ammesso non da' solo 127.0.0.1 e le porte del lasciapassare" % T)
-if len(re.findall(r"Azione::Collega \{ flusso, indirizzo \}", t)) != 2 or not re.search(r"match indirizzo_ammesso\(indirizzo, porta, porte\) \{\s*Ok\(indirizzo\) => \{\s*self\.flussi\.insert\(flusso, Conto::nuovo\(\)\);\s*Ok\(Azione::Collega \{ flusso, indirizzo \}\)", t):
+if len(re.findall(r"Azione::Collega \{ flusso, indirizzo \}", t)) != 2 or not re.search(r"match indirizzo_ammesso\(indirizzo, porta, porte, destinazioni\) \{\s*Ok\(indirizzo\) => \{\s*self\.flussi\.insert\(flusso, Conto::nuovo\(\)\);\s*Ok\(Azione::Collega \{ flusso, indirizzo \}\)", t):
     guai.append("%s: Azione::Collega nasce fuori da indirizzo_ammesso" % T)
 if len(re.findall(r"TcpStream::connect\(", t)) != 1 or "TcpStream::connect(indirizzo)" not in t:
     guai.append("%s: il PC si collega con altro che l'indirizzo di Azione::Collega" % T)
@@ -2853,6 +2852,89 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_tunnel"
+fi
+
+# --- 37. Il tunnel verso altre macchine solo dal custom.txt firmato --------
+# ADR-0037: un indirizzo diverso da 127.0.0.1 il PC lo raggiunge solo se la
+# chiave `remotek-agente-destinazioni` del custom.txt firmato lo elenca, con
+# la porta, e la porta sta fra quelle del lasciapassare. La costante sta su
+# una riga (lo strumento di firma la legge cosi'); la chiave si legge solo
+# da HARD_SETTINGS (lock non preso = malformata) e da nessun altro punto del
+# codice; `indirizzo_ammesso` ammette un indirizzo diverso da 127.0.0.1 solo
+# dalle destinazioni della sessione (`destinazioni::della_sessione`, che il
+# PC prende all'autorizzazione in `del_lasciapassare` e passa al ciclo da
+# `servi_pc`); il PC si collega solo da `servi_pc`, con l'indirizzo di
+# `Azione::Collega`, senza nomi ne' risoluzioni; la chiave malformata da' la
+# riga ERROR da `verifica_login`; il PC dichiara `remotek_tunnel_destinazioni`.
+esito_destinazioni=$(python3 - <<'PY'
+import os, re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+D = "src/remotek/destinazioni.rs"
+if 'pub const CHIAVE_DESTINAZIONI: &str = "remotek-agente-destinazioni";' not in open(D, encoding="utf-8").read().splitlines():
+    guai.append("%s: manca la riga `pub const CHIAVE_DESTINAZIONI: &str = \"remotek-agente-destinazioni\";` (lo strumento di firma la legge cosi')" % D)
+d = codice(D).split("#[cfg(test)]")[0]
+if not re.search(r"pub fn destinazioni\(\) -> Destinazioni \{\s*match HARD_SETTINGS\.read\(\) \{\s*Ok\(fisse\) => destinazioni_da\(&fisse\),\s*Err\(_\) => Destinazioni::Malformato,\s*\}\s*\}", d):
+    guai.append("%s: le destinazioni non si leggono piu' solo da HARD_SETTINGS, o il lock non preso non vale come malformato" % D)
+if d.count("CHIAVE_DESTINAZIONI") != 3 or "let Some(valore) = fisse.get(CHIAVE_DESTINAZIONI) else {" not in d:
+    guai.append("%s: la chiave delle destinazioni si legge fuori da destinazioni_da" % D)
+if not re.search(r"pub fn della_sessione\(d: &Destinazioni, porte: &\[u16\]\) -> Vec<SocketAddrV4> \{\s*match d \{\s*Destinazioni::Elenco\(voci\) => voci\s*\.iter\(\)\s*\.filter\(\|v\| porte\.contains\(&v\.port\(\)\)\)\s*\.copied\(\)\s*\.collect\(\),\s*Destinazioni::Assente \| Destinazioni::Malformato => Vec::new\(\),\s*\}\s*\}", d):
+    guai.append("%s: della_sessione non da' piu' solo le voci elencate con una porta del lasciapassare" % D)
+if not re.search(r"let vietato =\s*ip\.is_loopback\(\) \|\| ip\.octets\(\)\[0\] == 0 \|\| ip\.is_broadcast\(\) \|\| ip\.is_multicast\(\);\s*\(ip\.to_string\(\) == testo && !vietato\)\.then_some\(ip\)", d):
+    guai.append("%s: l'indirizzo di una destinazione non e' piu' un IPv4 canonico fuori da 127/8, 0/8, broadcast e multicast" % D)
+for radice, _, file in os.walk("src"):
+    for f in file:
+        p = os.path.join(radice, f)
+        if p == D or not f.endswith((".rs", ".dart")):
+            continue
+        testo = open(p, encoding="utf-8", errors="replace").read()
+        if "remotek-agente-destinazioni" in testo or re.search(r"\bCHIAVE_DESTINAZIONI\b", testo):
+            guai.append("%s: la chiave delle destinazioni compare fuori da %s" % (p, D))
+for radice, _, file in os.walk("flutter/lib"):
+    for f in file:
+        p = os.path.join(radice, f)
+        if f.endswith(".dart") and "remotek-agente-destinazioni" in open(p, encoding="utf-8", errors="replace").read():
+            guai.append("%s: la chiave delle destinazioni compare nell'interfaccia" % p)
+T = "src/remotek/tunnel.rs"
+t = codice(T).split("#[cfg(test)]")[0]
+if not re.search(r"pub fn indirizzo_ammesso\(\s*indirizzo: Ipv4Addr,\s*porta: u16,\s*ammesse: &\[u16\],\s*destinazioni: &\[SocketAddrV4\],\s*\) -> Result<SocketAddr, ErroreFlusso> \{\s*if indirizzo != Ipv4Addr::LOCALHOST \{\s*let chiesta = SocketAddrV4::new\(indirizzo, porta\);\s*return if destinazioni\.contains\(&chiesta\) && ammesse\.contains\(&porta\) \{\s*Ok\(SocketAddr::V4\(chiesta\)\)\s*\} else \{\s*Err\(ErroreFlusso::IndirizzoNonAmmesso\)\s*\};\s*\}\s*if porta == 0 \|\| !ammesse\.contains\(&porta\) \{\s*return Err\(ErroreFlusso::PortaNonAmmessa\);\s*\}\s*Ok\(SocketAddr::from\(\(Ipv4Addr::LOCALHOST, porta\)\)\)\s*\}", t):
+    guai.append("%s: indirizzo_ammesso ammette un indirizzo diverso da 127.0.0.1 fuori dalle destinazioni della sessione" % T)
+if not re.search(r"let Lato::Pc \{\s*porte,\s*destinazioni,\s*\} = &self\.lato\s*else \{", t) or t.count("indirizzo_ammesso(") != 2:
+    guai.append("%s: lo stato del PC non passa a indirizzo_ammesso le destinazioni del suo lato" % T)
+if not re.search(r"pub fn del_lasciapassare\(valido: Option<&Valido>\) -> Option<TunnelPc> \{\s*del_lasciapassare_con\(valido, &super::destinazioni::destinazioni\(\)\)\s*\}", t) or "destinazioni: della_sessione(d, porte)," not in t:
+    guai.append("%s: il tunnel del PC non prende le destinazioni della sessione dalla chiave firmata all'autorizzazione" % T)
+if not re.search(r"let \(porte, destinazioni\) = \(tunnel\.porte\.clone\(\), tunnel\.destinazioni\.clone\(\)\);\s*let r = ciclo\(\s*&mut conn,\s*Apertura::Pc \{\s*porte,\s*destinazioni,\s*collega,\s*\},", t):
+    guai.append("%s: servi_pc non passa al ciclo le destinazioni del tunnel autorizzato" % T)
+if t.count("Apertura::Pc {") != 2:
+    guai.append("%s: Apertura::Pc nasce fuori da servi_pc" % T)
+if len(re.findall(r"TcpStream::connect\(", t)) != 1 or not re.search(r"pub async fn servi_pc\([\s\S]*hbb_common::timeout\(3000, TcpStream::connect\(indirizzo\)\)[\s\S]*\n\}\n", t):
+    guai.append("%s: il PC si collega fuori dall'unico TcpStream::connect di servi_pc" % T)
+for f in (T, D):
+    for vietato in ("lookup_host", "to_socket_addrs", "ToSocketAddrs", "dns"):
+        if vietato in codice(f).split("#[cfg(test)]")[0]:
+            guai.append("%s: %s: il tunnel non risolve nomi" % (f, vietato))
+if not re.search(r"pub fn descrizione\(v: &Valido\) -> String \{\s*descrizione_con\(v, &super::destinazioni::destinazioni\(\)\)\s*\}", t) or ".chain(della_sessione(d, porte))" not in t:
+    guai.append("%s: la voce del CM non mostra le destinazioni della sessione" % T)
+S = "src/remotek/scelta_terminale.rs"
+if not re.search(r"destinazioni: super::destinazioni::della_sessione\(\s*&super::destinazioni::destinazioni\(\),\s*porte,\s*\),", codice(S)):
+    guai.append("%s: la finestra della richiesta non mostra le destinazioni della sessione" % S)
+L = "src/remotek/lasciapassare.rs"
+if not re.search(r"super::non_presidiato::segnala_porte_malformate\(\);\s*super::destinazioni::segnala_malformate\(&v\);", codice(L)):
+    guai.append("%s: verifica_login non segnala la chiave delle destinazioni malformata" % L)
+DI = "src/remotek/dichiarazione.rs"
+di = codice(DI)
+if 'pub const CHIAVE_TUNNEL_DESTINAZIONI: &str = "remotek_tunnel_destinazioni";' not in di or "m.insert(CHIAVE_TUNNEL_DESTINAZIONI.to_owned(), Value::Bool(true));" not in di:
+    guai.append("%s: il PC non dichiara remotek_tunnel_destinazioni" % DI)
+print("\n".join(guai))
+PY
+) || esito_destinazioni="${esito_destinazioni:-}"$'\n'"controllo delle destinazioni del tunnel non eseguito: python3 terminato con errore"
+if [ -z "$esito_destinazioni" ]; then
+  ok "tunnel verso altre macchine solo dalle destinazioni del custom.txt firmato (HARD_SETTINGS, costante su una riga) con una porta del lasciapassare, nessun nome, un solo collegamento del PC (ADR-0037)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_destinazioni"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

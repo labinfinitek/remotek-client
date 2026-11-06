@@ -8,17 +8,22 @@
 //! cifratura e i confini dei messaggi). Lo stesso codice gira sui due capi.
 //!
 //! Un flusso e' una connessione TCP accettata dal CLI su `127.0.0.1`, verso
-//! una porta del PC. L'apertura porta anche l'indirizzo IPv4 di destinazione
-//! (ADR-0037, per un passo dopo): oggi il CLI manda sempre `127.0.0.1` e il PC
-//! si collega solo a `127.0.0.1` ([`indirizzo_ammesso`]),
-//! solo alle porte del lasciapassare. Ogni verso di ogni flusso ha il suo
+//! un indirizzo IPv4 e una porta visti dal PC. Il PC si collega a
+//! `127.0.0.1` solo alle porte del lasciapassare, e a un'altra macchina solo
+//! se la coppia indirizzo e porta sta fra le destinazioni della sessione
+//! (ADR-0037, [`indirizzo_ammesso`]): quelle che il `custom.txt` firmato del
+//! PC elenca, con una porta del lasciapassare
+//! (src/remotek/destinazioni.rs). Mai un nome, mai una risoluzione DNS. Ogni verso di ogni flusso ha il suo
 //! credito: chi manda non supera i byte che l'altro capo gli ha concesso
 //! ([`FINESTRA`] all'inizio), e il capo che riceve concede di nuovo solo dopo
 //! aver scritto sul socket locale. Cosi' un flusso lento non ferma gli altri
 //! e nessun capo tiene in memoria piu' della finestra per flusso. Un
 //! messaggio malformato o un credito superato chiude la connessione.
 
-use super::lasciapassare::{Capacita, Valido};
+use super::{
+    destinazioni::{della_sessione, Destinazioni},
+    lasciapassare::{Capacita, Valido},
+};
 use hbb_common::{
     bytes::{BufMut, Bytes, BytesMut},
     log,
@@ -33,11 +38,11 @@ use hbb_common::{
     tokio_util::codec::{BytesCodec, Framed},
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt,
     future::Future,
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     pin::Pin,
     time::Duration,
 };
@@ -66,7 +71,7 @@ const TIPO_FINE: u8 = 6;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Messaggio {
     /// Dal controllante: apre il flusso verso `indirizzo`:`porta` visti dal
-    /// PC. L'indirizzo c'e' per ADR-0037; oggi vale solo `127.0.0.1`.
+    /// PC: `127.0.0.1` o una destinazione della sessione (ADR-0037).
     Apri {
         flusso: u32,
         indirizzo: Ipv4Addr,
@@ -91,7 +96,8 @@ pub enum ErroreFlusso {
     CollegamentoFallito = 2,
     /// Il socket locale ha dato errore.
     Interrotto = 3,
-    /// Un indirizzo di destinazione diverso da `127.0.0.1` (ADR-0037).
+    /// Un indirizzo diverso da `127.0.0.1` che non sta, con la porta, fra le
+    /// destinazioni della sessione (ADR-0037).
     IndirizzoNonAmmesso = 4,
 }
 
@@ -248,15 +254,24 @@ pub fn decodifica(b: Bytes) -> Result<Messaggio, Malformato> {
 }
 
 /// L'indirizzo a cui il PC si collega per un flusso, da quello chiesto
-/// nell'apertura: solo `127.0.0.1` (mai un nome, mai `localhost`) con una
-/// porta del lasciapassare. Altrimenti l'errore del flusso.
+/// nell'apertura (mai un nome, mai `localhost`, mai una risoluzione DNS):
+/// `127.0.0.1` con una porta del lasciapassare; un altro indirizzo solo se la
+/// coppia indirizzo e porta sta fra le `destinazioni` della sessione
+/// (`destinazioni::della_sessione`, ADR-0037), e la porta fra quelle del
+/// lasciapassare. Altrimenti l'errore del flusso.
 pub fn indirizzo_ammesso(
     indirizzo: Ipv4Addr,
     porta: u16,
     ammesse: &[u16],
+    destinazioni: &[SocketAddrV4],
 ) -> Result<SocketAddr, ErroreFlusso> {
     if indirizzo != Ipv4Addr::LOCALHOST {
-        return Err(ErroreFlusso::IndirizzoNonAmmesso);
+        let chiesta = SocketAddrV4::new(indirizzo, porta);
+        return if destinazioni.contains(&chiesta) && ammesse.contains(&porta) {
+            Ok(SocketAddr::V4(chiesta))
+        } else {
+            Err(ErroreFlusso::IndirizzoNonAmmesso)
+        };
     }
     if porta == 0 || !ammesse.contains(&porta) {
         return Err(ErroreFlusso::PortaNonAmmessa);
@@ -284,8 +299,12 @@ pub fn durata_valida(durata: i64) -> bool {
 pub enum Lato {
     /// `remotek-cli tunnel`: apre i flussi.
     Controllante,
-    /// Il PC: accetta i flussi verso le porte del lasciapassare.
-    Pc { porte: Vec<u16> },
+    /// Il PC: accetta i flussi verso le porte del lasciapassare su
+    /// `127.0.0.1` e verso le destinazioni della sessione.
+    Pc {
+        porte: Vec<u16>,
+        destinazioni: Vec<SocketAddrV4>,
+    },
 }
 
 /// Il conto di un flusso aperto.
@@ -434,7 +453,11 @@ impl Stato {
         indirizzo: Ipv4Addr,
         porta: u16,
     ) -> Result<Azione, Malformato> {
-        let Lato::Pc { porte } = &self.lato else {
+        let Lato::Pc {
+            porte,
+            destinazioni,
+        } = &self.lato
+        else {
             return Err(Malformato("apertura dal PC"));
         };
         if flusso <= self.ultimo {
@@ -444,7 +467,7 @@ impl Stato {
             return Err(Malformato("troppi flussi"));
         }
         self.ultimo = flusso;
-        match indirizzo_ammesso(indirizzo, porta, porte) {
+        match indirizzo_ammesso(indirizzo, porta, porte, destinazioni) {
             Ok(indirizzo) => {
                 self.flussi.insert(flusso, Conto::nuovo());
                 Ok(Azione::Collega { flusso, indirizzo })
@@ -543,12 +566,14 @@ pub type Collega<S> =
 
 /// Da dove vengono i flussi.
 pub enum Apertura<S> {
-    /// Il CLI: le connessioni accettate sulle porte locali, con la porta del
-    /// PC a cui vanno.
-    Controllante(mpsc::UnboundedReceiver<(u16, S)>),
-    /// Il PC: le porte del lasciapassare e come collegarsi.
+    /// Il CLI: le connessioni accettate sulle porte locali, con l'indirizzo
+    /// e la porta, visti dal PC, a cui vanno.
+    Controllante(mpsc::UnboundedReceiver<(SocketAddrV4, S)>),
+    /// Il PC: le porte del lasciapassare, le destinazioni della sessione e
+    /// come collegarsi.
     Pc {
         porte: Vec<u16>,
+        destinazioni: Vec<SocketAddrV4>,
         collega: Collega<S>,
     },
 }
@@ -605,6 +630,49 @@ pub struct Resoconto {
     pub byte_mandati: u64,
     /// Byte di dati ricevuti dall'altro capo.
     pub byte_ricevuti: u64,
+    /// Flussi e byte per destinazione usata (anche `127.0.0.1:<porta>`).
+    pub destinazioni: BTreeMap<SocketAddr, Uso>,
+}
+
+/// Flussi e byte di una destinazione, come i totali di [`Resoconto`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Uso {
+    pub flussi: u64,
+    pub byte_mandati: u64,
+    pub byte_ricevuti: u64,
+}
+
+impl Resoconto {
+    fn uso(&mut self, destinazione: SocketAddr) -> &mut Uso {
+        self.destinazioni.entry(destinazione).or_default()
+    }
+}
+
+/// Flussi e byte di ogni destinazione usata, per la riga INFO di chiusura del
+/// PC: "127.0.0.1:1433 (flussi 2, byte al controllante 10, byte dal
+/// controllante 5), 10.0.0.5:1433 (...)". Niente contenuto.
+pub fn per_destinazione(r: &Resoconto) -> String {
+    if r.destinazioni.is_empty() {
+        return "nessuna".to_owned();
+    }
+    r.destinazioni
+        .iter()
+        .map(|(d, u)| {
+            format!(
+                "{} (flussi {}, byte al controllante {}, byte dal controllante {})",
+                d, u.flussi, u.byte_mandati, u.byte_ricevuti
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Il testo su stderr del CLI per un flusso che il PC rifiuta con
+/// [`ErroreFlusso::IndirizzoNonAmmesso`].
+pub fn avviso_destinazione_rifiutata(destinazione: SocketAddr) -> String {
+    format!(
+        "remotek-cli: il PC non ammette la destinazione {destinazione}: manca nella configurazione firmata del server"
+    )
 }
 
 /// Cosa dicono i compiti dei socket locali al ciclo.
@@ -617,8 +685,9 @@ enum Evento<S> {
 }
 
 /// Il socket locale di un flusso: chi scrive, chi riceve il credito, i
-/// compiti da fermare.
+/// compiti da fermare, la destinazione vista dal PC.
 struct Locale {
+    destinazione: SocketAddr,
     scrittura: Option<mpsc::UnboundedSender<Bytes>>,
     credito: Option<mpsc::UnboundedSender<u32>>,
     lettura: Option<AbortHandle>,
@@ -628,8 +697,9 @@ struct Locale {
 }
 
 impl Locale {
-    fn in_collegamento(compito: AbortHandle) -> Self {
+    fn in_collegamento(compito: AbortHandle, destinazione: SocketAddr) -> Self {
         Self {
+            destinazione,
             scrittura: None,
             credito: None,
             lettura: None,
@@ -648,7 +718,12 @@ impl Locale {
 }
 
 /// I compiti di lettura e scrittura del socket `s` del flusso.
-fn avvia_socket<S>(flusso: u32, s: S, eventi: &mpsc::UnboundedSender<Evento<S>>) -> Locale
+fn avvia_socket<S>(
+    flusso: u32,
+    s: S,
+    destinazione: SocketAddr,
+    eventi: &mpsc::UnboundedSender<Evento<S>>,
+) -> Locale
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -700,6 +775,7 @@ where
         }
     });
     Locale {
+        destinazione,
         scrittura: Some(tx_dati),
         credito: Some(tx_credito),
         lettura: Some(leggi.abort_handle()),
@@ -734,7 +810,18 @@ where
 {
     let (mut nuovi, collega, lato) = match apertura {
         Apertura::Controllante(rx) => (Some(rx), None, Lato::Controllante),
-        Apertura::Pc { porte, collega } => (None, Some(collega), Lato::Pc { porte }),
+        Apertura::Pc {
+            porte,
+            destinazioni,
+            collega,
+        } => (
+            None,
+            Some(collega),
+            Lato::Pc {
+                porte,
+                destinazioni,
+            },
+        ),
     };
     let pc = matches!(lato, Lato::Pc { .. });
     let mut stato = Stato::nuovo(lato);
@@ -745,6 +832,7 @@ where
         flussi: 0,
         byte_mandati: 0,
         byte_ricevuti: 0,
+        destinazioni: BTreeMap::new(),
     };
     let mut ultimo_traffico = Instant::now();
     tokio::pin!(fine);
@@ -773,6 +861,7 @@ where
                 match azione {
                     Azione::Collega { flusso, indirizzo } => {
                         r.flussi += 1;
+                        r.uso(indirizzo).flussi += 1;
                         // Il collegamento non ferma il ciclo: lo fa un compito.
                         let futuro = collega.as_ref().map(|c| c(indirizzo));
                         let ev = tx_eventi.clone();
@@ -783,7 +872,7 @@ where
                             };
                             ev.send(Evento::Collegato(flusso, esito)).ok();
                         });
-                        locali.insert(flusso, Locale::in_collegamento(compito.abort_handle()));
+                        locali.insert(flusso, Locale::in_collegamento(compito.abort_handle(), indirizzo));
                     }
                     Azione::Rifiuta { flusso, errore } => {
                         log::warn!("tunnel: flusso {} rifiutato: {}", flusso, errore);
@@ -792,6 +881,7 @@ where
                     Azione::Scrivi { flusso, dati } => {
                         r.byte_ricevuti += dati.len() as u64;
                         if let Some(l) = locali.get_mut(&flusso) {
+                            r.uso(l.destinazione).byte_ricevuti += dati.len() as u64;
                             match &l.scrittura {
                                 Some(tx) => {
                                     tx.send(dati).ok();
@@ -815,6 +905,10 @@ where
                     Azione::Interrotto { flusso, errore } => {
                         log::debug!("tunnel: flusso {} chiuso dall'altro capo: {}", flusso, errore);
                         if let Some(l) = locali.remove(&flusso) {
+                            // Il CLI dice all'agente perche' (ADR-0037).
+                            if !pc && errore == ErroreFlusso::IndirizzoNonAmmesso {
+                                eprintln!("{}", avviso_destinazione_rifiutata(l.destinazione));
+                            }
                             l.ferma();
                         }
                     }
@@ -826,6 +920,9 @@ where
                 Evento::Letti(flusso, dati) => {
                     if stato.manda(flusso, dati.len() as u32) {
                         r.byte_mandati += dati.len() as u64;
+                        if let Some(l) = locali.get(&flusso) {
+                            r.uso(l.destinazione).byte_mandati += dati.len() as u64;
+                        }
                         da_mandare.push(Messaggio::Dati { flusso, dati });
                     }
                 }
@@ -850,7 +947,7 @@ where
                 Evento::Collegato(flusso, Ok(s)) => {
                     // Il flusso puo' essere gia' finito (Errore dell'altro capo).
                     if let Some(attesa) = locali.remove(&flusso) {
-                        let mut l = avvia_socket(flusso, s, &tx_eventi);
+                        let mut l = avvia_socket(flusso, s, attesa.destinazione, &tx_eventi);
                         if let Some(tx) = &l.scrittura {
                             for dati in attesa.in_attesa {
                                 tx.send(dati).ok();
@@ -871,16 +968,17 @@ where
                     locali.remove(&flusso);
                 }
             },
-            Some((porta, s)) = async { match nuovi.as_mut() { Some(rx) => rx.recv().await, None => None } } => {
+            Some((destinazione, s)) = async { match nuovi.as_mut() { Some(rx) => rx.recv().await, None => None } } => {
                 match stato.apri() {
                     Some(flusso) => {
                         r.flussi += 1;
-                        locali.insert(flusso, avvia_socket(flusso, s, &tx_eventi));
-                        // Oggi sempre 127.0.0.1 del PC (ADR-0037).
+                        r.uso(SocketAddr::V4(destinazione)).flussi += 1;
+                        locali.insert(flusso, avvia_socket(flusso, s, SocketAddr::V4(destinazione), &tx_eventi));
+                        // L'indirizzo della riga di comando (ADR-0037).
                         da_mandare.push(Messaggio::Apri {
                             flusso,
-                            indirizzo: Ipv4Addr::LOCALHOST,
-                            porta,
+                            indirizzo: *destinazione.ip(),
+                            porta: destinazione.port(),
                         });
                     }
                     // Oltre il limite il socket si chiude subito.
@@ -968,14 +1066,21 @@ pub struct TunnelPc {
     pub agente: String,
     pub tecnico: String,
     pub porte: Vec<u16>,
+    /// Le destinazioni esterne della sessione (`destinazioni::della_sessione`).
+    pub destinazioni: Vec<SocketAddrV4>,
     pub durata: Duration,
     /// L'autorizzazione: la durata si conta da qui.
     pub inizio: Instant,
 }
 
 /// Il tunnel della connessione all'autorizzazione: solo col lasciapassare
-/// valido di tunnel.
+/// valido di tunnel, con le destinazioni della sessione dalla chiave del
+/// `custom.txt` firmato letta qui.
 pub fn del_lasciapassare(valido: Option<&Valido>) -> Option<TunnelPc> {
+    del_lasciapassare_con(valido, &super::destinazioni::destinazioni())
+}
+
+fn del_lasciapassare_con(valido: Option<&Valido>, d: &Destinazioni) -> Option<TunnelPc> {
     let v = valido?;
     let Capacita::Tunnel { porte, durata } = &v.capacita else {
         return None;
@@ -984,6 +1089,7 @@ pub fn del_lasciapassare(valido: Option<&Valido>) -> Option<TunnelPc> {
         agente: v.agente.clone(),
         tecnico: v.tecnico.clone(),
         porte: porte.clone(),
+        destinazioni: della_sessione(d, porte),
         durata: Duration::from_secs(u64::from(*durata)),
         inizio: Instant::now(),
     })
@@ -1033,12 +1139,19 @@ pub fn login_port_forward(
     }
 }
 
-/// Cosa mostra il CM come "Port Forward" della connessione.
+/// Cosa mostra il CM come "Port Forward" della connessione: le porte su
+/// `127.0.0.1`, poi le destinazioni della sessione.
 pub fn descrizione(v: &Valido) -> String {
+    descrizione_con(v, &super::destinazioni::destinazioni())
+}
+
+fn descrizione_con(v: &Valido, d: &Destinazioni) -> String {
     match &v.capacita {
         Capacita::Tunnel { porte, .. } => porte
             .iter()
-            .map(|p| format!("127.0.0.1:{p}"))
+            .map(|p| SocketAddrV4::new(Ipv4Addr::LOCALHOST, *p))
+            .chain(della_sessione(d, porte))
+            .map(|a| a.to_string())
             .collect::<Vec<_>>()
             .join(", "),
         _ => String::new(),
@@ -1093,7 +1206,11 @@ pub async fn servi_pc(
     controllante: &str,
     test_delay_in_volo: bool,
 ) -> hbb_common::ResultType<()> {
-    log::info!("tunnel dell'agente: porte {:?}", tunnel.porte);
+    log::info!(
+        "tunnel dell'agente: porte {:?}, destinazioni esterne {:?}",
+        tunnel.porte,
+        tunnel.destinazioni
+    );
     let inizio = chrono::Local::now();
     let mut hbbs_rx = crate::hbbs_http::sync::signal_receiver();
     let scadenza = tunnel.inizio + tunnel.durata;
@@ -1127,16 +1244,20 @@ pub async fn servi_pc(
         stream,
         test_delay_in_volo,
     };
-    let porte = tunnel.porte.clone();
+    let (porte, destinazioni) = (tunnel.porte.clone(), tunnel.destinazioni.clone());
     let r = ciclo(
         &mut conn,
-        Apertura::Pc { porte, collega },
+        Apertura::Pc {
+            porte,
+            destinazioni,
+            collega,
+        },
         fine,
         Some(Duration::from_secs(3600)),
     )
     .await;
     log::info!(
-        "tunnel chiuso: agente {}, tecnico {}, controllante {}, porte {:?}, inizio {}, fine {}, flussi {}, byte al controllante {}, byte dal controllante {}, motivo: {}",
+        "tunnel chiuso: agente {}, tecnico {}, controllante {}, porte {:?}, inizio {}, fine {}, flussi {}, byte al controllante {}, byte dal controllante {}, per destinazione: {}, motivo: {}",
         tunnel.agente,
         tunnel.tecnico,
         controllante,
@@ -1146,6 +1267,7 @@ pub async fn servi_pc(
         r.flussi,
         r.byte_mandati,
         r.byte_ricevuti,
+        per_destinazione(&r),
         r.motivo
     );
     hbb_common::bail!("tunnel: {}", r.motivo)
@@ -1289,45 +1411,55 @@ mod tests {
         }
     }
 
+    fn d(s: &str) -> SocketAddrV4 {
+        s.parse().unwrap()
+    }
+
     #[test]
-    fn il_pc_si_collega_solo_a_127_0_0_1_e_alle_porte_ammesse() {
+    fn il_pc_si_collega_a_127_0_0_1_e_alle_porte_ammesse() {
         let ammesse = [1433, 8080];
         let locale = Ipv4Addr::LOCALHOST;
         assert_eq!(
-            indirizzo_ammesso(locale, 1433, &ammesse),
+            indirizzo_ammesso(locale, 1433, &ammesse, &[]),
             Ok("127.0.0.1:1433".parse().unwrap())
         );
         assert_eq!(
-            indirizzo_ammesso(locale, 8080, &ammesse),
+            indirizzo_ammesso(locale, 8080, &ammesse, &[]),
             Ok("127.0.0.1:8080".parse().unwrap())
         );
         for porta in [0, 22, 1434, 3389, 65535] {
             assert_eq!(
-                indirizzo_ammesso(locale, porta, &ammesse),
+                indirizzo_ammesso(locale, porta, &ammesse, &[]),
                 Err(ErroreFlusso::PortaNonAmmessa),
                 "{porta}"
             );
         }
         assert_eq!(
-            indirizzo_ammesso(locale, 1433, &[]),
+            indirizzo_ammesso(locale, 1433, &[], &[]),
             Err(ErroreFlusso::PortaNonAmmessa)
         );
-        // Un altro indirizzo, anche con una porta ammessa: mai (ADR-0037).
-        for altro in [
-            Ipv4Addr::new(127, 0, 0, 2),
-            Ipv4Addr::UNSPECIFIED,
-            Ipv4Addr::new(192, 168, 1, 10),
-            Ipv4Addr::BROADCAST,
-        ] {
-            assert_eq!(
-                indirizzo_ammesso(altro, 1433, &ammesse),
-                Err(ErroreFlusso::IndirizzoNonAmmesso),
-                "{altro}"
-            );
+        // Un altro indirizzo senza destinazioni (chiave assente o
+        // malformata): mai, anche con una porta ammessa (ADR-0037).
+        for destinazioni in [Destinazioni::Assente, Destinazioni::Malformato] {
+            let della = della_sessione(&destinazioni, &ammesse);
+            for altro in [
+                Ipv4Addr::new(127, 0, 0, 2),
+                Ipv4Addr::UNSPECIFIED,
+                Ipv4Addr::new(10, 0, 0, 5),
+                Ipv4Addr::new(192, 168, 1, 10),
+                Ipv4Addr::BROADCAST,
+            ] {
+                assert_eq!(
+                    indirizzo_ammesso(altro, 1433, &ammesse, &della),
+                    Err(ErroreFlusso::IndirizzoNonAmmesso),
+                    "{altro}"
+                );
+            }
         }
         // Lo stesso nello stato: la porta non ammessa e' un errore del flusso.
         let mut pc = Stato::nuovo(Lato::Pc {
             porte: ammesse.to_vec(),
+            destinazioni: vec![],
         });
         assert_eq!(
             pc.ricevi(Messaggio::Apri {
@@ -1352,6 +1484,103 @@ mod tests {
             })
         );
         assert_eq!(pc.aperti(), 1);
+    }
+
+    /// Un altro indirizzo: solo se elencato nella chiave firmata, con una
+    /// porta del lasciapassare (ADR-0037).
+    #[test]
+    fn un_altro_indirizzo_solo_se_elencato() {
+        let chiave = Destinazioni::Elenco(
+            [d("10.0.0.5:1433"), d("10.0.0.5:5432"), d("10.0.0.6:8080")]
+                .into_iter()
+                .collect(),
+        );
+        let ammesse = [1433, 8080];
+        let della = della_sessione(&chiave, &ammesse);
+        assert_eq!(della, vec![d("10.0.0.5:1433"), d("10.0.0.6:8080")]);
+        let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+        // Voce elencata con porta del lasciapassare.
+        assert_eq!(
+            indirizzo_ammesso(ip("10.0.0.5"), 1433, &ammesse, &della),
+            Ok("10.0.0.5:1433".parse().unwrap())
+        );
+        assert_eq!(
+            indirizzo_ammesso(ip("10.0.0.6"), 8080, &ammesse, &della),
+            Ok("10.0.0.6:8080".parse().unwrap())
+        );
+        // Voce elencata con porta fuori dal lasciapassare: anche se la
+        // passasse chi chiama, non vale.
+        let tutte = [d("10.0.0.5:5432")];
+        for destinazioni in [&della[..], &tutte[..]] {
+            assert_eq!(
+                indirizzo_ammesso(ip("10.0.0.5"), 5432, &ammesse, destinazioni),
+                Err(ErroreFlusso::IndirizzoNonAmmesso)
+            );
+        }
+        // Voce non elencata: altro indirizzo, o altra porta dell'indirizzo.
+        for (altro, porta) in [
+            ("10.0.0.7", 1433),
+            ("10.0.0.5", 8080),
+            ("10.0.0.6", 1433),
+            ("127.0.0.2", 1433),
+            ("0.0.0.0", 1433),
+        ] {
+            assert_eq!(
+                indirizzo_ammesso(ip(altro), porta, &ammesse, &della),
+                Err(ErroreFlusso::IndirizzoNonAmmesso),
+                "{altro}:{porta}"
+            );
+        }
+        // 127.0.0.1 resta com'era.
+        assert_eq!(
+            indirizzo_ammesso(Ipv4Addr::LOCALHOST, 1433, &ammesse, &della),
+            Ok("127.0.0.1:1433".parse().unwrap())
+        );
+        // Lo stato del PC: Collega verso 10.0.0.5:1433 solo per la voce
+        // elencata.
+        let mut pc = Stato::nuovo(Lato::Pc {
+            porte: ammesse.to_vec(),
+            destinazioni: della.clone(),
+        });
+        let apri = |flusso, indirizzo: &str, porta| Messaggio::Apri {
+            flusso,
+            indirizzo: ip(indirizzo),
+            porta,
+        };
+        assert_eq!(
+            pc.ricevi(apri(1, "10.0.0.5", 1433)),
+            Ok(Azione::Collega {
+                flusso: 1,
+                indirizzo: "10.0.0.5:1433".parse().unwrap()
+            })
+        );
+        for (flusso, (altro, porta)) in
+            [("10.0.0.7", 1433), ("10.0.0.5", 5432), ("127.0.0.2", 1433)]
+                .into_iter()
+                .enumerate()
+        {
+            let flusso = flusso as u32 + 2;
+            assert_eq!(
+                pc.ricevi(apri(flusso, altro, porta)),
+                Ok(Azione::Rifiuta {
+                    flusso,
+                    errore: ErroreFlusso::IndirizzoNonAmmesso
+                })
+            );
+        }
+        assert_eq!(pc.aperti(), 1);
+        // Senza destinazioni lo stesso indirizzo e' rifiutato.
+        let mut pc = Stato::nuovo(Lato::Pc {
+            porte: ammesse.to_vec(),
+            destinazioni: della_sessione(&Destinazioni::Malformato, &ammesse),
+        });
+        assert_eq!(
+            pc.ricevi(apri(1, "10.0.0.5", 1433)),
+            Ok(Azione::Rifiuta {
+                flusso: 1,
+                errore: ErroreFlusso::IndirizzoNonAmmesso
+            })
+        );
     }
 
     #[test]
@@ -1414,7 +1643,10 @@ mod tests {
             Ok(Azione::Fine(FineDalPc::Durata))
         );
 
-        let mut pc = Stato::nuovo(Lato::Pc { porte: vec![1433] });
+        let mut pc = Stato::nuovo(Lato::Pc {
+            porte: vec![1433],
+            destinazioni: vec![],
+        });
         assert!(pc
             .ricevi(Messaggio::Fine {
                 motivo: FineDalPc::Durata
@@ -1435,7 +1667,10 @@ mod tests {
                 porta: 1433
             })
             .is_err());
-        let mut pc = Stato::nuovo(Lato::Pc { porte: vec![1433] });
+        let mut pc = Stato::nuovo(Lato::Pc {
+            porte: vec![1433],
+            destinazioni: vec![],
+        });
         pc.ricevi(Messaggio::Apri {
             flusso: 1,
             indirizzo: Ipv4Addr::LOCALHOST,
@@ -1492,7 +1727,10 @@ mod tests {
     #[test]
     fn limite_dei_flussi() {
         let mut cli = Stato::nuovo(Lato::Controllante);
-        let mut pc = Stato::nuovo(Lato::Pc { porte: vec![1433] });
+        let mut pc = Stato::nuovo(Lato::Pc {
+            porte: vec![1433],
+            destinazioni: vec![],
+        });
         for _ in 0..MASSIMO_FLUSSI {
             let f = cli.apri().unwrap();
             assert!(matches!(
@@ -1557,7 +1795,7 @@ mod tests {
     /// I due capi in memoria. Il CLI riceve i socket dell'app da `nuovi`; il
     /// PC si collega dando al test l'altro capo del socket in `server`.
     struct Prova {
-        nuovi: mpsc::UnboundedSender<(u16, DuplexStream)>,
+        nuovi: mpsc::UnboundedSender<(SocketAddrV4, DuplexStream)>,
         server: mpsc::UnboundedReceiver<(SocketAddr, DuplexStream)>,
         chiudi_cli: oneshot::Sender<()>,
         cli: tokio::task::JoinHandle<Resoconto>,
@@ -1569,6 +1807,7 @@ mod tests {
 
     fn prova(
         porte: Vec<u16>,
+        destinazioni: Vec<SocketAddrV4>,
         fine_pc: impl Future<Output = Chiusura> + Send + 'static,
         inattivita: Option<Duration>,
     ) -> Prova {
@@ -1594,7 +1833,11 @@ mod tests {
         let pc = tokio::spawn(async move {
             ciclo(
                 &mut c_pc,
-                Apertura::Pc { porte, collega },
+                Apertura::Pc {
+                    porte,
+                    destinazioni,
+                    collega,
+                },
                 fine_pc,
                 inattivita,
             )
@@ -1612,8 +1855,13 @@ mod tests {
     impl Prova {
         /// L'app apre una connessione verso `porta` del PC.
         fn apri(&self, porta: u16) -> DuplexStream {
+            self.apri_verso(SocketAddrV4::new(Ipv4Addr::LOCALHOST, porta))
+        }
+
+        /// L'app apre una connessione verso `destinazione` vista dal PC.
+        fn apri_verso(&self, destinazione: SocketAddrV4) -> DuplexStream {
             let (app, locale) = tokio::io::duplex(SOCKET);
-            self.nuovi.send((porta, locale)).unwrap();
+            self.nuovi.send((destinazione, locale)).unwrap();
             app
         }
 
@@ -1649,7 +1897,7 @@ mod tests {
 
     #[tokio::test]
     async fn due_flussi_insieme_su_due_porte() {
-        let mut p = prova(vec![1433, 8080], std::future::pending(), None);
+        let mut p = prova(vec![1433, 8080], vec![], std::future::pending(), None);
         let mut a = p.apri(1433);
         let (ind_a, mut srv_a) = p.server().await;
         let mut b = p.apri(8080);
@@ -1689,7 +1937,7 @@ mod tests {
 
     #[tokio::test]
     async fn un_flusso_che_non_legge_non_ferma_l_altro() {
-        let mut p = prova(vec![1433, 8080], std::future::pending(), None);
+        let mut p = prova(vec![1433, 8080], vec![], std::future::pending(), None);
         let mut lento = p.apri(1433);
         // Il server del flusso lento non legge mai.
         let (_, _srv_lento) = p.server().await;
@@ -1722,7 +1970,7 @@ mod tests {
 
     #[tokio::test]
     async fn porta_non_ammessa_errore_del_flusso_gli_altri_continuano() {
-        let mut p = prova(vec![1433], std::future::pending(), None);
+        let mut p = prova(vec![1433], vec![], std::future::pending(), None);
         let mut buono = p.apri(1433);
         let (_, mut srv) = p.server().await;
         let mut vietato = p.apri(22);
@@ -1735,8 +1983,9 @@ mod tests {
         assert_eq!((cli.flussi, pc.flussi), (2, 1));
     }
 
-    /// Un'apertura verso un indirizzo diverso da 127.0.0.1, con una porta
-    /// ammessa: errore del flusso, nessun collegamento, gli altri continuano.
+    /// Un'apertura verso un indirizzo diverso da 127.0.0.1 e non elencato,
+    /// con una porta ammessa: errore del flusso, nessun collegamento, gli
+    /// altri continuano.
     #[tokio::test]
     async fn indirizzo_non_ammesso_errore_del_flusso_nessun_collegamento() {
         let (mut cli, mut pc) = coppia();
@@ -1752,6 +2001,7 @@ mod tests {
                 &mut pc,
                 Apertura::Pc {
                     porte: vec![1433],
+                    destinazioni: vec![],
                     collega,
                 },
                 std::future::pending(),
@@ -1793,9 +2043,81 @@ mod tests {
         assert_eq!(collegamenti.load(Ordering::SeqCst), 1);
     }
 
+    /// Una destinazione della sessione: il CLI apre verso l'indirizzo della
+    /// riga di comando, il PC si collega li'; una non elencata si rifiuta.
+    /// Il resoconto conta flussi e byte per destinazione.
+    #[tokio::test]
+    async fn verso_una_destinazione_della_sessione() {
+        let mut p = prova(
+            vec![1433, 8080],
+            vec![d("10.0.0.5:1433")],
+            std::future::pending(),
+            None,
+        );
+        let mut esterna = p.apri_verso(d("10.0.0.5:1433"));
+        let (indirizzo, mut srv) = p.server().await;
+        assert_eq!(indirizzo, "10.0.0.5:1433".parse().unwrap());
+        esterna.write_all(b"select 1").await.unwrap();
+        assert_eq!(leggi_n(&mut srv, 8).await, b"select 1");
+        srv.write_all(b"1").await.unwrap();
+        assert_eq!(leggi_n(&mut esterna, 1).await, b"1");
+        // Non elencata: il CLI chiude il socket, nessun collegamento.
+        let mut vietata = p.apri_verso(d("10.0.0.6:1433"));
+        assert_eq!(leggi_tutto(&mut vietata).await, b"");
+        let mut locale = p.apri(8080);
+        let (indirizzo, mut srv_locale) = p.server().await;
+        assert_eq!(indirizzo, "127.0.0.1:8080".parse().unwrap());
+        locale.write_all(b"GET /").await.unwrap();
+        assert_eq!(leggi_n(&mut srv_locale, 5).await, b"GET /");
+        let (cli, pc) = p.fine().await;
+        assert_eq!((cli.flussi, pc.flussi), (3, 2));
+        let uso = |flussi, byte_mandati, byte_ricevuti| Uso {
+            flussi,
+            byte_mandati,
+            byte_ricevuti,
+        };
+        assert_eq!(
+            pc.destinazioni,
+            BTreeMap::from([
+                ("10.0.0.5:1433".parse().unwrap(), uso(1, 1, 8)),
+                ("127.0.0.1:8080".parse().unwrap(), uso(1, 0, 5)),
+            ])
+        );
+        assert_eq!(
+            per_destinazione(&pc),
+            "10.0.0.5:1433 (flussi 1, byte al controllante 1, byte dal controllante 8), 127.0.0.1:8080 (flussi 1, byte al controllante 0, byte dal controllante 5)"
+        );
+        assert_eq!(cli.destinazioni.len(), 3);
+        assert_eq!(
+            cli.destinazioni[&"10.0.0.6:1433".parse().unwrap()],
+            uso(1, 0, 0)
+        );
+    }
+
+    #[test]
+    fn la_riga_per_destinazione_e_l_avviso() {
+        let mut r = Resoconto {
+            motivo: Motivo::ChiusaDallAltroCapo,
+            flussi: 0,
+            byte_mandati: 0,
+            byte_ricevuti: 0,
+            destinazioni: BTreeMap::new(),
+        };
+        assert_eq!(per_destinazione(&r), "nessuna");
+        r.uso("127.0.0.1:1433".parse().unwrap()).flussi = 2;
+        assert_eq!(
+            per_destinazione(&r),
+            "127.0.0.1:1433 (flussi 2, byte al controllante 0, byte dal controllante 0)"
+        );
+        assert_eq!(
+            avviso_destinazione_rifiutata("10.0.0.6:1433".parse().unwrap()),
+            "remotek-cli: il PC non ammette la destinazione 10.0.0.6:1433: manca nella configurazione firmata del server"
+        );
+    }
+
     #[tokio::test]
     async fn oltre_il_limite_il_cli_chiude_il_socket() {
-        let mut p = prova(vec![1433], std::future::pending(), None);
+        let mut p = prova(vec![1433], vec![], std::future::pending(), None);
         let mut app = Vec::new();
         for _ in 0..MASSIMO_FLUSSI {
             app.push(p.apri(1433));
@@ -1809,7 +2131,7 @@ mod tests {
 
     #[tokio::test]
     async fn chiusure_dai_due_capi() {
-        let mut p = prova(vec![1433], std::future::pending(), None);
+        let mut p = prova(vec![1433], vec![], std::future::pending(), None);
         // L'app chiude la scrittura: il server vede la fine e risponde ancora.
         let mut app = p.apri(1433);
         let (_, mut srv) = p.server().await;
@@ -1840,7 +2162,7 @@ mod tests {
             rx.await.ok();
             Chiusura::Durata
         };
-        let mut p = prova(vec![1433], fine, None);
+        let mut p = prova(vec![1433], vec![], fine, None);
         let mut app = p.apri(1433);
         p.server().await;
         scade.send(()).unwrap();
@@ -1850,10 +2172,15 @@ mod tests {
         assert_eq!(cli.motivo, Motivo::DalPc(FineDalPc::Durata));
         assert_eq!(pc.motivo, Motivo::Chiusura(Chiusura::Durata));
         // Dal connection manager e per inattivita'.
-        let p = prova(vec![1433], async { Chiusura::Cliente }, None);
+        let p = prova(vec![1433], vec![], async { Chiusura::Cliente }, None);
         let cli = timeout(ATTESA, p.cli).await.unwrap().unwrap();
         assert_eq!(cli.motivo, Motivo::DalPc(FineDalPc::Cliente));
-        let p = prova(vec![1433], std::future::pending(), Some(Duration::ZERO));
+        let p = prova(
+            vec![1433],
+            vec![],
+            std::future::pending(),
+            Some(Duration::ZERO),
+        );
         let cli = timeout(ATTESA, p.cli).await.unwrap().unwrap();
         assert_eq!(cli.motivo, Motivo::DalPc(FineDalPc::Inattivita));
     }
@@ -1882,6 +2209,7 @@ mod tests {
                     &mut pc,
                     Apertura::Pc {
                         porte: vec![1433],
+                        destinazioni: vec![],
                         collega,
                     },
                     std::future::pending(),
@@ -1939,6 +2267,7 @@ mod tests {
                 &mut pc,
                 Apertura::Pc {
                     porte: vec![porta],
+                    destinazioni: vec![],
                     collega,
                 },
                 fine,
@@ -1953,7 +2282,12 @@ mod tests {
             locale.accept()
         );
         let mut app = app.unwrap();
-        nuovi.send((porta, accettato.unwrap().0)).unwrap();
+        nuovi
+            .send((
+                SocketAddrV4::new(Ipv4Addr::LOCALHOST, porta),
+                accettato.unwrap().0,
+            ))
+            .unwrap();
         app.write_all(b"ciao?").await.unwrap();
         let mut v = vec![0; 6];
         timeout(ATTESA, app.read_exact(&mut v))
@@ -2024,9 +2358,42 @@ mod tests {
         assert_eq!(descrizione(&tunnel), "127.0.0.1:1433, 127.0.0.1:8080");
         let t = del_lasciapassare(Some(&tunnel)).unwrap();
         assert_eq!(
-            (t.porte, t.durata),
-            (vec![1433, 8080], Duration::from_secs(3600))
+            (t.porte, t.durata, t.destinazioni),
+            (vec![1433, 8080], Duration::from_secs(3600), vec![])
         );
+        // Con la chiave firmata: le destinazioni della sessione, in ordine,
+        // solo con una porta del lasciapassare.
+        let chiave = Destinazioni::Elenco(
+            [d("10.0.0.5:1433"), d("10.0.0.6:22"), d("10.0.0.4:8080")]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(
+            descrizione_con(&tunnel, &chiave),
+            "127.0.0.1:1433, 127.0.0.1:8080, 10.0.0.4:8080, 10.0.0.5:1433"
+        );
+        let solo_1433 = valido(Capacita::Tunnel {
+            porte: vec![1433, 8080],
+            durata: 3600,
+        });
+        let una = Destinazioni::Elenco([d("10.0.0.5:1433")].into_iter().collect());
+        assert_eq!(
+            descrizione_con(&solo_1433, &una),
+            "127.0.0.1:1433, 127.0.0.1:8080, 10.0.0.5:1433"
+        );
+        let t = del_lasciapassare_con(Some(&tunnel), &chiave).unwrap();
+        assert_eq!(t.destinazioni, vec![d("10.0.0.4:8080"), d("10.0.0.5:1433")]);
+        assert_eq!(
+            del_lasciapassare_con(Some(&tunnel), &Destinazioni::Malformato)
+                .unwrap()
+                .destinazioni,
+            vec![]
+        );
+        assert_eq!(
+            descrizione_con(&tunnel, &Destinazioni::Malformato),
+            descrizione(&tunnel)
+        );
+        assert!(descrizione_con(&valido(Capacita::Exec), &chiave).is_empty());
         assert!(del_lasciapassare(Some(&valido(Capacita::Exec))).is_none());
         assert!(del_lasciapassare(None).is_none());
     }

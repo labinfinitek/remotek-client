@@ -387,6 +387,7 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
             );
             super::non_presidiato::segnala_elenco_malformato();
             super::non_presidiato::segnala_porte_malformate();
+            super::destinazioni::segnala_malformate(&v);
             Some(v)
         }
         Err(e) => {

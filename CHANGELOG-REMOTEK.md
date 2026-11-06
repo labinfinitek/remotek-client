@@ -37,6 +37,17 @@ login rifiutato con exec. `terminal` non cambia.
   cambia per i `custom.txt` gia' consegnati: senza la chiave delle porte il
   tunnel vuole sempre il clic; per il tunnel senza clic serve un `custom.txt`
   nuovo, firmato.
+- **Per l'agente AI**: `remotek-cli tunnel <ID> <locale>:<indirizzo>:<porta>`
+  porta il tunnel anche a un'altra macchina della rete del cliente vista dal
+  PC (per esempio il database su un server diverso da quello con Remotek),
+  solo se il `custom.txt` firmato di quel PC la elenca nella chiave nuova
+  `remotek-agente-destinazioni` (voci `indirizzo:porta` separate da `,`, per
+  esempio `10.0.0.5:1433`) e la porta sta fra quelle del lasciapassare
+  (ADR-0037). Vale col clic e senza clic. La finestra della richiesta e la
+  voce del connection manager elencano anche le destinazioni esterne; il
+  registro del servizio scrive flussi e byte per destinazione. Il PC lo
+  dichiara (`remotek_tunnel_destinazioni`): verso un PC che non lo dichiara
+  il CLI esce con 126 solo se la riga di comando chiede un'altra macchina.
 
 ### Corretto
 - **Per l'agente AI**: fino al -8 l'help di `remotek-cli exec` e questo
@@ -67,6 +78,17 @@ login rifiutato con exec. `terminal` non cambia.
   non ricade mai sul port forward di upstream. Il port forward dei tecnici
   (host e porta) non cambia, anche con la "Password del SO" salvata.
   Il traffico del tunnel resta cifrato con la chiave della sessione.
+- Il tunnel verso una macchina diversa da `127.0.0.1` si apre solo verso le
+  coppie indirizzo e porta che il `custom.txt` firmato del PC elenca in
+  `remotek-agente-destinazioni` (IPv4 scritti per intero, mai nomi, mai una
+  risoluzione DNS; vietati `127.0.0.0/8`, `0.0.0.0/8`, `255.255.255.255` e il
+  multicast), e solo con una porta del lasciapassare: chi ha il lasciapassare
+  non raggiunge altre macchine della rete del cliente se il titolare non le
+  ha autorizzate nella configurazione firmata. La chiave si legge solo dal
+  `custom.txt` firmato; malformata vale come assente (solo `127.0.0.1`) e
+  scrive una riga ERROR nel registro del servizio. Nulla cambia per i
+  `custom.txt` gia' consegnati: senza la chiave il tunnel va solo a
+  `127.0.0.1`, come prima.
 
 ## [remotek-1.4.9-8] - 2026-11-05
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

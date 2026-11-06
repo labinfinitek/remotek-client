@@ -2,18 +2,17 @@
 //!
 //! remotek-cli lo manda nel login del terminale, in `os_login.password` con
 //! `os_login.username` vuoto (src/client.rs, `handle_hash`). Qui si toglie dal
-//! login, prima che arrivi altrove, e si verifica come dice il README
-//! dell'API ("Lasciapassare dell'agente"): firma Ed25519 della chiave
-//! pubblica cablata sui byte del payload, prima di leggere il JSON; poi
-//! versione, capacita', modo, PC, finestra di tempo con 30 secondi di
-//! tolleranza, nonce mai visto. Il `v` = 1 e' il terminale da amministratore;
-//! del `v` = 2 valgono `exec` (ADR-0033) e `tunnel` (ADR-0036), da
-//! amministratore o da utente: ogni altra capacita' vale come nessun
-//! lasciapassare finche' il suo passo non arriva. I nonce visti stanno su file (`lasciapassare-visti.json` nella
-//! cartella di configurazione del servizio, solo SYSTEM e Administrators su
-//! Windows, solo il proprietario altrove) fino a `scade + 30`, cosi' un
-//! riavvio del servizio non li dimentica. Un errore del file vale come nonce
-//! gia' visto.
+//! login, prima che arrivi altrove, e si verifica come dice il README dell'API
+//! ("Lasciapassare dell'agente"): firma Ed25519 della chiave pubblica cablata
+//! sui byte del payload, prima di leggere il JSON; poi versione, capacita',
+//! modo, PC, finestra di tempo con 30 secondi di tolleranza, nonce mai visto.
+//! Il `v` = 1 e' il terminale da amministratore; del `v` = 2 valgono `exec`
+//! (ADR-0033) e `tunnel` (ADR-0036), da amministratore o da utente: ogni altra
+//! capacita' vale come nessun lasciapassare finche' il suo passo non arriva. I
+//! nonce visti stanno su file (`lasciapassare-visti.json` nella cartella di
+//! configurazione del servizio, solo SYSTEM e Administrators su Windows, solo
+//! il proprietario altrove) fino a `scade + 30`, cosi' un riavvio del servizio
+//! non li dimentica. Un errore del file vale come nonce gia' visto.
 //!
 //! Un lasciapassare non valido non ferma la connessione: si prosegue come
 //! senza (il terminale da utente, col clic del cliente).
@@ -387,6 +386,7 @@ pub fn verifica_login(stringa: &str, controllante: &str) -> Option<Valido> {
                 controllante
             );
             super::non_presidiato::segnala_elenco_malformato();
+            super::non_presidiato::segnala_porte_malformate();
             Some(v)
         }
         Err(e) => {
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn utente_mai_amministratore_ed_exec_senza_elenco_mai_senza_clic() {
         use crate::remotek::{
-            non_presidiato::{ammesso_senza_clic, senza_clic, Elenco},
+            non_presidiato::{ammesso_senza_clic, senza_clic, Elenco, Porte},
             scelta_terminale,
         };
         let lasciapassare = |modo, capacita| {
@@ -779,7 +779,7 @@ mod tests {
                 ),
                 senza_clic(
                     true,
-                    ammesso_senza_clic(l.as_ref(), &Elenco::Assente),
+                    ammesso_senza_clic(l.as_ref(), &Elenco::Assente, &Porte::Assente),
                     true,
                     true,
                 ),

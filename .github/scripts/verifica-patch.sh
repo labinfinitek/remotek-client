@@ -2297,8 +2297,8 @@ if not abil or not re.fullmatch(r"\s*match HARD_SETTINGS\.read\(\) \{\s*Ok\(fiss
     guai.append("%s: abilitato non legge piu' solo HARD_SETTINGS (spento se il lock non si prende)" % N)
 if not re.search(r"pub fn abilitato_da\(fisse: &HashMap<String, String>\) -> bool \{\s*fisse\.get\(CHIAVE\)\.map_or\(false, \|v\| v == VALORE\)\s*\}", n):
     guai.append("%s: abilitato_da non confronta piu' la chiave col solo valore non-presidiato" % N)
-if not re.search(r"pub fn senza_clic\([^)]*\) -> bool \{\s*abilitato && ammesso_dall_elenco && terminale && windows_installato\s*\}", n):
-    guai.append("%s: senza_clic non e' piu' l'AND di abilitato, ammesso dall'elenco, terminale e Windows installato" % N)
+if not re.search(r"pub fn senza_clic\([^)]*\) -> bool \{\s*let nella_sua_connessione = match ammesso_dall_elenco \{\s*Ammesso::No => false,\s*Ammesso::Terminale => terminale,\s*Ammesso::Tunnel => !terminale,\s*\};\s*abilitato && nella_sua_connessione && windows_installato\s*\}", n):
+    guai.append("%s: senza_clic non e' piu' l'AND di abilitato, ammesso dall'elenco nella sua connessione (terminale ed exec sul terminale, il tunnel fuori) e Windows installato" % N)
 if not re.search(r"pub fn rifiuta_prelogin\(prelogin: bool, senza_clic: bool\) -> bool \{\s*prelogin && !senza_clic\s*\}", n):
     guai.append("%s: rifiuta_prelogin non e' piu' prelogin && !senza_clic (il rifiuto da prelogin deve saltare solo il caso 3)" % N)
 if not re.search(r"pub fn vista_al_cm\(prelogin: bool\) -> bool \{\s*!prelogin\s*\}", n):
@@ -2551,8 +2551,10 @@ l = codice(L)
 if not re.search(r"pub fn amministratore\(valido: Option<&Valido>\) -> bool \{\s*valido\.is_some_and\(\|v\| v\.modo == Modo::Amministratore && !tunnel\(Some\(v\)\)\)\s*\}", l):
     guai.append("%s: amministratore non guarda piu' solo il modo amministratore" % L)
 N = "src/remotek/non_presidiato.rs"
-if not re.search(r"pub fn ammesso_senza_clic\(valido: Option<&Valido>, elenco: &Elenco\) -> bool \{\s*let Some\(v\) = valido\.filter\(\|v\| v\.modo == Modo::Amministratore\) else \{\s*return false;\s*\};", codice(N)):
-    guai.append("%s: ammesso_senza_clic non vale piu' solo per il lasciapassare da amministratore" % N)
+# ADR-0036: il tunnel esce prima, solo col nome `tunnel` e tutte le sue porte
+# nell'elenco firmato; terminale ed exec solo da amministratore.
+if not re.search(r"pub fn ammesso_senza_clic\(valido: Option<&Valido>, elenco: &Elenco, porte: &Porte\) -> Ammesso \{\s*if let Some\(Capacita::Tunnel \{ porte: chieste, \.\. \}\) = valido\.map\(\|v\| &v\.capacita\) \{\s*let nominato = matches!\(elenco, Elenco::Nomi\(nomi\) if nomi\.contains\(\"tunnel\"\)\);\s*let elencate =\s*matches!\(porte, Porte::Elenco\(ammesse\) if chieste\.iter\(\)\.all\(\|p\| ammesse\.contains\(p\)\)\);\s*return if nominato && elencate \{\s*Ammesso::Tunnel\s*\} else \{\s*Ammesso::No\s*\};\s*\}\s*let Some\(v\) = valido\.filter\(\|v\| v\.modo == Modo::Amministratore\) else \{\s*return Ammesso::No;\s*\};", codice(N)):
+    guai.append("%s: ammesso_senza_clic non vale piu' solo per il lasciapassare da amministratore, o il tunnel non vuole piu' il nome e tutte le porte nell'elenco firmato" % N)
 S = "src/remotek/scelta_terminale.rs"
 if not re.search(r"if !terminale \|\| !pc\.amministratore\(\) \|\| !lasciapassare::amministratore\(valido\) \{\s*return None;", codice(S)):
     guai.append("%s: la finestra del caso 2 non e' piu' solo per il lasciapassare da amministratore" % S)
@@ -2630,8 +2632,11 @@ fi
 # da HARD_SETTINGS (lock non preso = malformata); senza la chiave solo il
 # terminale, con la chiave malformata niente. I tre punti di
 # src/server/connection.rs decidono tutti con `non_presidiato::senza_clic_per`;
-# le due costanti stanno ciascuna su una riga, come le legge lo strumento di
-# firma. Se un merge di upstream li cambia, qui si ferma.
+# le tre costanti stanno ciascuna su una riga, come le legge lo strumento di
+# firma. Il tunnel (ADR-0036) entra senza clic solo col nome `tunnel` e tutte
+# le sue porte in `remotek-agente-porte`, letta anch'essa solo da
+# HARD_SETTINGS, con la riga ERROR se malformata. Se un merge di upstream li
+# cambia, qui si ferma.
 esito_elenco=$(python3 - <<'PY'
 import re
 def codice(f):
@@ -2646,7 +2651,8 @@ if len(punti) != 3 or c.count("non_presidiato::senza_clic_per(") != 3:
 N = "src/remotek/non_presidiato.rs"
 righe = open(N, encoding="utf-8").read().splitlines()
 for riga in ('pub const CHIAVE_CAPACITA: &str = "remotek-agente-capacita";',
-             'pub const CAPACITA: [&str; 5] = ["terminale", "exec", "file", "tunnel", "schermo"];'):
+             'pub const CAPACITA: [&str; 5] = ["terminale", "exec", "file", "tunnel", "schermo"];',
+             'pub const CHIAVE_PORTE: &str = "remotek-agente-porte";'):
     if riga not in righe:
         guai.append("%s: manca la riga `%s` (lo strumento di firma la legge cosi')" % (N, riga))
 n = codice(N)
@@ -2656,11 +2662,17 @@ if not re.search(r"Elenco::Assente => v\.capacita == Capacita::Terminale,\s*Elen
     guai.append("%s: ammesso_senza_clic non da' piu' senza la chiave solo il terminale, con la chiave i nomi elencati, malformata niente" % N)
 if "super::non_presidiato::segnala_elenco_malformato();" not in codice("src/remotek/lasciapassare.rs"):
     guai.append("src/remotek/lasciapassare.rs: verifica_login non segnala piu' la chiave remotek-agente-capacita malformata")
+if not re.search(r"pub fn porte\(\) -> Porte \{\s*match HARD_SETTINGS\.read\(\) \{\s*Ok\(fisse\) => porte_da\(&fisse\),\s*Err\(_\) => Porte::Malformato,\s*\}\s*\}", n):
+    guai.append("%s: le porte del tunnel non si leggono piu' solo da HARD_SETTINGS, o il lock non preso non vale come malformato" % N)
+if not re.search(r"pub fn senza_clic_per\(valido: Option<&Valido>\) -> Ammesso \{\s*ammesso_senza_clic\(valido, &elenco\(\), &porte\(\)\)\s*\}", n):
+    guai.append("%s: senza_clic_per non decide piu' con l'elenco e le porte di HARD_SETTINGS" % N)
+if "super::non_presidiato::segnala_porte_malformate();" not in codice("src/remotek/lasciapassare.rs"):
+    guai.append("src/remotek/lasciapassare.rs: verifica_login non segnala piu' la chiave remotek-agente-porte malformata")
 print("\n".join(guai))
 PY
 ) || esito_elenco="${esito_elenco:-}"$'\n'"controllo dell'elenco senza clic non eseguito: python3 terminato con errore"
 if [ -z "$esito_elenco" ]; then
-  ok "senza clic solo cio' che remotek-agente-capacita del custom.txt firmato elenca, nei tre punti di connection.rs; costanti su una riga (ADR-0033, passo 7)"
+  ok "senza clic solo cio' che remotek-agente-capacita del custom.txt firmato elenca, il tunnel solo verso le porte di remotek-agente-porte, nei tre punti di connection.rs; costanti su una riga (ADR-0033, passo 7; ADR-0036)"
 else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
@@ -2821,8 +2833,8 @@ if not re.search(r"Some\(login_request::Union::PortForward\(pf\)\)\s*if super::t
     guai.append("%s: togli prende la password anche dal port forward dei tecnici (host e porta veri)" % L)
 if "set_raw" in t:
     guai.append("%s: il tunnel chiama set_raw: perderebbe cifratura e confini dei messaggi" % T)
-if not re.search(r"pub fn login_del_tunnel\(lc: &crate::client::LoginConfigHandler\) -> bool \{\s*lc\.conn_type == hbb_common::rendezvous_proto::ConnType::PORT_FORWARD\s*&& !lc\.remotek_lasciapassare\.is_empty\(\)", t):
-    guai.append("%s: login_del_tunnel non vale solo per il port forward col lasciapassare di remotek-cli" % T)
+if not re.search(r"pub fn login_del_tunnel\(lc: &crate::client::LoginConfigHandler\) -> bool \{\s*lc\.conn_type == hbb_common::rendezvous_proto::ConnType::PORT_FORWARD\s*&& !lc\.remotek_lasciapassare\.is_empty\(\)\s*&& lc\.port_forward\.0\.is_empty\(\)\s*&& lc\.port_forward\.1 == 0\s*\}", t):
+    guai.append("%s: login_del_tunnel non vale solo per il port forward col lasciapassare di remotek-cli, host vuoto e porta 0" % T)
 D = "src/remotek/dichiarazione.rs"
 if not re.search(r'pub const CHIAVE_TUNNEL: &str = "remotek_tunnel";', codice(D)) or "m.insert(CHIAVE_TUNNEL.to_owned(), Value::Bool(true));" not in codice(D):
     guai.append("%s: il PC non dichiara remotek_tunnel" % D)

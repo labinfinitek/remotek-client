@@ -2938,7 +2938,8 @@ impl Connection {
             // Remotek (ADR-0028, caso 3): sul server non presidiato abilitato dal
             // custom.txt firmato, il terminale col lasciapassare valido (o exec, se
             // il custom.txt lo elenca) si autorizza senza clic e gira come SYSTEM;
-            // il CM lo mostra gia' autorizzato.
+            // cosi' il tunnel verso le porte elencate (ADR-0036), senza SYSTEM.
+            // Il CM lo mostra gia' autorizzato.
             if crate::remotek::non_presidiato::senza_clic(
                 crate::remotek::non_presidiato::abilitato(),
                 crate::remotek::non_presidiato::senza_clic_per(self.lasciapassare.as_ref()),

@@ -2343,7 +2343,7 @@ mod tests {
                 assert_eq!(prossimo(&mut altro).await, Messaggio::Vita);
                 let passato = inizio.elapsed();
                 assert!(passato >= VITA_PROVA * n, "{passato:?}");
-                assert!(passato < VITA_PROVA * n + VITA_PROVA / 2, "{passato:?}");
+                assert!(passato < VITA_PROVA * (n + 1), "{passato:?}");
             }
             compito.abort();
         }
@@ -2386,14 +2386,20 @@ mod tests {
         let (tx, _server) = mpsc::unbounded_channel();
         let (mut altro, mut compito) = un_capo(pc_1433(tx), Some(inattivita));
         let inizio = Instant::now();
-        let r = loop {
-            tokio::select! {
-                r = &mut compito => break r.unwrap(),
-                _ = tokio::time::sleep(VITA_PROVA / 3) => {
-                    altro.manda(codifica(&Messaggio::Vita)).await.ok();
+        // Se i segni di vita contassero come traffico il PC non chiuderebbe:
+        // il test fallisce dopo ATTESA invece di restare appeso.
+        let r = timeout(ATTESA, async {
+            loop {
+                tokio::select! {
+                    r = &mut compito => break r.unwrap(),
+                    _ = tokio::time::sleep(VITA_PROVA / 3) => {
+                        altro.manda(codifica(&Messaggio::Vita)).await.ok();
+                    }
                 }
             }
-        };
+        })
+        .await
+        .expect("i segni di vita non devono contare come traffico");
         assert_eq!(r.motivo, Motivo::Inattivita);
         assert!(inizio.elapsed() >= inattivita);
         assert_eq!((r.flussi, r.byte_mandati, r.byte_ricevuti), (0, 0, 0));

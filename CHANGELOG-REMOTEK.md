@@ -29,6 +29,10 @@ rilasciate non si riscrivono.
   esempio il rifiuto dal connection manager) invece di "connessione chiusa
   dal PC"; senza motivo, dopo aver scritto di aspettare il cliente, scrive
   che il cliente ha rifiutato o non ha risposto.
+- **Per l'agente AI**: `remotek-cli` (`terminal`, `exec`, `tunnel`) scrive
+  "in attesa che il cliente accetti" solo quando il PC aspetta davvero il
+  clic, non piu' anche sul server non presidiato che lascia entrare senza
+  clic (collaudo 33(a), 34(d)).
 
 ## [remotek-1.4.9-9] - 2026-11-06
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

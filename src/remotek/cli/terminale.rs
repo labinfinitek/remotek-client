@@ -137,7 +137,10 @@ pub(super) fn evento_da_msgbox(
         }
     }
     match tipo {
-        "input-password" | "wait-remote-accept-nook" => Some(Evento::Attesa),
+        // Solo il PC che aspetta il clic (`LOGIN_MSG_NO_PASSWORD_ACCESS`). Non
+        // "input-password": `handle_hash` lo mostra a ogni login senza
+        // password, prima che il PC decida, anche dove entra senza clic.
+        "wait-remote-accept-nook" => Some(Evento::Attesa),
         "insecure-connection-nocancel-hasclose" => Some(Evento::NonCifrata),
         t if t.starts_with("terminal-admin-login") => Some(Evento::Errore(
             "il PC chiede il login come amministratore: il CLI non lo fa mai".to_owned(),
@@ -900,6 +903,9 @@ mod tests {
         // Nessuna risposta del cliente entro --attesa.
         let attesa = evento_da_msgbox("wait-remote-accept-nook", "", "", false);
         assert_eq!(attesa, Some(Evento::Attesa));
+        // Il login senza password del CLI, anche senza clic (collaudo 33(a)).
+        let hash = evento_da_msgbox("input-password", "Password Required", "", false);
+        assert_eq!(hash, None);
         assert!(ciclo(vec![Evento::Attesa], 0).0.is_err());
     }
 

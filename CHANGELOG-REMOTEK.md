@@ -11,6 +11,17 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Corretto
+- **Per l'agente AI**: il tunnel via relay non cade piu' dopo mezzo minuto
+  senza traffico (collaudo 32(e): un client SQL fermo faceva chiudere a hbbr
+  la coppia dopo 30 s). Ognuno dei due capi, se per 10 s non ha mandato
+  niente, manda un segno di vita di un byte; non conta come traffico, quindi
+  il PC chiude ancora dopo un'ora senza dati. **Rottura verso il
+  `remotek-1.4.9-9`**: un PC o un `remotek-cli` del -9 legge il segno di vita
+  come messaggio malformato e chiude il tunnel dopo 10 s di silenzio; CLI e
+  PC vanno aggiornati insieme (il -9 e' solo sulla VM di collaudo; il -8
+  pubblicato non ha il tunnel).
+
 ## [remotek-1.4.9-9] - 2026-11-06
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-9`

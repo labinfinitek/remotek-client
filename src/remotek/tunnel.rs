@@ -59,6 +59,11 @@ pub const MASSIMO_PORTE: usize = 8;
 /// La durata del lasciapassare di tunnel, in secondi.
 pub const DURATA_MINIMA: u32 = 60;
 pub const DURATA_MASSIMA: u32 = 28800;
+/// Dopo quanto silenzio in uscita un capo manda [`Messaggio::Vita`]: hbbr
+/// chiude la coppia del relay dopo 30 s senza byte (collaudo 32(e)), e 10 s
+/// lasciano due segni di vita mancati prima del limite. Lo mandano tutti e
+/// due i capi: non sappiamo se hbbr conta il silenzio per verso o per coppia.
+pub const VITA: Duration = Duration::from_secs(10);
 
 const TIPO_APRI: u8 = 1;
 const TIPO_DATI: u8 = 2;
@@ -66,6 +71,7 @@ const TIPO_CHIUDI: u8 = 3;
 const TIPO_ERRORE: u8 = 4;
 const TIPO_CREDITO: u8 = 5;
 const TIPO_FINE: u8 = 6;
+const TIPO_VITA: u8 = 7;
 
 /// Un messaggio del tunnel. `flusso` non e' mai 0.
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +94,9 @@ pub enum Messaggio {
     Credito { flusso: u32, byte: u32 },
     /// Dal PC: chiude la connessione, per il motivo detto.
     Fine { motivo: FineDalPc },
+    /// Dai due capi, dopo [`VITA`] senza aver mandato niente: tiene su il
+    /// relay. Chi lo riceve non fa niente, e non conta come traffico.
+    Vita,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -199,6 +208,7 @@ pub fn codifica(m: &Messaggio) -> Bytes {
             b.put_u8(TIPO_FINE);
             b.put_u8(*motivo as u8);
         }
+        Messaggio::Vita => b.put_u8(TIPO_VITA),
     }
     b.freeze()
 }
@@ -208,6 +218,12 @@ pub fn codifica(m: &Messaggio) -> Bytes {
 /// [`FINESTRA`] e codici sconosciuti sono malformati.
 pub fn decodifica(b: Bytes) -> Result<Messaggio, Malformato> {
     let (&tipo, resto) = b.split_first().ok_or(Malformato("vuoto"))?;
+    if tipo == TIPO_VITA {
+        return match resto {
+            [] => Ok(Messaggio::Vita),
+            _ => Err(Malformato("lunghezza")),
+        };
+    }
     if tipo == TIPO_FINE {
         return match resto {
             [m] => FineDalPc::da_byte(*m)
@@ -395,6 +411,7 @@ impl Stato {
                 indirizzo,
                 porta,
             } => return self.apri_dal_controllante(*flusso, *indirizzo, *porta),
+            Messaggio::Vita => return Ok(Azione::Ignora),
             Messaggio::Dati { flusso, .. }
             | Messaggio::Chiudi { flusso }
             | Messaggio::Errore { flusso, .. }
@@ -443,7 +460,9 @@ impl Stato {
                 self.flussi.remove(&flusso);
                 Ok(Azione::Interrotto { flusso, errore })
             }
-            Messaggio::Apri { .. } | Messaggio::Fine { .. } => Err(Malformato("impossibile")),
+            Messaggio::Apri { .. } | Messaggio::Fine { .. } | Messaggio::Vita => {
+                Err(Malformato("impossibile"))
+            }
         }
     }
 
@@ -797,12 +816,29 @@ impl Locale {
 /// Il ciclo del tunnel su un capo: legge i messaggi di `conn`, apre i flussi
 /// (`apertura`), muove i dati col credito, finche' `fine` non risolve,
 /// l'altro capo chiude, scade `inattivita` o arriva una violazione. Sul PC,
-/// alla chiusura chiesta da fuori o per inattivita' manda `Fine`.
+/// alla chiusura chiesta da fuori o per inattivita' manda `Fine`. Dopo
+/// [`VITA`] senza aver mandato niente manda `Vita`, che non e' traffico.
 pub async fn ciclo<C, S>(
     conn: &mut C,
     apertura: Apertura<S>,
     fine: impl Future<Output = Chiusura>,
     inattivita: Option<Duration>,
+) -> Resoconto
+where
+    C: Connessione,
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    ciclo_con(conn, apertura, fine, inattivita, VITA).await
+}
+
+/// [`ciclo`] col segno di vita dopo `vita`: i test lo accorciano (tokio qui
+/// non ha `test-util`, quindi niente tempo fermo).
+async fn ciclo_con<C, S>(
+    conn: &mut C,
+    apertura: Apertura<S>,
+    fine: impl Future<Output = Chiusura>,
+    inattivita: Option<Duration>,
+    vita: Duration,
 ) -> Resoconto
 where
     C: Connessione,
@@ -835,6 +871,7 @@ where
         destinazioni: BTreeMap::new(),
     };
     let mut ultimo_traffico = Instant::now();
+    let mut ultimo_mandato = Instant::now();
     tokio::pin!(fine);
     let motivo = loop {
         let scadenza = inattivita.map(|d| ultimo_traffico + d);
@@ -853,8 +890,13 @@ where
                     Some(Err(e)) => break Motivo::Rete(e.to_string()),
                     None => break Motivo::ChiusaDallAltroCapo,
                 };
-                ultimo_traffico = Instant::now();
-                let azione = match decodifica(bytes.freeze()).and_then(|m| stato.ricevi(m)) {
+                let azione = match decodifica(bytes.freeze()).and_then(|m| {
+                    // Il segno di vita non e' traffico: l'ora del PC resta.
+                    if m != Messaggio::Vita {
+                        ultimo_traffico = Instant::now();
+                    }
+                    stato.ricevi(m)
+                }) {
                     Ok(a) => a,
                     Err(Malformato(e)) => break Motivo::Protocollo(e),
                 };
@@ -987,6 +1029,7 @@ where
             }
             chiusura = &mut fine => break Motivo::Chiusura(chiusura),
             _ = silenzio => break Motivo::Inattivita,
+            _ = tokio::time::sleep_until(ultimo_mandato + vita) => da_mandare.push(Messaggio::Vita),
         }
         // Un flusso finito nei due versi non ha piu' bisogno di leggere.
         locali.retain(|flusso, l| {
@@ -1007,6 +1050,7 @@ where
                 fine_dei_locali(locali);
                 return r;
             }
+            ultimo_mandato = Instant::now();
         }
     };
     if pc {
@@ -1162,7 +1206,7 @@ fn descrizione_con(v: &Valido, d: &Destinazioni) -> String {
 /// puo' avere la risposta del controllante ancora in viaggio: se c'era
 /// (`test_delay_in_volo`), il primo messaggio che e' un `TestDelay` si salta.
 /// Nessun messaggio del tunnel si legge come `TestDelay`: il loro primo byte
-/// (il tipo, da 1 a 6) e' un campo 0, che protobuf non ammette.
+/// (il tipo, da 1 a 7) e' un campo 0, che protobuf non ammette.
 struct ConnessionePc<'a> {
     stream: &'a mut hbb_common::Stream,
     test_delay_in_volo: bool,
@@ -1339,6 +1383,7 @@ mod tests {
             Messaggio::Fine {
                 motivo: FineDalPc::Altro,
             },
+            Messaggio::Vita,
         ]
     }
 
@@ -1366,6 +1411,20 @@ mod tests {
             &[1, 0, 0, 0, 9, 192, 168, 10, 20, 0x05, 0x99]
         );
         assert_eq!(decodifica(codifica(&altro)), Ok(altro));
+        // Il segno di vita e' un byte solo, e non cambia lo stato.
+        assert_eq!(&codifica(&Messaggio::Vita)[..], &[7]);
+        for lato in [
+            Lato::Controllante,
+            Lato::Pc {
+                porte: vec![1433],
+                destinazioni: vec![],
+            },
+        ] {
+            let mut stato = Stato::nuovo(lato);
+            assert_eq!(stato.ricevi(Messaggio::Vita), Ok(Azione::Ignora));
+            assert_eq!((stato.aperti(), stato.ultimo), (0, 0));
+        }
+        assert_eq!(VITA, Duration::from_secs(10));
     }
 
     #[test]
@@ -1374,6 +1433,7 @@ mod tests {
             &[],
             &[0],
             &[7, 0, 0, 0, 1],
+            &[7, 0], // segno di vita con un byte in piu'
             &[42, 0, 0, 0, 1],
             &[1, 0, 0, 0, 1, 127, 0, 0, 1, 0, 0],     // porta 0
             &[1, 0, 0, 0, 0, 127, 0, 0, 1, 0, 22],    // flusso 0
@@ -2221,6 +2281,132 @@ mod tests {
             let r = timeout(ATTESA, compito).await.unwrap().unwrap();
             assert!(matches!(r.motivo, Motivo::Protocollo(_)), "{:?}", r.motivo);
         }
+    }
+
+    /// Il segno di vita dei test: tokio qui non ha `test-util` (niente tempo
+    /// fermo), quindi tempi veri e brevi, con margine per una CI lenta.
+    const VITA_PROVA: Duration = Duration::from_millis(300);
+
+    /// Un capo del ciclo; l'altro capo e' il test, sul `Canale` restituito.
+    fn un_capo(
+        apertura: Apertura<DuplexStream>,
+        inattivita: Option<Duration>,
+    ) -> (Canale, tokio::task::JoinHandle<Resoconto>) {
+        let (altro, mut capo) = coppia();
+        let compito = tokio::spawn(async move {
+            let fine = std::future::pending();
+            ciclo_con(&mut capo, apertura, fine, inattivita, VITA_PROVA).await
+        });
+        (altro, compito)
+    }
+
+    /// Il PC con la porta 1433; i socket del collegamento vanno in `server`.
+    fn pc_1433(server: mpsc::UnboundedSender<DuplexStream>) -> Apertura<DuplexStream> {
+        let collega: Collega<DuplexStream> = Box::new(move |_| {
+            let (a, b) = tokio::io::duplex(SOCKET);
+            let esito = server
+                .send(b)
+                .map(|()| a)
+                .map_err(|_| io::Error::new(io::ErrorKind::Other, "test finito"));
+            Box::pin(async move { esito })
+        });
+        Apertura::Pc {
+            porte: vec![1433],
+            destinazioni: vec![],
+            collega,
+        }
+    }
+
+    async fn prossimo(c: &mut Canale) -> Messaggio {
+        let b = timeout(ATTESA, c.rx.recv()).await.unwrap().unwrap();
+        decodifica(b).unwrap()
+    }
+
+    #[tokio::test]
+    async fn con_i_flussi_fermi_ogni_capo_manda_vita() {
+        // Il CLI con un flusso aperto e mai usato (collaudo 32(e)).
+        let (nuovi, rx) = mpsc::unbounded_channel();
+        let (_app, locale) = tokio::io::duplex(SOCKET);
+        nuovi.send((d("127.0.0.1:1433"), locale)).unwrap();
+        let (mut rx, (tx, _server)) = (Some(rx), mpsc::unbounded_channel());
+        for pc in [false, true] {
+            // Un capo alla volta: il tempo si conta dalla sua partenza.
+            let inizio = Instant::now();
+            let (mut altro, compito) = match rx.take() {
+                Some(rx) => un_capo(Apertura::Controllante(rx), None),
+                None => un_capo(pc_1433(tx.clone()), Some(Duration::from_secs(3600))),
+            };
+            if !pc {
+                assert!(matches!(prossimo(&mut altro).await, Messaggio::Apri { .. }));
+            }
+            for n in 1..=3 {
+                assert_eq!(prossimo(&mut altro).await, Messaggio::Vita);
+                let passato = inizio.elapsed();
+                assert!(passato >= VITA_PROVA * n, "{passato:?}");
+                assert!(passato < VITA_PROVA * n + VITA_PROVA / 2, "{passato:?}");
+            }
+            compito.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn con_i_dati_che_passano_nessun_vita() {
+        let (tx, mut server) = mpsc::unbounded_channel();
+        let (mut altro, compito) = un_capo(pc_1433(tx), None);
+        let apri = Messaggio::Apri {
+            flusso: 1,
+            indirizzo: Ipv4Addr::LOCALHOST,
+            porta: 1433,
+        };
+        altro.manda(codifica(&apri)).await.unwrap();
+        let mut srv = timeout(ATTESA, server.recv()).await.unwrap().unwrap();
+        let inizio = Instant::now();
+        // Un byte ogni terzo di VITA, per piu' di tre VITA: solo Dati.
+        for _ in 0..10 {
+            tokio::time::sleep(VITA_PROVA / 3).await;
+            srv.write_all(b"x").await.unwrap();
+            let dati = Bytes::from_static(b"x");
+            assert_eq!(
+                prossimo(&mut altro).await,
+                Messaggio::Dati { flusso: 1, dati }
+            );
+        }
+        assert!(inizio.elapsed() >= VITA_PROVA * 3);
+        // I dati si fermano: dopo VITA il segno di vita.
+        let fermo = Instant::now();
+        assert_eq!(prossimo(&mut altro).await, Messaggio::Vita);
+        assert!(fermo.elapsed() >= VITA_PROVA - VITA_PROVA / 3);
+        compito.abort();
+    }
+
+    #[tokio::test]
+    async fn solo_segni_di_vita_il_pc_chiude_per_inattivita() {
+        // L'ora del PC, in piccolo: il CLI manda solo segni di vita.
+        let inattivita = VITA_PROVA * 4;
+        let (tx, _server) = mpsc::unbounded_channel();
+        let (mut altro, mut compito) = un_capo(pc_1433(tx), Some(inattivita));
+        let inizio = Instant::now();
+        let r = loop {
+            tokio::select! {
+                r = &mut compito => break r.unwrap(),
+                _ = tokio::time::sleep(VITA_PROVA / 3) => {
+                    altro.manda(codifica(&Messaggio::Vita)).await.ok();
+                }
+            }
+        };
+        assert_eq!(r.motivo, Motivo::Inattivita);
+        assert!(inizio.elapsed() >= inattivita);
+        assert_eq!((r.flussi, r.byte_mandati, r.byte_ricevuti), (0, 0, 0));
+        // Il PC ha mandato i suoi segni di vita, che non contano, poi la fine.
+        let mut visti = Vec::new();
+        while let Ok(b) = altro.rx.try_recv() {
+            visti.push(decodifica(b).unwrap());
+        }
+        let fine = Messaggio::Fine {
+            motivo: FineDalPc::Inattivita,
+        };
+        assert_eq!(visti.pop(), Some(fine));
+        assert!(!visti.is_empty() && visti.iter().all(|m| *m == Messaggio::Vita));
     }
 
     /// I due capi su una vera connessione RustDesk (`Stream` su TCP, cifrata

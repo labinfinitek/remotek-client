@@ -24,6 +24,11 @@ rilasciate non si riscrivono.
 - Nella finestra della richiesta lo script e' a larghezza fissa anche su
   Windows (Consolas; prima il carattere di sistema, collaudo 28(g)), e le
   righe lunghe scorrono di lato invece di andare a capo.
+- **Per l'agente AI**: quando il PC chiude la connessione del tunnel prima di
+  lasciarlo entrare, `remotek-cli tunnel` dice il motivo che il PC manda (per
+  esempio il rifiuto dal connection manager) invece di "connessione chiusa
+  dal PC"; senza motivo, dopo aver scritto di aspettare il cliente, scrive
+  che il cliente ha rifiutato o non ha risposto.
 
 ## [remotek-1.4.9-9] - 2026-11-06
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

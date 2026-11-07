@@ -18,7 +18,7 @@ use crate::remotek::{
 };
 use hbb_common::{
     config::{LocalConfig, PeerConfig},
-    message_proto::{login_response, message, Message},
+    message_proto::{login_response, message, misc, Message},
     protobuf::Message as _,
     rendezvous_proto::ConnType,
     tokio::{self, net::TcpListener, sync::mpsc},
@@ -313,12 +313,12 @@ async fn login(
     eventi: &Receiver<Evento>,
     stream: &mut Stream,
 ) -> Result<String, String> {
-    let mut avvisato = false;
+    let (mut avvisato, mut motivo) = (false, None);
     loop {
         let bytes = match stream.next().await {
             Some(Ok(b)) => b,
             Some(Err(e)) => return Err(format!("connessione chiusa: {e}")),
-            None => return Err("connessione chiusa dal PC".to_owned()),
+            None => return Err(chiusa_al_login(motivo.as_deref(), avvisato)),
         };
         let msg = Message::parse_from_bytes(&bytes).map_err(|e| e.to_string())?;
         let (mut pa, mut rifiuto) = (None, None);
@@ -336,6 +336,12 @@ async fn login(
                 _ => {}
             },
             Some(message::Union::TestDelay(t)) => session.handle_test_delay(t, stream).await,
+            // Il PC lo manda prima di chiudere (anche al rifiuto dal CM).
+            Some(message::Union::Misc(m)) => {
+                if let Some(misc::Union::CloseReason(r)) = m.union {
+                    motivo = Some(r);
+                }
+            }
             _ => {}
         }
         while let Ok(evento) = eventi.try_recv() {
@@ -354,6 +360,21 @@ async fn login(
         if let Some(pa) = pa {
             return Ok(pa);
         }
+    }
+}
+
+/// Il PC chiude durante il login. `motivo`: il `close_reason` mandato prima
+/// (al rifiuto dal CM "Closed manually by the peer",
+/// `send_close_reason_no_retry` di src/server/connection.rs); `avvisato`: il
+/// CLI ha scritto che il PC aspetta il clic del cliente.
+pub(super) fn chiusa_al_login(motivo: Option<&str>, avvisato: bool) -> String {
+    match (motivo, avvisato) {
+        (Some(m), _) => format!("connessione chiusa dal PC: {m}"),
+        (None, true) => format!(
+            "il cliente ha rifiutato o non ha risposto: {} sul PC ha chiuso la connessione",
+            super::marchio()
+        ),
+        (None, false) => "connessione chiusa dal PC".to_owned(),
     }
 }
 
@@ -572,5 +593,22 @@ mod tests {
         ] {
             assert_eq!(codice_alla_fine(&m), 1, "{m:?}");
         }
+    }
+
+    #[test]
+    fn la_chiusura_al_login_dice_perche() {
+        // Il rifiuto dal CM: il PC manda il motivo, il CLI lo dice.
+        let cm = Some("Closed manually by the peer");
+        for avvisato in [false, true] {
+            assert_eq!(
+                chiusa_al_login(cm, avvisato),
+                "connessione chiusa dal PC: Closed manually by the peer"
+            );
+        }
+        // Senza motivo, dopo aver scritto di aspettare il cliente.
+        let senza = chiusa_al_login(None, true);
+        assert!(senza.starts_with("il cliente ha rifiutato o non ha risposto: "));
+        assert!(senza.contains(&super::super::marchio()), "{senza}");
+        assert_eq!(chiusa_al_login(None, false), "connessione chiusa dal PC");
     }
 }

@@ -138,7 +138,8 @@ Widget remotekSceltaCm(
 
 // Lo script di exec sopra `pulsanti`; senza script (non exec) solo
 // `pulsanti`, come prima. Il riquadro prende lo spazio che resta sopra i
-// pulsanti e scorre: il CM non si allarga. Le righe lunghe vanno a capo.
+// pulsanti e scorre: il CM non si allarga. Le righe lunghe scorrono di
+// lato, senza andare a capo.
 Widget remotekConScript(dynamic remotek, Widget pulsanti) {
   if (remotek is! Map<String, dynamic>) return pulsanti;
   final script = remotek['script'];
@@ -165,6 +166,15 @@ Widget remotekConScript(dynamic remotek, Widget pulsanti) {
   );
 }
 
+// Lo script a larghezza fissa: 'monospace' su Windows non e' una famiglia e
+// Flutter ripiegava sul carattere di sistema (collaudo 28(g)). Consolas c'e'
+// sempre su Windows; Linux e macOS ripiegano sulle altre.
+const remotekStileScript = TextStyle(
+  fontFamily: 'Consolas',
+  fontFamilyFallback: ['Courier New', 'monospace'],
+  fontSize: 12,
+);
+
 class _RemotekScript extends StatefulWidget {
   final String testo;
   const _RemotekScript({required this.testo});
@@ -175,10 +185,12 @@ class _RemotekScript extends StatefulWidget {
 
 class _RemotekScriptState extends State<_RemotekScript> {
   final _scorrimento = ScrollController();
+  final _laterale = ScrollController();
 
   @override
   void dispose() {
     _scorrimento.dispose();
+    _laterale.dispose();
     super.dispose();
   }
 
@@ -189,15 +201,26 @@ class _RemotekScriptState extends State<_RemotekScript> {
         border: Border.all(color: Colors.grey),
         borderRadius: BorderRadius.circular(4),
       ),
+      // La barra laterale sta fuori dallo scorrimento verticale, sul bordo
+      // basso del riquadro, sempre visibile: il cliente vede che una riga
+      // continua oltre il bordo, qualunque sia la lunghezza dello script.
       child: Scrollbar(
-        controller: _scorrimento,
+        controller: _laterale,
         thumbVisibility: true,
-        child: SingleChildScrollView(
+        notificationPredicate: (n) => n.depth == 1,
+        child: Scrollbar(
           controller: _scorrimento,
-          padding: const EdgeInsets.all(6),
-          child: SelectableText(
-            widget.testo,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _scorrimento,
+            padding: const EdgeInsets.all(6),
+            // Le righe lunghe scorrono di lato: a capo lo script non e' piu'
+            // quello che il PC esegue, riga per riga.
+            child: SingleChildScrollView(
+              controller: _laterale,
+              scrollDirection: Axis.horizontal,
+              child: SelectableText(widget.testo, style: remotekStileScript),
+            ),
           ),
         ),
       ),

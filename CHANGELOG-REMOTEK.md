@@ -21,6 +21,9 @@ rilasciate non si riscrivono.
   come messaggio malformato e chiude il tunnel dopo 10 s di silenzio; CLI e
   PC vanno aggiornati insieme (il -9 e' solo sulla VM di collaudo; il -8
   pubblicato non ha il tunnel).
+- Nella finestra della richiesta lo script e' a larghezza fissa anche su
+  Windows (Consolas; prima il carattere di sistema, collaudo 28(g)), e le
+  righe lunghe scorrono di lato invece di andare a capo.
 
 ## [remotek-1.4.9-9] - 2026-11-06
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0

@@ -65,7 +65,9 @@ const USO: &str = "uso:
                                destinazioni (va aggiornato; lo dice anche su stderr);
                                un PC fino al remotek-1.4.9-8 non sa del tunnel: dopo il clic
                                del cliente rifiuta il login e il CLI esce con 1, col
-                               messaggio del PC
+                               messaggio del PC; con un PC del remotek-1.4.9-9 il tunnel
+                               cade dopo 10 secondi senza traffico (il segno di vita):
+                               CLI e PC vanno aggiornati insieme
 il CLI ha una cartella di configurazione sua (account, ID e chiavi), separata da quella
 del client grafico dello stesso utente;
 su Windows stdin, stdout e, con exec, stderr vanno rediretti (pipe o file): su una

@@ -164,8 +164,11 @@ void main() {
         {'etichetta': 'Esecuzione di comandi', 'script': 'Get-Date\r\n^[[2J'}));
     expect(find.text('Script'), findsOneWidget);
     expect(find.byType(SelectableText), findsOneWidget);
-    expect(tester.widget<SelectableText>(find.byType(SelectableText)).data,
-        'Get-Date\n^[[2J');
+    final testo = tester.widget<SelectableText>(find.byType(SelectableText));
+    expect(testo.data, 'Get-Date\n^[[2J');
+    // Collaudo 28(g): una famiglia vera su Windows, a larghezza fissa altrove.
+    expect(testo.style?.fontFamily, 'Consolas');
+    expect(testo.style?.fontFamilyFallback, ['Courier New', 'monospace']);
     expect(
         tester.getTopLeft(find.byType(SelectableText)).dy <
             tester.getTopLeft(find.text('Accetta')).dy,
@@ -180,9 +183,30 @@ void main() {
         List.generate(2000, (i) => 'riga $i ${'x' * 200}').join('\r\n');
     await tester.pumpWidget(conScript({'script': lungo}, altezza: 200));
     expect(tester.takeException(), isNull);
-    expect(tester.getSize(find.byType(SingleChildScrollView)).height,
-        lessThan(200));
+    final verticale = find.byWidgetPredicate((w) =>
+        w is SingleChildScrollView && w.scrollDirection == Axis.vertical);
+    expect(tester.getSize(verticale).height, lessThan(200));
+    // Le righe lunghe scorrono di lato e non vanno a capo: il riquadro resta
+    // largo come il CM, il testo e' piu' largo.
+    final laterale = find.byWidgetPredicate((w) =>
+        w is SingleChildScrollView && w.scrollDirection == Axis.horizontal);
+    expect(laterale, findsOneWidget);
+    expect(tester.getSize(laterale).width, lessThanOrEqualTo(300));
+    expect(tester.getSize(find.byType(SelectableText)).width, greaterThan(300));
     expect(find.text('Accetta'), findsOneWidget);
+    // La barra laterale e' sempre visibile sul bordo basso del riquadro, non
+    // in fondo allo script: il cliente vede che una riga continua.
+    final barra = find.byWidgetPredicate((w) =>
+        w is Scrollbar &&
+        w.thumbVisibility == true &&
+        w.controller != null &&
+        w.controller!.hasClients &&
+        w.controller!.position.axis == Axis.horizontal);
+    expect(barra, findsOneWidget);
+    final riquadro = tester.getRect(barra);
+    expect(riquadro.bottom,
+        lessThanOrEqualTo(tester.getTopLeft(find.text('Accetta')).dy));
+    expect(riquadro.height, lessThan(200));
   });
 
   // ADR-0036: il tunnel dell'agente.

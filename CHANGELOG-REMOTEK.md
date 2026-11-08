@@ -11,6 +11,17 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-10] - 2026-11-08
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-10`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`, lo stesso
+dal -6). Nello stesso build c'e' `remotek-cli.exe` per Windows, attestato e
+non firmato come l'exe. Correzioni del collaudo del -9: il tunnel
+dell'agente regge via relay, e testi del CLI e della finestra di exec.
+**Per chi installa**: il tunnel vuole `remotek-cli` e Remotek sul PC tutti e
+due del -10 (il -9 chiude dopo 10 s di silenzio). `terminal` ed exec non
+cambiano verso il -9. I `custom.txt` gia' consegnati restano validi.
+
 ### Corretto
 - **Per l'agente AI**: il tunnel via relay non cade piu' dopo mezzo minuto
   senza traffico (collaudo 32(e): un client SQL fermo faceva chiudere a hbbr

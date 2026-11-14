@@ -11,6 +11,9 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Modificato
+- Le frasi che il cliente legge su Windows danno del "voi", come il sito Infinitek: il testo sotto l'ID della home ("dopo che l'avete accettata"), il riquadro che invita a installare ("fate clic") e la pagina di installazione ("accettate i termini"). Pulsanti e menu non cambiano.
+
 ## [remotek-1.4.9-10] - 2026-11-08
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-10`

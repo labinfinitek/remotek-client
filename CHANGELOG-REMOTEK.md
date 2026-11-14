@@ -11,6 +11,17 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-11] - 2026-11-14
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-11`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`, lo stesso
+dal -6). Nello stesso build c'e' `remotek-cli.exe` per Windows, attestato e
+non firmato come l'exe. La versione che esce col sito Infinitek: logo e
+icone nuovi, frasi del cliente al "voi", e "Aggiorna" che non cancella piu'
+il `custom.txt`. **Per chi installa**: niente cambia verso il -10 per
+tunnel, terminale ed exec; i `custom.txt` gia' consegnati restano validi e,
+da questa versione, restano anche quando si aggiorna dalla finestra.
+
 ### Modificato
 - Logo e icone nuovi, dal disegno vettoriale del logo Infinitek: nella home il logo orizzontale (infinito e scritta INFINITEK, senza motto) in positivo sul tema chiaro e in negativo sullo scuro, al posto del solo simbolo e del logo verticale; icone dell'exe, della finestra, della barra delle applicazioni, dell'area di notifica e del connection manager piu' nitide, con il nastro ingrossato sotto i 48 px.
 - Le frasi che il cliente legge su Windows danno del "voi", come il sito Infinitek: il testo sotto l'ID della home ("dopo che l'avete accettata"), il riquadro che invita a installare ("fate clic") e la pagina di installazione ("accettate i termini"). Pulsanti e menu non cambiano.

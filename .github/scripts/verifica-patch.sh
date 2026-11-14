@@ -1479,7 +1479,7 @@ fi
 # (e) BUILTIN_SETTINGS non forza allow-logon-screen-password: con quella chiave
 #     a "Y" e lo schermo bloccato il ramo di rifiuto di connection.rs non
 #     scatta nemmeno in modo click (src/server/connection.rs:2681-2687) e la
-#     frase "la connessione parte solo dopo che l'hai accettata" direbbe il
+#     frase "la connessione parte solo dopo che l'avete accettata" direbbe il
 #     falso. Oggi la mappa e' vuota; se un giorno la si accende, la frase della
 #     home va riletta insieme a quella chiave.
 esito_frase=$(python3 - <<'PY'

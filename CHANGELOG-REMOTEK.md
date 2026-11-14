@@ -11,6 +11,10 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Modificato
+- Logo e icone nuovi, dal disegno vettoriale del logo Infinitek: nella home il logo orizzontale (infinito e scritta INFINITEK, senza motto) in positivo sul tema chiaro e in negativo sullo scuro, al posto del solo simbolo e del logo verticale; icone dell'exe, della finestra, della barra delle applicazioni, dell'area di notifica e del connection manager piu' nitide, con il nastro ingrossato sotto i 48 px.
+- Le frasi che il cliente legge su Windows danno del "voi", come il sito Infinitek: il testo sotto l'ID della home ("dopo che l'avete accettata"), il riquadro che invita a installare ("fate clic") e la pagina di installazione ("accettate i termini"). Pulsanti e menu non cambiano.
+
 ### Corretto
 - **Per chi installa**: aggiornare dalla finestra ("Aggiorna" nella home, che apre la pagina di installazione) non cancella piu' il `custom.txt` della cartella di installazione: il server non presidiato perdeva l'accesso senza clic e tornava a chiedere il clic al cliente (collaudo del -10). Il file passa dalla vecchia cartella alla nuova; la disinstallazione lo toglie come prima.
 

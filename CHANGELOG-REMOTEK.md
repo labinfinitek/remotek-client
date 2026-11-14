@@ -23,7 +23,7 @@ tunnel, terminale ed exec; i `custom.txt` gia' consegnati restano validi e,
 da questa versione, restano anche quando si aggiorna dalla finestra.
 
 ### Modificato
-- Logo e icone nuovi, dal disegno vettoriale del logo Infinitek: nella home il logo orizzontale (infinito e scritta INFINITEK, senza motto) in positivo sul tema chiaro e in negativo sullo scuro, al posto del solo simbolo e del logo verticale; icone dell'exe, della finestra, della barra delle applicazioni, dell'area di notifica e del connection manager piu' nitide, con il nastro ingrossato sotto i 48 px.
+- Logo e icone ufficiali Infinitek, rifatti in vettoriale: nella home il logo intero (infinito, INFINITEK e slogan) nella versione chiara sul tema chiaro e scura sul tema scuro; icone dell'exe, della finestra, della barra delle applicazioni, dell'area di notifica e del connection manager col solo infinito, piu' nitide.
 - Le frasi che il cliente legge su Windows danno del "voi", come il sito Infinitek: il testo sotto l'ID della home ("dopo che l'avete accettata"), il riquadro che invita a installare ("fate clic") e la pagina di installazione ("accettate i termini"). Pulsanti e menu non cambiano.
 
 ### Corretto

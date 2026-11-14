@@ -16,28 +16,28 @@ sono prodotti con la 12.3.0. Codici di uscita: 0 ok, 1 file diversi (--check),
 2 sorgente mancante o non valida. Il .gitignore upstream esclude i PNG
 ("*png"): un PNG nuovo si aggiunge con git add -f, quelli gia' tracciati no.
 
-Sorgenti: i PNG esportati dal disegno vettoriale del logo (2026-11-14,
-setup-lab/sito-web/brand/), con accanto gli SVG da cui vengono. Con un
-disegno nuovo si sostituiscono i file con gli stessi nomi e si rilancia lo
-script.
-    brand/sorgenti/marchio.png        solo l'infinito, 1024 x 1024, fondo
-                                      trasparente: icone da 48 px in su
-    brand/sorgenti/favicon.png        l'infinito col nastro ingrossato, 512 x
-                                      512: icone sotto i 48 px, dove quello
-                                      normale si assottiglia troppo
-    brand/sorgenti/logo-positivo.png  logo orizzontale senza motto, scritta
-                                      scura: tema chiaro
-    brand/sorgenti/logo-negativo.png  lo stesso con la scritta chiara: tema
-                                      scuro
-I loghi sono senza motto: nella colonna sinistra della home (200 px meno i
-margini) il logo e' largo 176 px, e il motto vuole almeno 250 px. Le icone
-di macOS, iOS e Android restano quelle upstream.
+Sorgenti: i file del logo ufficiale Infinitek (decisione del titolare del
+2026-11-14: due soli loghi, chiaro e scuro, disegno verticale delle offerte
+rifatto in vettoriale), copiati senza modifiche da setup-lab/logo-infinitek/
+(commit 156191a). Con un disegno nuovo si sostituiscono i file con gli
+stessi nomi e si rilancia lo script.
+    brand/sorgenti/infinitek.ico     icone/infinitek.ico: il solo infinito,
+                                     16-256 px, l'icona dei programmi
+    brand/sorgenti/logo-chiaro.png   png/infinitek-chiaro-1617.png: logo per
+                                     fondo chiaro, fondo trasparente
+    brand/sorgenti/logo-scuro.png    png/infinitek-scuro-1617.png: logo per
+                                     fondo scuro, fondo trasparente
+Il logo e' quello intero, slogan compreso: la regola del marchio non lo
+taglia. Nella home sta in 60 px di altezza (circa 147 px di larghezza): lo
+slogan c'e' ma non si legge. Il logo e' fermo: Flutter non anima gli SVG.
+Le icone di macOS, iOS e Android restano quelle upstream.
 
 Chi legge i file generati (Windows):
-- res/icon.ico: icona dell'exe autoestraente distribuito
+- res/icon.ico: copia di infinitek.ico; icona dell'exe autoestraente distribuito
   (libs/portable/build.rs) e del pacchetto MSI. build.rs la mette nella DLL
   solo con la feature inline (Sciter): nel build Flutter la DLL non ha icona.
-- flutter/windows/runner/resources/app_icon.ico: IDI_APP_ICON di Runner.rc,
+- flutter/windows/runner/resources/app_icon.ico: copia di infinitek.ico;
+  IDI_APP_ICON di Runner.rc,
   cioe' l'icona di Remotek.exe installato, della finestra, della barra delle
   applicazioni e dei collegamenti.
 - res/tray-icon.ico: area di notifica quando manca assets/icon.png
@@ -49,9 +49,9 @@ Chi legge i file generati (Windows):
   ad alta densita'). icon.png e' anche l'icona dell'area di notifica:
   src/tray.rs la preferisce a tray-icon.ico; 32 px come quella upstream.
 - flutter/assets/logo_light.png, logo_dark.png: loadLogo() della home
-  (riquadro massimo 300 x 60, BoxFit.contain): logo in positivo per il tema
-  chiaro, in negativo per lo scuro. Larghi LARGHEZZA_LOGO px, tre volte i
-  176 px a cui la home li mostra: nitidi anche a scala 300%.
+  (riquadro massimo 300 x 60, BoxFit.contain): logo chiaro per il tema
+  chiaro, logo scuro per il tema scuro. Alti ALTEZZA_LOGO px, tre volte
+  i 60 px a cui la home li mostra: nitidi anche a scala 300%.
 Il file flutter/assets/icon.svg resta quello upstream: loadIcon() lo usa
 solo se manca icon.png.
 """
@@ -68,17 +68,11 @@ except ModuleNotFoundError:
     sys.exit("genera_icone: serve Pillow (python3 -m pip install pillow==12.3.0)")
 
 RADICE = Path(__file__).resolve().parent.parent
-MARCHIO = RADICE / "brand" / "sorgenti" / "marchio.png"
-FAVICON = RADICE / "brand" / "sorgenti" / "favicon.png"
-LOGO_POSITIVO = RADICE / "brand" / "sorgenti" / "logo-positivo.png"
-LOGO_NEGATIVO = RADICE / "brand" / "sorgenti" / "logo-negativo.png"
+ICONA = RADICE / "brand" / "sorgenti" / "infinitek.ico"
+LOGO_CHIARO = RADICE / "brand" / "sorgenti" / "logo-chiaro.png"
+LOGO_SCURO = RADICE / "brand" / "sorgenti" / "logo-scuro.png"
 
-# Misure delle icone Windows: quelle che la shell chiede da 100% a 200% di
-# scala (16-32 piccole, 32-64 grandi, 256 in Esplora risorse).
-MISURE_ICO = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
-# Sotto questa misura le icone vengono da favicon.png (nastro piu' spesso).
-LATO_FAVICON = 48
-LARGHEZZA_LOGO = 528
+ALTEZZA_LOGO = 180
 FIRMA_PNG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -107,20 +101,6 @@ def ridimensiona(im: Image.Image, larghezza: int, altezza: int) -> Image.Image:
         .resize((larghezza, altezza), Image.Resampling.LANCZOS)
         .convert("RGBA")
     )
-
-
-def quadrata(simbolo: Image.Image, lato: int) -> Image.Image:
-    """Simbolo centrato su un quadrato trasparente, margine di 1/32 per lato."""
-    interno = lato - 2 * (lato // 32)
-    scala = min(interno / simbolo.width, interno / simbolo.height)
-    larghezza = max(1, round(simbolo.width * scala))
-    altezza = max(1, round(simbolo.height * scala))
-    tela = Image.new("RGBA", (lato, lato), (0, 0, 0, 0))
-    tela.paste(
-        ridimensiona(simbolo, larghezza, altezza),
-        ((lato - larghezza) // 2, (lato - altezza) // 2),
-    )
-    return tela
 
 
 def voce_bmp(im: Image.Image) -> bytes:
@@ -168,28 +148,37 @@ def ico(immagini: list[Image.Image]) -> bytes:
     return testa + b"".join(voci)
 
 
-def uscite() -> dict[str, tuple[str, list[Image.Image]]]:
-    """Percorso relativo -> (formato, immagini), nell'ordine di scrittura."""
-    marchio = carica(MARCHIO)
-    favicon = carica(FAVICON)
+def voce_ico(lato: int) -> Image.Image:
+    """La voce lato x lato di infinitek.ico, cosi' com'e'."""
+    try:
+        with Image.open(ICONA) as im:
+            if (lato, lato) not in im.ico.sizes():
+                raise ErroreBrand(f"{ICONA.relative_to(RADICE)}: manca la voce {lato} px")
+            return im.ico.getimage((lato, lato)).convert("RGBA")
+    except OSError as e:
+        raise ErroreBrand(f"{ICONA.relative_to(RADICE)}: {e}") from e
 
-    def icona(lato: int) -> Image.Image:
-        return quadrata(favicon if lato < LATO_FAVICON else marchio, lato)
+
+def uscite() -> dict[str, tuple[str, list[Image.Image] | bytes]]:
+    """Percorso relativo -> (formato, immagini o byte), nell'ordine di scrittura."""
 
     def logo(percorso: Path) -> Image.Image:
         im = carica(percorso)
-        altezza = max(1, round(im.height * LARGHEZZA_LOGO / im.width))
-        return ridimensiona(im, LARGHEZZA_LOGO, altezza)
+        larghezza = max(1, round(im.width * ALTEZZA_LOGO / im.height))
+        return ridimensiona(im, larghezza, ALTEZZA_LOGO)
 
-    icone = [icona(lato) for lato in MISURE_ICO]
+    try:
+        icona = ICONA.read_bytes()
+    except OSError as e:
+        raise ErroreBrand(f"{ICONA.relative_to(RADICE)}: {e}") from e
     return {
-        "res/icon.ico": ("ico", icone),
-        "flutter/windows/runner/resources/app_icon.ico": ("ico", icone),
-        "res/tray-icon.ico": ("ico", [icona(32)]),
-        "flutter/assets/icon.png": ("png", [icona(32)]),
-        "flutter/assets/2.0x/icon.png": ("png", [icona(64)]),
-        "flutter/assets/logo_light.png": ("png", [logo(LOGO_POSITIVO)]),
-        "flutter/assets/logo_dark.png": ("png", [logo(LOGO_NEGATIVO)]),
+        "res/icon.ico": ("copia", icona),
+        "flutter/windows/runner/resources/app_icon.ico": ("copia", icona),
+        "res/tray-icon.ico": ("ico", [voce_ico(32)]),
+        "flutter/assets/icon.png": ("png", [voce_ico(32)]),
+        "flutter/assets/2.0x/icon.png": ("png", [voce_ico(64)]),
+        "flutter/assets/logo_light.png": ("png", [logo(LOGO_CHIARO)]),
+        "flutter/assets/logo_dark.png": ("png", [logo(LOGO_SCURO)]),
     }
 
 
@@ -233,12 +222,18 @@ def main() -> int:
 
     diversi = 0
     for relativo, (formato, immagini) in attese.items():
-        dati = ico(immagini) if formato == "ico" else png(immagini[0])
+        if formato == "copia":
+            dati, misure = immagini, "copia della sorgente"
+        else:
+            dati = ico(immagini) if formato == "ico" else png(immagini[0])
+            misure = ", ".join(f"{im.width}x{im.height}" for im in immagini)
         destinazione = RADICE / relativo
-        misure = ", ".join(f"{im.width}x{im.height}" for im in immagini)
         if args.check:
             try:
-                uguale = decodifica(destinazione.read_bytes()) == decodifica(dati)
+                if formato == "copia":
+                    uguale = destinazione.read_bytes() == dati
+                else:
+                    uguale = decodifica(destinazione.read_bytes()) == decodifica(dati)
             except (OSError, ValueError, struct.error):
                 uguale = False
             if uguale:

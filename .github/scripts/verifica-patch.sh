@@ -1731,6 +1731,11 @@ VIETATI = re.compile(r"os_login|OSLogin|custom\.txt|\benv\s*::\s*vars?(_os)?\b|\
 # si toglie da li' (sez. 24). Il resto di VIETATI vale anche qui.
 OS_LOGIN_DEL_PC = {"src/remotek/lasciapassare.rs"}
 SENZA_OS_LOGIN = re.compile(VIETATI.pattern.replace("os_login|OSLogin|", "", 1))
+# Codice dell'installazione del PC, non del CLI: nomina custom.txt per
+# conservarlo all'aggiornamento (sez. 38), non lo legge. Il resto vale.
+CUSTOM_TXT_DEL_PC = {"src/remotek/reinstallazione.rs"}
+SENZA_CUSTOM_TXT = re.compile(VIETATI.pattern.replace("custom\\.txt|", "", 1))
+assert SENZA_CUSTOM_TXT.pattern != VIETATI.pattern
 # Un `use std::env::{..., var, ...};`, anche su piu' righe.
 IMPORTA_VAR = re.compile(r"\benv\s*::\s*\{[^}]*\bvars?(_os)?\b")
 STRINGA_GREZZA = re.compile(r'b?r(#*)"')
@@ -1811,7 +1816,8 @@ for f in FILE:
                 continue
         codice = codice[inizio:]
         vive.append(codice)
-        if (SENZA_OS_LOGIN if f in OS_LOGIN_DEL_PC else VIETATI).search(codice):
+        vietati = SENZA_OS_LOGIN if f in OS_LOGIN_DEL_PC else SENZA_CUSTOM_TXT if f in CUSTOM_TXT_DEL_PC else VIETATI
+        if vietati.search(codice):
             guai.append("%s:%d: %s" % (f, n, codice.strip()))
         if "IS_TERMINAL_ADMIN" in codice:
             if 'remove_var("IS_TERMINAL_ADMIN")' in codice:
@@ -2935,6 +2941,44 @@ else
   while IFS= read -r r; do
     [ -n "$r" ] && errore "$r"
   done <<<"$esito_destinazioni"
+fi
+
+# --- 38. Il custom.txt resta all'aggiornamento dalla finestra ---------------
+# Collaudo del remotek-1.4.9-10, osservazione 1: "Aggiorna" della home porta
+# alla pagina di installazione e install_me comincia con la disinstallazione
+# (rd /s /q della cartella), che cancellava il custom.txt del server non
+# presidiato. install_me salva il file prima di {uninstall_str} e lo rimette
+# dopo {copy_exe} (src/remotek/reinstallazione.rs). Codice Windows che la CI
+# delle MR non compila: se un merge sposta le righe, si vede qui.
+esito_reinstallazione=$(python3 - <<'PY'
+import re
+def codice(f):
+    return "\n".join(r.split("//", 1)[0] for r in open(f, encoding="utf-8"))
+guai = []
+W = "src/platform/windows.rs"
+w = codice(W)
+m = re.search(r"pub fn install_me\(.*?\n\}\n", w, re.S)
+if not m:
+    guai.append("%s: install_me non trovata: il custom.txt all'aggiornamento non e' controllato" % W)
+else:
+    im = m.group(0)
+    if not re.search(r"let vecchia_cartella = get_install_info\(\)\.1;", im):
+        guai.append("%s: install_me non legge piu' la cartella dell'installazione presente" % W)
+    if not re.search(r'"\s*\{salva_custom\}\s*\{uninstall_str\}\s', im):
+        guai.append("%s: install_me non salva il custom.txt prima della disinstallazione" % W)
+    if not re.search(r"\{copy_exe\}\s*\{rimetti_custom\}\s", im):
+        guai.append("%s: install_me non rimette il custom.txt dopo la copia del programma" % W)
+    if not re.search(r"salva_custom = crate::remotek::reinstallazione::salva\(&vecchia_cartella\),", im) or not re.search(r"rimetti_custom = crate::remotek::reinstallazione::rimetti\(&vecchia_cartella, &path\),", im):
+        guai.append("%s: install_me non usa reinstallazione::salva e rimetti" % W)
+print("\n".join(guai))
+PY
+) || esito_reinstallazione="${esito_reinstallazione:-}"$'\n'"controllo del custom.txt all'aggiornamento non eseguito: python3 terminato con errore"
+if [ -z "$esito_reinstallazione" ]; then
+  ok "custom.txt salvato prima della disinstallazione di install_me e rimesso dopo la copia (collaudo del -10, oss. 1)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_reinstallazione"
 fi
 
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"

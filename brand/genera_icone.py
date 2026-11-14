@@ -16,16 +16,22 @@ sono prodotti con la 12.3.0. Codici di uscita: 0 ok, 1 file diversi (--check),
 2 sorgente mancante o non valida. Il .gitignore upstream esclude i PNG
 ("*png"): un PNG nuovo si aggiunge con git add -f, quelli gia' tracciati no.
 
-Sorgenti: con il logo originale del grafico si sostituiscono questi due
-file, con gli stessi nomi, e si rilancia lo script. Un logo in positivo per
-il tema chiaro (oggi solo il simbolo) vuole una terza sorgente e la sua riga
-in uscite().
-    brand/sorgenti/marchio.png        solo il simbolo, fondo trasparente
-    brand/sorgenti/logo-negativo.png  simbolo, scritta chiara e motto su
-                                      fondo trasparente: va su fondo scuro
-Quelli attuali vengono dal sito infinitek.it (non esistono vettoriali ne'
-raster oltre i 600 px): bastano per Windows fino a 256 px, non per macOS,
-iOS e Android (1024 px), che restano quelli upstream.
+Sorgenti: i PNG esportati dal disegno vettoriale del logo (2026-11-14,
+setup-lab/sito-web/brand/), con accanto gli SVG da cui vengono. Con un
+disegno nuovo si sostituiscono i file con gli stessi nomi e si rilancia lo
+script.
+    brand/sorgenti/marchio.png        solo l'infinito, 1024 x 1024, fondo
+                                      trasparente: icone da 48 px in su
+    brand/sorgenti/favicon.png        l'infinito col nastro ingrossato, 512 x
+                                      512: icone sotto i 48 px, dove quello
+                                      normale si assottiglia troppo
+    brand/sorgenti/logo-positivo.png  logo orizzontale senza motto, scritta
+                                      scura: tema chiaro
+    brand/sorgenti/logo-negativo.png  lo stesso con la scritta chiara: tema
+                                      scuro
+I loghi sono senza motto: nella colonna sinistra della home (200 px meno i
+margini) il logo e' largo 176 px, e il motto vuole almeno 250 px. Le icone
+di macOS, iOS e Android restano quelle upstream.
 
 Chi legge i file generati (Windows):
 - res/icon.ico: icona dell'exe autoestraente distribuito
@@ -43,11 +49,11 @@ Chi legge i file generati (Windows):
   ad alta densita'). icon.png e' anche l'icona dell'area di notifica:
   src/tray.rs la preferisce a tray-icon.ico; 32 px come quella upstream.
 - flutter/assets/logo_light.png, logo_dark.png: loadLogo() della home
-  (riquadro massimo 300 x 60). Tema chiaro: solo il marchio, perche' la
-  scritta del logo in negativo e' bianca. Tema scuro: logo in negativo senza
-  motto, che a 60 px di altezza sarebbe alto 3 px e illeggibile.
+  (riquadro massimo 300 x 60, BoxFit.contain): logo in positivo per il tema
+  chiaro, in negativo per lo scuro. Larghi LARGHEZZA_LOGO px, tre volte i
+  176 px a cui la home li mostra: nitidi anche a scala 300%.
 Il file flutter/assets/icon.svg resta quello upstream: loadIcon() lo usa
-solo se manca icon.png, e non c'e' un vettoriale del marchio.
+solo se manca icon.png.
 """
 
 import argparse
@@ -63,11 +69,16 @@ except ModuleNotFoundError:
 
 RADICE = Path(__file__).resolve().parent.parent
 MARCHIO = RADICE / "brand" / "sorgenti" / "marchio.png"
+FAVICON = RADICE / "brand" / "sorgenti" / "favicon.png"
+LOGO_POSITIVO = RADICE / "brand" / "sorgenti" / "logo-positivo.png"
 LOGO_NEGATIVO = RADICE / "brand" / "sorgenti" / "logo-negativo.png"
 
 # Misure delle icone Windows: quelle che la shell chiede da 100% a 200% di
 # scala (16-32 piccole, 32-64 grandi, 256 in Esplora risorse).
 MISURE_ICO = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
+# Sotto questa misura le icone vengono da favicon.png (nastro piu' spesso).
+LATO_FAVICON = 48
+LARGHEZZA_LOGO = 528
 FIRMA_PNG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -110,29 +121,6 @@ def quadrata(simbolo: Image.Image, lato: int) -> Image.Image:
         ((lato - larghezza) // 2, (lato - altezza) // 2),
     )
     return tela
-
-
-def senza_motto(logo: Image.Image) -> Image.Image:
-    """Tiene le prime due fasce orizzontali (simbolo e scritta).
-
-    Le fasce sono gruppi di righe con pixel non trasparenti, separati da righe
-    del tutto trasparenti. Con due fasce o meno il logo resta com'e'.
-    """
-    alfa = logo.getchannel("A")
-    piene = [
-        alfa.crop((0, y, logo.width, y + 1)).getbbox() is not None
-        for y in range(logo.height)
-    ]
-    fasce = []
-    for y, piena in enumerate(piene):
-        if piena and (y == 0 or not piene[y - 1]):
-            fasce.append([y, y + 1])
-        elif piena:
-            fasce[-1][1] = y + 1
-    if len(fasce) <= 2:
-        return logo
-    tagliato = logo.crop((0, 0, logo.width, fasce[1][1]))
-    return tagliato.crop(tagliato.getchannel("A").getbbox())
 
 
 def voce_bmp(im: Image.Image) -> bytes:
@@ -183,16 +171,25 @@ def ico(immagini: list[Image.Image]) -> bytes:
 def uscite() -> dict[str, tuple[str, list[Image.Image]]]:
     """Percorso relativo -> (formato, immagini), nell'ordine di scrittura."""
     marchio = carica(MARCHIO)
-    logo = senza_motto(carica(LOGO_NEGATIVO))
-    icone = [quadrata(marchio, lato) for lato in MISURE_ICO]
+    favicon = carica(FAVICON)
+
+    def icona(lato: int) -> Image.Image:
+        return quadrata(favicon if lato < LATO_FAVICON else marchio, lato)
+
+    def logo(percorso: Path) -> Image.Image:
+        im = carica(percorso)
+        altezza = max(1, round(im.height * LARGHEZZA_LOGO / im.width))
+        return ridimensiona(im, LARGHEZZA_LOGO, altezza)
+
+    icone = [icona(lato) for lato in MISURE_ICO]
     return {
         "res/icon.ico": ("ico", icone),
         "flutter/windows/runner/resources/app_icon.ico": ("ico", icone),
-        "res/tray-icon.ico": ("ico", [quadrata(marchio, 32)]),
-        "flutter/assets/icon.png": ("png", [quadrata(marchio, 32)]),
-        "flutter/assets/2.0x/icon.png": ("png", [quadrata(marchio, 64)]),
-        "flutter/assets/logo_light.png": ("png", [marchio]),
-        "flutter/assets/logo_dark.png": ("png", [logo]),
+        "res/tray-icon.ico": ("ico", [icona(32)]),
+        "flutter/assets/icon.png": ("png", [icona(32)]),
+        "flutter/assets/2.0x/icon.png": ("png", [icona(64)]),
+        "flutter/assets/logo_light.png": ("png", [logo(LOGO_POSITIVO)]),
+        "flutter/assets/logo_dark.png": ("png", [logo(LOGO_NEGATIVO)]),
     }
 
 

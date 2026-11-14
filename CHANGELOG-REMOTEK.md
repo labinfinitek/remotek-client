@@ -11,6 +11,9 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Corretto
+- **Per chi installa**: aggiornare dalla finestra ("Aggiorna" nella home, che apre la pagina di installazione) non cancella piu' il `custom.txt` della cartella di installazione: il server non presidiato perdeva l'accesso senza clic e tornava a chiedere il clic al cliente (collaudo del -10). Il file passa dalla vecchia cartella alla nuova; la disinstallazione lo toglie come prima.
+
 ## [remotek-1.4.9-10] - 2026-11-08
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-10`

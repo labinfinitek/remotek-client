@@ -9,6 +9,7 @@ pub mod exec;
 pub mod firma;
 pub mod lasciapassare;
 pub mod non_presidiato;
+pub mod reinstallazione;
 pub mod scelta_terminale;
 pub mod script_al_login;
 pub mod script_exec;

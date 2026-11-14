@@ -1699,12 +1699,16 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
     // Remember to check if `update_me` need to be changed if changing the `cmds`.
     // No need to merge the existing dup code, because the code in these two functions are too critical.
     // New code should be written in a common function.
+    // Remotek: il custom.txt della vecchia cartella resta (src/remotek/reinstallazione.rs).
+    let vecchia_cartella = get_install_info().1;
     let cmds = format!(
         "
+{salva_custom}
 {uninstall_str}
 chcp 65001
 md \"{path}\"
 {copy_exe}
+{rimetti_custom}
 reg add {subkey} /f
 reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
 reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
@@ -1743,6 +1747,8 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         dels = if debug { "" } else { &dels },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
         import_config = get_import_config(&exe),
+        salva_custom = crate::remotek::reinstallazione::salva(&vecchia_cartella),
+        rimetti_custom = crate::remotek::reinstallazione::rimetti(&vecchia_cartella, &path),
     );
     run_cmds(cmds, debug, "install")?;
     run_after_run_cmds(silent);

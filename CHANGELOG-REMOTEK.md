@@ -11,6 +11,9 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Modificato
+- Logo della home e icone col disegno definitivo del logo Infinitek (nastro centrale dell'infinito ridisegnato).
+
 ## [remotek-1.4.9-11] - 2026-11-14
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-11`

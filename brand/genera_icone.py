@@ -19,17 +19,18 @@ sono prodotti con la 12.3.0. Codici di uscita: 0 ok, 1 file diversi (--check),
 Sorgenti: i file del logo ufficiale Infinitek (decisione del titolare del
 2026-11-14: due soli loghi, chiaro e scuro, disegno verticale delle offerte
 rifatto in vettoriale), copiati senza modifiche da setup-lab/logo-infinitek/
-(commit 156191a). Con un disegno nuovo si sostituiscono i file con gli
+(commit 156191a; slogan e infinito ingranditi in 0c453c1, scuro
+trasparente in 68fe649). Con un disegno nuovo si sostituiscono i file con gli
 stessi nomi e si rilancia lo script.
     brand/sorgenti/infinitek.ico     icone/infinitek.ico: il solo infinito,
                                      16-256 px, l'icona dei programmi
     brand/sorgenti/logo-chiaro.png   png/infinitek-chiaro-1617.png: logo per
                                      fondo chiaro, fondo trasparente
-    brand/sorgenti/logo-scuro.png    png/infinitek-scuro-1617.png: logo per
+    brand/sorgenti/logo-scuro.png    png/infinitek-scuro-trasparente-1617.png: logo per
                                      fondo scuro, fondo trasparente
 Il logo e' quello intero, slogan compreso: la regola del marchio non lo
-taglia. Nella home sta in 60 px di altezza (circa 147 px di larghezza): lo
-slogan c'e' ma non si legge. Il logo e' fermo: Flutter non anima gli SVG.
+taglia. Nella home sta in 60 px di altezza (circa 112 px di larghezza): lo
+slogan e' piccolo. Il logo e' fermo: Flutter non anima gli SVG.
 Le icone di macOS, iOS e Android restano quelle upstream.
 
 Chi legge i file generati (Windows):

@@ -11,6 +11,15 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+## [remotek-1.4.9-12] - 2026-11-15
+Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
+del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-12`
+di remotek-client e remotek-hbb-common (hbb_common `643ee42`, lo stesso
+dal -6). Nello stesso build c'e' `remotek-cli.exe` per Windows, attestato e
+non firmato come l'exe. E' il -11 col disegno definitivo del logo, e la
+versione che esce col sito Infinitek al posto del -11, che resta solo un
+tag e non si distribuisce. **Per chi installa**: niente cambia verso il -11.
+
 ### Modificato
 - Logo della home e icone col disegno definitivo del logo Infinitek (nastro centrale dell'infinito ridisegnato).
 

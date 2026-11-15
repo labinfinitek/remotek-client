@@ -20,7 +20,7 @@ Sorgenti: i file del logo ufficiale Infinitek (decisione del titolare del
 2026-11-14: due soli loghi, chiaro e scuro, disegno verticale delle offerte
 rifatto in vettoriale), copiati senza modifiche da setup-lab/logo-infinitek/
 (commit 156191a; slogan e infinito ingranditi in 0c453c1, scuro
-trasparente in 68fe649). Con un disegno nuovo si sostituiscono i file con gli
+trasparente in 68fe649, nastro centrale ridisegnato in 99ac2a0). Con un disegno nuovo si sostituiscono i file con gli
 stessi nomi e si rilancia lo script.
     brand/sorgenti/infinitek.ico     icone/infinitek.ico: il solo infinito,
                                      16-256 px, l'icona dei programmi

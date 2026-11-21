@@ -14,7 +14,12 @@
 #   e riportare qui le differenze che cadono in env: o nel job Windows x86_64;
 #   poi aggiornare il tag scritto in questo commento.
 # - Nessuna release pubblica: l'exe esce solo come artefatto della run.
-# - Firma del codice: passi presenti e SPENTI (variabile di repo FIRMA_ATTIVA).
+# - Firma del codice (ADR-0038, docs/procedure/firma-codice.md nell'ombrello):
+#   Azure Artifact Signing, SOLO nel build di un tag remotek-* con la variabile
+#   di repo FIRMA_ATTIVA=true. Il job entra allora nell'environment "firma"
+#   (regola: solo tag remotek-*), che porta gli identificativi Azure; la
+#   credenziale federata di Azure accetta solo quell'environment. Nessun
+#   segreto. I build dei branch restano non firmati.
 # - remotek-cli.exe (ADR-0033 passo 1) accanto all'exe finale, con le stesse
 #   feature della libreria.
 # - Attestazione di provenienza (SLSA L2) sull'exe finale e su remotek-cli.exe;
@@ -70,8 +75,11 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
-      id-token: write # attestazione di provenienza (OIDC)
+      id-token: write # attestazione di provenienza e accesso ad Azure per la firma (OIDC)
       attestations: write # attestazione di provenienza
+    # Nostro (ADR-0038). Stessa condizione dei passi di firma: fuori da un tag
+    # remotek-* con FIRMA_ATTIVA=true il job non usa nessun environment.
+    environment: ${{ (vars.FIRMA_ATTIVA == 'true' && startsWith(github.ref, 'refs/tags/remotek-')) && 'firma' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -254,16 +262,76 @@ jobs:
           path: rustdesk
           retention-days: 7
 
-      # Nostro. Firma Authenticode dei file interni: SPENTA (decisione del titolare,
-      # go/no-go gennaio 2027). Si accende con la variabile di repo FIRMA_ATTIVA=true
-      # solo dopo aver sostituito il corpo del passo: finche' e' un segnaposto fallisce
-      # apposta, cosi' nessun exe esce "firmato" per finta.
-      - name: Firma dei file interni (spenta)
-        if: ${{ vars.FIRMA_ATTIVA == 'true' }}
-        shell: bash
+      # Nostro (ADR-0038). Firma Authenticode dei file interni, prima del pacchetto,
+      # cosi' l'exe autoestraente contiene file gia' firmati (Smart App Control
+      # valuta anche le DLL). Si firmano gli .exe e .dll che non hanno gia' una
+      # firma valida; marca temporale RFC 3161 e SHA-256.
+      - name: Firma, condizione e file da firmare
+        id: firma
+        shell: pwsh
+        env:
+          FIRMA: ${{ vars.FIRMA_ATTIVA == 'true' && startsWith(github.ref, 'refs/tags/remotek-') }}
+          FIRMA_ATTIVA: ${{ vars.FIRMA_ATTIVA }}
+          FIRMA_SOGGETTO: ${{ vars.FIRMA_SOGGETTO }}
         run: |
-          echo "::error::FIRMA_ATTIVA=true ma il passo di firma non e' implementato (ADR-0009)"
-          exit 1
+          if ($env:FIRMA -ne 'true') {
+            "attiva=false" >> $env:GITHUB_OUTPUT
+            Write-Output "Build non firmato (FIRMA_ATTIVA=$env:FIRMA_ATTIVA, ref=$env:GITHUB_REF)"
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:FIRMA_SOGGETTO)) {
+            Write-Output "::error::FIRMA_SOGGETTO vuota nell'environment firma"
+            exit 1
+          }
+          $base = (Get-Location).Path
+          $file = Get-ChildItem -Path rustdesk -Recurse -File -Include *.exe,*.dll |
+            Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+          if (-not ($file | Where-Object { $_.Name -eq $env:NOME_EXE })) {
+            Write-Output "::error::$env:NOME_EXE manca o ha gia' una firma: non e' il nostro"
+            exit 1
+          }
+          $file | ForEach-Object { $_.FullName.Substring($base.Length + 1) } |
+            Set-Content -Path firma-interni.txt -Encoding utf8
+          Get-Content firma-interni.txt
+          "attiva=true" >> $env:GITHUB_OUTPUT
+
+      - name: Accesso ad Azure per la firma
+        if: ${{ steps.firma.outputs.attiva == 'true' }}
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Firma dei file interni
+        if: ${{ steps.firma.outputs.attiva == 'true' }}
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.FIRMA_ENDPOINT }}
+          signing-account-name: ${{ vars.FIRMA_ACCOUNT }}
+          certificate-profile-name: ${{ vars.FIRMA_PROFILO }}
+          files-catalog: ${{ github.workspace }}\firma-interni.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+
+      - name: Verifica della firma dei file interni
+        if: ${{ steps.firma.outputs.attiva == 'true' }}
+        shell: pwsh
+        env:
+          FIRMA_SOGGETTO: ${{ vars.FIRMA_SOGGETTO }}
+        run: |
+          $ko = 0
+          foreach ($f in Get-Content firma-interni.txt) {
+            $s = Get-AuthenticodeSignature $f
+            $soggetto = $s.SignerCertificate.Subject
+            $tempo = $null -ne $s.TimeStamperCertificate
+            Write-Output "$($s.Status) tempo=$tempo $f [$soggetto]"
+            if ($s.Status -ne 'Valid' -or -not $tempo -or -not $soggetto.Contains($env:FIRMA_SOGGETTO)) { $ko++ }
+          }
+          if ($ko -gt 0) { Write-Output "::error::$ko file interni senza firma valida di $env:FIRMA_SOGGETTO"; exit 1 }
 
       # [upstream] flutter-build.yml:332-342; cambiano l'exe passato a generate.py
       # (quello rinominato sopra) e il nome di destinazione del mv. Le due guardie
@@ -294,24 +362,50 @@ jobs:
           cp ./target/release/remotek-cli.exe ./SignOutput/remotek-cli.exe
           ./SignOutput/remotek-cli.exe --help > /dev/null
 
-      # Nostro. Come sopra, per l'exe autoestraente che riceve il cliente.
-      - name: Firma dell'exe finale (spenta)
-        if: ${{ vars.FIRMA_ATTIVA == 'true' }}
-        shell: bash
+      # Nostro (ADR-0038). Come sopra, per l'exe autoestraente che riceve il cliente
+      # e per remotek-cli.exe (seguito della remotek-client#52).
+      - name: Firma dell'exe finale e di remotek-cli
+        if: ${{ steps.firma.outputs.attiva == 'true' }}
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.FIRMA_ENDPOINT }}
+          signing-account-name: ${{ vars.FIRMA_ACCOUNT }}
+          certificate-profile-name: ${{ vars.FIRMA_PROFILO }}
+          files-folder: ${{ github.workspace }}\SignOutput
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+
+      - name: Verifica della firma dell'exe finale e di remotek-cli
+        if: ${{ steps.firma.outputs.attiva == 'true' }}
+        shell: pwsh
+        env:
+          FIRMA_SOGGETTO: ${{ vars.FIRMA_SOGGETTO }}
         run: |
-          echo "::error::FIRMA_ATTIVA=true ma il passo di firma non e' implementato (ADR-0009)"
-          exit 1
+          $ko = 0
+          foreach ($f in @("SignOutput\$env:NOME_EXE", "SignOutput\remotek-cli.exe")) {
+            $s = Get-AuthenticodeSignature $f
+            $soggetto = $s.SignerCertificate.Subject
+            $tempo = $null -ne $s.TimeStamperCertificate
+            Write-Output "$($s.Status) tempo=$tempo $f [$soggetto]"
+            if ($s.Status -ne 'Valid' -or -not $tempo -or -not $soggetto.Contains($env:FIRMA_SOGGETTO)) { $ko++ }
+          }
+          if ($ko -gt 0) { Write-Output "::error::$ko exe senza firma valida di $env:FIRMA_SOGGETTO"; exit 1 }
 
       # Nostro. Dopo l'eventuale firma: l'hash e' quello del file consegnato.
       - name: SHA256 e riepilogo
         shell: bash
         env:
           MOTIVO: ${{ inputs.motivo }}
+          FIRMATO: ${{ steps.firma.outputs.attiva == 'true' && 'firmato' || 'non firmato' }}
         run: |
           cd SignOutput
           sha256sum "${NOME_EXE}" remotek-cli.exe | tee SHA256SUMS.txt
           {
-            echo "### ${NOME_EXE} (non firmato)"
+            echo "### ${NOME_EXE} (${FIRMATO})"
             echo ""
             echo "- motivo: ${MOTIVO}"
             echo "- ref: ${GITHUB_REF}"

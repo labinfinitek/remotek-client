@@ -137,14 +137,18 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           children: [
             Column(
               children: [
-                SingleChildScrollView(
-                  controller: _leftPaneScrollController,
-                  child: Column(
-                    key: _childKey,
-                    children: children,
+                // Remotek: il pannello prende l'altezza della finestra e
+                // scorre; senza Expanded la scroll view ha altezza illimitata
+                // e taglia il riquadro "Installa" a 1280x800 (collaudo -12).
+                Expanded(
+                  child: SingleChildScrollView(
+                    controller: _leftPaneScrollController,
+                    child: Column(
+                      key: _childKey,
+                      children: children,
+                    ),
                   ),
                 ),
-                Expanded(child: Container())
               ],
             ),
             if (isOutgoingOnly)

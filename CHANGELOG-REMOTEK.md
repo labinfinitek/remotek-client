@@ -11,6 +11,9 @@ rilasciate non si riscrivono.
 
 ## [Non rilasciato]
 
+### Corretto
+- Il pannello di sinistra della home scorre: sugli schermi bassi (1280x800, 1366x768) il riquadro "Installa" del programma non installato restava tagliato e si vedeva solo ingrandendo la finestra; ora si raggiunge con la rotella o la barra di scorrimento.
+
 ## [remotek-1.4.9-12] - 2026-11-15
 Base upstream: RustDesk 1.4.9, con le stesse due correzioni di RustDesk 1.5.0
 del -4. Exe Windows x86_64 **non firmato**, sorgenti al tag `remotek-1.4.9-12`

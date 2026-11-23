@@ -2981,5 +2981,30 @@ else
   done <<<"$esito_reinstallazione"
 fi
 
+# --- 39. Il pannello di sinistra della home scorre -------------------------
+# Collaudo del remotek-1.4.9-12, osservazione 1: a 1280x800 il riquadro
+# "Installa" del portatile era tagliato e la rotella non scorreva, perche' la
+# SingleChildScrollView di buildLeftPane stava in una Column senza Expanded
+# (altezza illimitata: non scorre mai). E' cosi' anche upstream: un merge che
+# riporta la forma di upstream la toglie senza conflitti, e si vede qui.
+esito_pannello=$(python3 - <<'PY'
+import re
+DHP = "flutter/lib/desktop/pages/desktop_home_page.dart"
+testo = "\n".join(r.split("//", 1)[0] for r in open(DHP, encoding="utf-8"))
+m = re.search(r"Widget buildLeftPane\(.*?\n  \}\n", testo, re.S)
+if not m:
+    print("%s: buildLeftPane non trovata: lo scorrimento del pannello non e' controllato" % DHP)
+elif not re.search(r"Expanded\(\s*child:\s*SingleChildScrollView\(\s*controller:\s*_leftPaneScrollController", m.group(0)):
+    print("%s: in buildLeftPane la SingleChildScrollView non sta piu' in un Expanded: il pannello non scorre e \"Installa\" si taglia sugli schermi bassi" % DHP)
+PY
+) || esito_pannello="${esito_pannello:-}"$'\n'"controllo dello scorrimento del pannello non eseguito: python3 terminato con errore"
+if [ -z "$esito_pannello" ]; then
+  ok "pannello di sinistra della home scorrevole: SingleChildScrollView in un Expanded (collaudo del -12, oss. 1)"
+else
+  while IFS= read -r r; do
+    [ -n "$r" ] && errore "$r"
+  done <<<"$esito_pannello"
+fi
+
 printf '\nverifica-patch: %s errori, %s avvisi\n' "$errori" "$avvisi"
 [ "$errori" -eq 0 ]
